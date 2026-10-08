@@ -32,8 +32,18 @@ class Customer(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Stripe: set once the customer completes a Checkout session.
+    # `subscription_status` mirrors Stripe's own status strings
+    # ("active", "past_due", "canceled", ...) rather than inventing our
+    # own - the billing webhook writes it directly from the event payload.
+    # `TradingAccount.is_active` is what the scheduler actually checks;
+    # the billing webhook keeps it in sync with this.
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subscription_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="customer", uselist=False, cascade="all, delete-orphan")
 
@@ -47,7 +57,14 @@ class TradingAccount(Base):
     pair: Mapped[str] = mapped_column(String(20), nullable=False)
     market_type: Mapped[str] = mapped_column(String(10), nullable=False)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
-    notification_target: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Null until the channel is actually linked (e.g. Telegram: the
+    # customer has to tap a deep link before we have a chat_id -
+    # see telegram_link_token below and api/routers/telegram.py).
+    notification_target: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # One-time token embedded in the Telegram deep link
+    # (t.me/<bot>?start=<token>); cleared once the webhook resolves it to
+    # a chat_id and fills in notification_target above.
+    telegram_link_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
 
     risk_pct: Mapped[float] = mapped_column(Float, default=1.0)
 

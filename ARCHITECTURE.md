@@ -77,6 +77,45 @@ The customer's own mainnet key (`ApiCredential`, encrypted at rest) is
 collected at signup but stays unused until the account reaches live mode
 (trial expiry or the logged bypass) - see `onboarding.py`.
 
+## Web API and frontend: one process still does the trading
+
+The self-serve product (website signup, Telegram linking, billing) adds
+a FastAPI app (`src/mba_bot/api/`) and a React frontend (`frontend/`) on
+top of the trading engine above, without changing how the engine itself
+runs. The key decision carried over from the shared-loop section: the
+trading scheduler is started as a background `asyncio` task inside
+FastAPI's lifespan hook (`api/app.py`), in the *same* process that
+serves HTTP. There's still exactly one process to deploy on the VPS -
+it just now also answers requests instead of only looping silently.
+
+- **Auth** is email+password (bcrypt) with a JWT in an httpOnly,
+  `SameSite=Lax` cookie (`api/security.py`) - no token for the frontend
+  to manage itself, no OAuth integration for v1.
+- **Onboarding as HTTP** (`api/routers/account.py`) calls the exact same
+  `onboarding.start_trial`/`accept_live_bypass` and `crypto_utils.encrypt`
+  functions the CLI script (`scripts/signup_customer.py`) always used -
+  there is one implementation of "what happens at signup", reachable two
+  ways.
+- **Telegram linking** (`api/routers/telegram.py`) exists because a
+  customer can't type in their own numeric chat id: a one-time
+  `telegram_link_token` on the account becomes a deep link
+  (`t.me/<bot>?start=<token>`); Telegram relays the resulting `/start`
+  message to our webhook, which resolves the token to a `chat_id` and
+  fills in `notification_target`. `trader.process_account` won't trade an
+  account with no `notification_target` set, so this is a real gate, not
+  just UX polish.
+- **Billing** (`api/routers/billing.py`) uses Stripe Checkout (hosted
+  page - card data never touches this server) and a webhook that maps
+  Stripe's own subscription status onto `Customer.subscription_status`
+  and `TradingAccount.is_active`. The event-handling logic
+  (`apply_subscription_event`) is split from the signature-verification
+  code around it specifically so it can be unit tested with a
+  hand-built event dict - see `tests/test_api_billing.py`.
+- **Deploys separately from the trading engine's own host story:** the
+  frontend is a static Vite build that goes to Vercel (or any static
+  host) like any other SPA; the backend (API + scheduler, one process)
+  still needs the persistent VPS described above - Vercel cannot run it.
+
 ## Data model
 
 ```
@@ -89,7 +128,10 @@ One customer, one trading account (see `models.py` for why this isn't a
 harder constraint to relax later), one exchange credential, many trades.
 `Trade.is_paper` distinguishes simulated fills from real ones so a
 customer's trial performance and live performance are never mixed in a
-P&L query.
+P&L query. `Customer` additionally carries `password_hash` and the
+Stripe fields (`stripe_customer_id`, `subscription_status`); neither is
+a separate table since they're 1:1 with the customer, not something that
+repeats.
 
 ## Module map
 
@@ -105,13 +147,19 @@ P&L query.
 | `notifications/` | `Notifier` interface; `TelegramNotifier` implemented, `WhatsAppNotifier` a stub per the "added later" spec. |
 | `trader.py` | One account's evaluation cycle: fetch data -> signal -> enter/exit/manage position -> notify. |
 | `scheduler.py` | The shared loop described above. |
+| `api/app.py` | FastAPI app: CORS, router wiring, and the lifespan hook that starts `scheduler.run_forever` as a background task. |
+| `api/security.py` | Password hashing (bcrypt) and session JWT create/verify. |
+| `api/routers/auth.py` | Signup/login/logout; sets/clears the session cookie. |
+| `api/routers/account.py` | Onboarding (create account + credential), settings updates, pause/resume, live-bypass - as HTTP. |
+| `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
+| `api/routers/billing.py` | Stripe Checkout session creation, webhook, billing portal link. |
+| `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |
 
 ## Not built yet (out of scope for this pass)
 
-- A signup web UI / API - `scripts/signup_customer.py` is the stand-in,
-  calling the same `onboarding`/`models` functions a real signup endpoint
-  should call.
 - DB migrations (Alembic) - `db.init_db` just calls `create_all`, fine
   until the schema needs to change under live data.
 - Backtesting harness for the strategy parameters.
 - WhatsApp notifications (interface exists, implementation doesn't).
+- Automated UI tests for `frontend/` (manual walkthrough only, matching
+  the backend's own testing approach before this pass).

@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 
 async def process_account(session: Session, account: TradingAccount, settings: Settings, notifier: Notifier) -> None:
+    if account.notification_target is None:
+        logger.info("account %s: notification channel not linked yet, skipping until it is", account.id)
+        return
+
     now = datetime.now(timezone.utc)
     trial_state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at, now=now

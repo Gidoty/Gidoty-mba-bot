@@ -58,4 +58,25 @@ def get_trades_closed_on(session: Session, account_id: str, date_str: str) -> li
     trades = session.scalars(
         select(Trade).where(Trade.account_id == account_id, Trade.status == "closed")
     ).all()
-    return [t for t in trades if t.closed_at and t.closed_at.astimezone(timezone.utc).strftime("%Y-%m-%d") == date_str]
+    matches = []
+    for t in trades:
+        if not t.closed_at:
+            continue
+        # SQLite drops tzinfo on round-trip - see onboarding.py for the
+        # same issue. A naive value here is UTC by convention, so
+        # `.astimezone(timezone.utc)` on it would otherwise misinterpret
+        # it as local time instead of being a no-op.
+        closed_at = t.closed_at if t.closed_at.tzinfo else t.closed_at.replace(tzinfo=timezone.utc)
+        if closed_at.astimezone(timezone.utc).strftime("%Y-%m-%d") == date_str:
+            matches.append(t)
+    return matches
+
+
+def list_trades_for_account(session: Session, account_id: str) -> list[Trade]:
+    return list(
+        session.scalars(select(Trade).where(Trade.account_id == account_id).order_by(Trade.opened_at.desc()))
+    )
+
+
+def get_account_by_telegram_link_token(session: Session, token: str) -> TradingAccount | None:
+    return session.scalars(select(TradingAccount).where(TradingAccount.telegram_link_token == token)).first()

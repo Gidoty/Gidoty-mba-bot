@@ -9,7 +9,7 @@ exercised end to end. A real signup form should call the same
 
 Usage:
     python scripts/signup_customer.py \\
-        --email customer@example.com \\
+        --email customer@example.com --password "a-strong-password" \\
         --pair BTC/USDT --market-type spot \\
         --notification-channel telegram --notification-target 123456789 \\
         --api-key <mainnet-key> --api-secret <mainnet-secret>
@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from mba_bot.api.security import hash_password  # noqa: E402
 from mba_bot.config import SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS, SUPPORTED_PAIRS, load_settings  # noqa: E402
 from mba_bot.crypto_utils import encrypt  # noqa: E402
 from mba_bot.db import init_db, session_scope  # noqa: E402
@@ -35,6 +36,7 @@ from mba_bot.onboarding import LIVE_TRADING_DISCLOSURE, accept_live_bypass, star
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--email", required=True)
+    parser.add_argument("--password", required=True, help="lets the customer log into the web dashboard later")
     parser.add_argument("--pair", required=True, choices=SUPPORTED_PAIRS)
     parser.add_argument("--market-type", required=True, choices=SUPPORTED_MARKET_TYPES)
     parser.add_argument("--notification-channel", required=True, choices=SUPPORTED_NOTIFICATION_CHANNELS)
@@ -68,7 +70,7 @@ def main() -> None:
     risk_pct = args.risk_pct if args.risk_pct is not None else settings.risk_pct_default
 
     with session_scope() as session:
-        customer = Customer(email=args.email)
+        customer = Customer(email=args.email, password_hash=hash_password(args.password))
         session.add(customer)
         session.flush()
 

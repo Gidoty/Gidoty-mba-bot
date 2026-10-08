@@ -62,6 +62,13 @@ def resolve_trading_mode(
     earned it, either by finishing the trial or by a logged bypass.
     """
     now = now or datetime.now(timezone.utc)
+    # SQLite drops tzinfo on round-trip (it stores DateTime as a plain
+    # string) even though the column is declared timezone-aware; a value
+    # just loaded from the DB can come back naive. Every datetime this
+    # module works with is UTC by convention, so treat a naive one as UTC
+    # rather than letting the comparison below raise.
+    if trial_ends_at.tzinfo is None:
+        trial_ends_at = trial_ends_at.replace(tzinfo=timezone.utc)
 
     if live_bypass_accepted_at is not None:
         return TrialState(

@@ -23,6 +23,13 @@ def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")
 SUPPORTED_MARKET_TYPES = ("spot", "futures")
 SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
@@ -60,7 +67,22 @@ class Settings:
     paper_starting_balance: float
 
     telegram_bot_token: str | None
+    telegram_bot_username: str | None
     whatsapp_provider_token: str | None
+
+    # --- web API (api/) ---
+    jwt_secret: str | None
+    jwt_algorithm: str
+    jwt_expires_minutes: int
+    frontend_origin: str
+    # False only for local HTTP development/tests - a deployed instance
+    # must keep this True so the session cookie is never sent over plain
+    # HTTP.
+    cookie_secure: bool
+
+    stripe_secret_key: str | None
+    stripe_webhook_secret: str | None
+    stripe_price_id: str | None
 
 
 def load_settings() -> Settings:
@@ -83,5 +105,14 @@ def load_settings() -> Settings:
         testnet_api_secret=os.environ.get("TESTNET_API_SECRET"),
         paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10_000.0),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
+        telegram_bot_username=os.environ.get("TELEGRAM_BOT_USERNAME"),
         whatsapp_provider_token=os.environ.get("WHATSAPP_PROVIDER_TOKEN"),
+        jwt_secret=os.environ.get("JWT_SECRET"),
+        jwt_algorithm=os.environ.get("JWT_ALGORITHM", "HS256"),
+        jwt_expires_minutes=_env_int("JWT_EXPIRES_MINUTES", 60 * 24 * 7),
+        frontend_origin=os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173"),
+        cookie_secure=_env_bool("COOKIE_SECURE", True),
+        stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY"),
+        stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
+        stripe_price_id=os.environ.get("STRIPE_PRICE_ID"),
     )

@@ -3,3 +3,11 @@ SQLAlchemy>=2.0
 cryptography>=42.0
 httpx>=0.27
 python-dotenv>=1.0
+
+# web API (src/mba_bot/api/)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic[email]>=2.7
+python-jose[cryptography]>=3.3
+bcrypt>=4.0
+stripe>=10.0
