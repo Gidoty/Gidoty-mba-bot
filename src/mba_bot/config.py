@@ -30,7 +30,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")
+SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "CORE/USDT")
 SUPPORTED_MARKET_TYPES = ("spot", "futures")
 SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
 
