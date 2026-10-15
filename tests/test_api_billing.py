@@ -2,16 +2,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from mba_bot.api.routers.billing import apply_subscription_event
+from mba_bot.api.routers.billing import apply_payment_event
 from mba_bot.db import init_db, session_scope
 from mba_bot.models import Customer, TradingAccount
 
 
 @pytest.fixture()
-def db(tmp_path):
+def customer_id(tmp_path):
     init_db(f"sqlite:///{tmp_path}/test.db")
     with session_scope() as session:
-        customer = Customer(email="a@example.com", password_hash="x", stripe_customer_id="cus_123")
+        customer = Customer(email="a@example.com", password_hash="x")
         session.add(customer)
         session.flush()
         account = TradingAccount(
@@ -23,60 +23,65 @@ def db(tmp_path):
             is_active=False,
         )
         session.add(account)
-    yield
+        session.flush()
+        cid = customer.id
+    yield cid
 
 
-def test_checkout_completed_activates_account(db):
+def test_charge_success_marks_paid_and_activates_account(customer_id):
     event = {
-        "type": "checkout.session.completed",
-        "data": {"object": {"customer": "cus_123"}},
+        "event": "charge.success",
+        "data": {"status": "success", "reference": "ref_abc123", "metadata": {"customer_id": customer_id}},
     }
     with session_scope() as session:
-        customer = session.query(Customer).filter_by(stripe_customer_id="cus_123").first()
-        apply_subscription_event(session, event)
-        assert customer.subscription_status == "active"
+        apply_payment_event(session, event)
+        customer = session.get(Customer, customer_id)
+        assert customer.has_paid is True
+        assert customer.paystack_reference == "ref_abc123"
         assert customer.account.is_active is True
 
 
-def test_subscription_canceled_deactivates_account(db):
+def test_has_paid_is_never_cleared_by_a_later_event(customer_id):
     with session_scope() as session:
-        customer = session.query(Customer).filter_by(stripe_customer_id="cus_123").first()
-        customer.account.is_active = True
+        apply_payment_event(
+            session,
+            {"event": "charge.success", "data": {"status": "success", "reference": "r1", "metadata": {"customer_id": customer_id}}},
+        )
 
-    event = {
-        "type": "customer.subscription.deleted",
-        "data": {"object": {"customer": "cus_123", "status": "canceled"}},
-    }
     with session_scope() as session:
-        customer = session.query(Customer).filter_by(stripe_customer_id="cus_123").first()
-        apply_subscription_event(session, event)
-        assert customer.subscription_status == "canceled"
+        # Lifetime access: nothing in the webhook flow should ever flip has_paid back off.
+        apply_payment_event(session, {"event": "charge.failed", "data": {"status": "failed", "metadata": {"customer_id": customer_id}}})
+        customer = session.get(Customer, customer_id)
+        assert customer.has_paid is True
+
+
+def test_non_success_status_is_ignored(customer_id):
+    event = {"event": "charge.success", "data": {"status": "abandoned", "metadata": {"customer_id": customer_id}}}
+    with session_scope() as session:
+        apply_payment_event(session, event)
+        customer = session.get(Customer, customer_id)
+        assert customer.has_paid is False
         assert customer.account.is_active is False
 
 
-def test_past_due_deactivates_account(db):
-    event = {
-        "type": "customer.subscription.updated",
-        "data": {"object": {"customer": "cus_123", "status": "past_due"}},
-    }
-    with session_scope() as session:
-        apply_subscription_event(session, event)
-        customer = session.query(Customer).filter_by(stripe_customer_id="cus_123").first()
-        assert customer.subscription_status == "past_due"
-        assert customer.account.is_active is False
-
-
-def test_unknown_customer_is_a_noop(db):
-    event = {"type": "checkout.session.completed", "data": {"object": {"customer": "cus_does_not_exist"}}}
+def test_unknown_customer_is_a_noop(customer_id):
+    event = {"event": "charge.success", "data": {"status": "success", "metadata": {"customer_id": "does-not-exist"}}}
     # Should not raise even with no matching customer in the DB.
     with session_scope() as session:
-        apply_subscription_event(session, event)
+        apply_payment_event(session, event)
 
 
-def test_irrelevant_event_type_is_ignored(db):
-    event = {"type": "invoice.paid", "data": {"object": {"customer": "cus_123"}}}
+def test_missing_metadata_is_a_noop(customer_id):
+    event = {"event": "charge.success", "data": {"status": "success", "metadata": {}}}
     with session_scope() as session:
-        customer = session.query(Customer).filter_by(stripe_customer_id="cus_123").first()
-        before = customer.subscription_status
-        apply_subscription_event(session, event)
-        assert customer.subscription_status == before
+        apply_payment_event(session, event)
+        customer = session.get(Customer, customer_id)
+        assert customer.has_paid is False
+
+
+def test_irrelevant_event_type_is_ignored(customer_id):
+    event = {"event": "subscription.create", "data": {"metadata": {"customer_id": customer_id}}}
+    with session_scope() as session:
+        apply_payment_event(session, event)
+        customer = session.get(Customer, customer_id)
+        assert customer.has_paid is False

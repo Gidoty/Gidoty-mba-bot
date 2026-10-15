@@ -33,6 +33,7 @@ class CustomerOut(BaseModel):
     id: str
     email: str
     created_at: datetime
+    has_paid: bool
 
     model_config = {"from_attributes": True}
 
@@ -122,9 +123,5 @@ class TelegramLinkOut(BaseModel):
     link_url: str
 
 
-class CheckoutSessionOut(BaseModel):
-    checkout_url: str
-
-
-class BillingPortalOut(BaseModel):
-    portal_url: str
+class PaymentInitOut(BaseModel):
+    authorization_url: str

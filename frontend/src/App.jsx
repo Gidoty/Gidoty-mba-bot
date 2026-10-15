@@ -12,12 +12,14 @@ export default function App() {
   const route = useHashRoute();
   const [customer, setCustomer] = useState(undefined); // undefined = loading, null = logged out
 
-  useEffect(() => {
+  function refreshCustomer() {
     api
       .get("/auth/me")
       .then(setCustomer)
       .catch(() => setCustomer(null));
-  }, []);
+  }
+
+  useEffect(refreshCustomer, []);
 
   function handleAuthed(nextCustomer) {
     setCustomer(nextCustomer);
@@ -41,13 +43,13 @@ export default function App() {
     return <Landing />;
   }
 
-  return <AuthedApp customer={customer} onLogout={handleLogout} />;
+  return <AuthedApp customer={customer} onLogout={handleLogout} onCustomerChanged={refreshCustomer} />;
 }
 
 // Decides Onboarding vs Dashboard off whether an account already exists,
 // rather than off the URL - so a logged-in customer lands in the right
 // place on a fresh page load no matter what's in the hash.
-function AuthedApp({ customer, onLogout }) {
+function AuthedApp({ customer, onLogout, onCustomerChanged }) {
   const [account, setAccount] = useState(undefined); // undefined = loading, null = doesn't exist yet
 
   function refreshAccount() {
@@ -75,5 +77,13 @@ function AuthedApp({ customer, onLogout }) {
   if (needsOnboarding) {
     return <Onboarding customer={customer} account={account} onLogout={onLogout} onProgress={refreshAccount} />;
   }
-  return <Dashboard customer={customer} account={account} onLogout={onLogout} onAccountChanged={refreshAccount} />;
+  return (
+    <Dashboard
+      customer={customer}
+      account={account}
+      onLogout={onLogout}
+      onAccountChanged={refreshAccount}
+      onCustomerChanged={onCustomerChanged}
+    />
+  );
 }

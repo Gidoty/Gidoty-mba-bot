@@ -104,13 +104,16 @@ it just now also answers requests instead of only looping silently.
   fills in `notification_target`. `trader.process_account` won't trade an
   account with no `notification_target` set, so this is a real gate, not
   just UX polish.
-- **Billing** (`api/routers/billing.py`) uses Stripe Checkout (hosted
-  page - card data never touches this server) and a webhook that maps
-  Stripe's own subscription status onto `Customer.subscription_status`
-  and `TradingAccount.is_active`. The event-handling logic
-  (`apply_subscription_event`) is split from the signature-verification
-  code around it specifically so it can be unit tested with a
-  hand-built event dict - see `tests/test_api_billing.py`.
+- **Billing** (`api/routers/billing.py`) uses Paystack's hosted payment
+  page (card data never touches this server) for a single one-time
+  charge - lifetime access, not a subscription, so there's no renewal or
+  cancellation state to track: once `Customer.has_paid` is set it stays
+  set. The webhook verifies Paystack's signature itself (HMAC-SHA512 over
+  the raw body, keyed by the same secret key used for API calls - no
+  separate webhook secret like Stripe has). The event-handling logic
+  (`apply_payment_event`) is split from that signature-verification code
+  specifically so it can be unit tested with a hand-built event dict -
+  see `tests/test_api_billing.py`.
 - **Deploys separately from the trading engine's own host story:** the
   frontend is a static Vite build that goes to Vercel (or any static
   host) like any other SPA; the backend (API + scheduler, one process)
@@ -129,8 +132,8 @@ harder constraint to relax later), one exchange credential, many trades.
 `Trade.is_paper` distinguishes simulated fills from real ones so a
 customer's trial performance and live performance are never mixed in a
 P&L query. `Customer` additionally carries `password_hash` and the
-Stripe fields (`stripe_customer_id`, `subscription_status`); neither is
-a separate table since they're 1:1 with the customer, not something that
+Paystack fields (`has_paid`, `paystack_reference`); neither is a
+separate table since they're 1:1 with the customer, not something that
 repeats.
 
 ## Module map
@@ -152,7 +155,7 @@ repeats.
 | `api/routers/auth.py` | Signup/login/logout; sets/clears the session cookie. |
 | `api/routers/account.py` | Onboarding (create account + credential), settings updates, pause/resume, live-bypass - as HTTP. |
 | `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
-| `api/routers/billing.py` | Stripe Checkout session creation, webhook, billing portal link. |
+| `api/routers/billing.py` | Paystack one-time payment initialization and webhook. |
 | `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |
 
 ## Not built yet (out of scope for this pass)

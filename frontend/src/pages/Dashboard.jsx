@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 
-export default function Dashboard({ account, onLogout, onAccountChanged }) {
+export default function Dashboard({ customer, account, onLogout, onAccountChanged, onCustomerChanged }) {
   const [trades, setTrades] = useState([]);
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
@@ -32,17 +32,19 @@ export default function Dashboard({ account, onLogout, onAccountChanged }) {
     }
   }
 
-  async function goToBilling() {
+  async function startPayment() {
     setError(null);
     try {
-      const { portal_url } = await api.get("/billing/portal").catch(async () => {
-        const { checkout_url } = await api.post("/billing/checkout-session");
-        return { portal_url: checkout_url };
-      });
-      window.location.href = portal_url;
+      const { authorization_url } = await api.post("/billing/initialize");
+      window.location.href = authorization_url;
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  async function refreshPaymentStatus() {
+    setError(null);
+    await onCustomerChanged();
   }
 
   const trialEndsAt = new Date(account.trial_ends_at);
@@ -54,9 +56,6 @@ export default function Dashboard({ account, onLogout, onAccountChanged }) {
         <div className="mb-6 flex items-center justify-between">
           <span className="text-lg font-semibold text-ink">MBA Bot</span>
           <div className="space-x-4 text-sm">
-            <button onClick={goToBilling} className="text-slate-500 hover:text-ink">
-              Billing
-            </button>
             <button onClick={onLogout} className="text-slate-500 hover:text-ink">
               Log out
             </button>
@@ -82,7 +81,33 @@ export default function Dashboard({ account, onLogout, onAccountChanged }) {
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap gap-3">
+        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
+          {customer.has_paid ? (
+            <p className="text-sm font-medium text-accent-dark">Lifetime access active - thank you.</p>
+          ) : (
+            <div>
+              <p className="text-sm text-slate-600">
+                One-time payment, lifetime access - no subscription, nothing to renew.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  onClick={startPayment}
+                  className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark"
+                >
+                  Unlock lifetime access
+                </button>
+                <button
+                  onClick={refreshPaymentStatus}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
+                >
+                  I've paid - refresh status
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-3">
           <button
             onClick={togglePause}
             className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"

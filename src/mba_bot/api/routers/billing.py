@@ -1,113 +1,107 @@
-"""Stripe Checkout + webhook + billing portal.
+"""Paystack one-time payment + webhook.
 
-`apply_subscription_event` is kept separate from the webhook endpoint
-itself so it can be unit tested with a hand-built event dict, without a
-real Stripe signature or network call - see tests/test_api_billing.py.
+Lifetime access, not a subscription: a customer pays once
+(`/initialize`), Paystack's webhook confirms it, and `Customer.has_paid`
+never needs to flip back - there's no renewal or cancellation to track,
+unlike a subscription model.
+
+`apply_payment_event` is kept separate from the webhook endpoint itself
+so it can be unit tested with a hand-built event dict, without a real
+Paystack signature or network call - see tests/test_api_billing.py.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 
-import stripe
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ...config import Settings
 from ...models import Customer
 from ..deps import get_current_customer, get_db, get_settings
-from ..schemas import BillingPortalOut, CheckoutSessionOut
+from ..schemas import PaymentInitOut
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
-# Stripe subscription statuses that mean "this customer's trading account
-# should be allowed to run"; anything else (past_due, canceled, unpaid,
-# incomplete_expired, ...) pauses it.
-_ACTIVE_STATUSES = {"active", "trialing"}
+_PAYSTACK_API = "https://api.paystack.co"
 
 
-def _require_stripe_configured(settings: Settings) -> None:
-    if not settings.stripe_secret_key:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "STRIPE_SECRET_KEY is not configured")
-    stripe.api_key = settings.stripe_secret_key
+def _require_paystack_configured(settings: Settings) -> None:
+    if not settings.paystack_secret_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "PAYSTACK_SECRET_KEY is not configured")
 
 
-@router.post("/checkout-session", response_model=CheckoutSessionOut)
-def create_checkout_session(
+@router.post("/initialize", response_model=PaymentInitOut)
+def initialize_payment(
     customer: Customer = Depends(get_current_customer), settings: Settings = Depends(get_settings)
-) -> CheckoutSessionOut:
-    _require_stripe_configured(settings)
-    if not settings.stripe_price_id:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "STRIPE_PRICE_ID is not configured")
+) -> PaymentInitOut:
+    _require_paystack_configured(settings)
+    if customer.has_paid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has lifetime access")
 
-    if not customer.stripe_customer_id:
-        stripe_customer = stripe.Customer.create(email=customer.email)
-        customer.stripe_customer_id = stripe_customer["id"]
-
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=customer.stripe_customer_id,
-        line_items=[{"price": settings.stripe_price_id, "quantity": 1}],
-        success_url=f"{settings.frontend_origin}/billing/success",
-        cancel_url=f"{settings.frontend_origin}/billing/cancel",
+    response = httpx.post(
+        f"{_PAYSTACK_API}/transaction/initialize",
+        headers={"Authorization": f"Bearer {settings.paystack_secret_key}"},
+        json={
+            "email": customer.email,
+            "amount": settings.paystack_amount,
+            "currency": settings.paystack_currency,
+            "callback_url": settings.frontend_origin,
+            "metadata": {"customer_id": customer.id},
+        },
+        timeout=15,
     )
-    return CheckoutSessionOut(checkout_url=session["url"])
+    body = response.json()
+    if response.is_error or not body.get("status"):
+        logger.error("paystack initialize failed: %s", body.get("message"))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not start payment with Paystack")
+
+    data = body["data"]
+    customer.paystack_reference = data["reference"]
+    return PaymentInitOut(authorization_url=data["authorization_url"])
 
 
-@router.get("/portal", response_model=BillingPortalOut)
-def billing_portal(
-    customer: Customer = Depends(get_current_customer), settings: Settings = Depends(get_settings)
-) -> BillingPortalOut:
-    _require_stripe_configured(settings)
-    if not customer.stripe_customer_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no billing account yet - subscribe first")
-
-    portal_session = stripe.billing_portal.Session.create(
-        customer=customer.stripe_customer_id, return_url=settings.frontend_origin
-    )
-    return BillingPortalOut(portal_url=portal_session["url"])
-
-
-def apply_subscription_event(db: Session, event: dict) -> None:
-    """Update `Customer.subscription_status` and the linked account's
-    `is_active` from a verified Stripe event. Looks the customer up by
-    `stripe_customer_id`, which every event type handled here carries."""
-    event_type = event.get("type", "")
-    data = (event.get("data") or {}).get("object") or {}
-
-    if event_type == "checkout.session.completed":
-        stripe_customer_id = data.get("customer")
-        status_value = "active"
-    elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
-        stripe_customer_id = data.get("customer")
-        status_value = data.get("status", "canceled")
-    else:
+def apply_payment_event(db: Session, event: dict) -> None:
+    """Mark a customer as paid from a verified Paystack event. Looks the
+    customer up by the `customer_id` passed as metadata at `/initialize`
+    time, which Paystack echoes back unchanged on the webhook."""
+    if event.get("event") != "charge.success":
         return
 
-    if not stripe_customer_id:
+    data = event.get("data") or {}
+    if data.get("status") != "success":
         return
 
-    customer = db.query(Customer).filter(Customer.stripe_customer_id == stripe_customer_id).first()
+    customer_id = (data.get("metadata") or {}).get("customer_id")
+    if not customer_id:
+        return
+
+    customer = db.get(Customer, customer_id)
     if customer is None:
-        logger.warning("stripe webhook: no customer matches stripe_customer_id=%s", stripe_customer_id)
+        logger.warning("paystack webhook: no customer matches id=%s", customer_id)
         return
 
-    customer.subscription_status = status_value
+    customer.has_paid = True
+    customer.paystack_reference = data.get("reference")
     if customer.account is not None:
-        customer.account.is_active = status_value in _ACTIVE_STATUSES
+        customer.account.is_active = True
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def billing_webhook(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict:
-    if not settings.stripe_webhook_secret:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "STRIPE_WEBHOOK_SECRET is not configured")
+    _require_paystack_configured(settings)
 
     payload = await request.body()
-    sig_header = request.headers.get("stripe-signature", "")
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
-    except (ValueError, stripe.error.SignatureVerificationError) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid webhook signature") from exc
+    signature = request.headers.get("x-paystack-signature", "")
+    expected = hmac.new(settings.paystack_secret_key.encode("utf-8"), payload, hashlib.sha512).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid webhook signature")
 
-    apply_subscription_event(db, event)
+    event = json.loads(payload)
+    apply_payment_event(db, event)
     return {"ok": True}

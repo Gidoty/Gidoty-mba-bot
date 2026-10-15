@@ -36,14 +36,12 @@ class Customer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # Stripe: set once the customer completes a Checkout session.
-    # `subscription_status` mirrors Stripe's own status strings
-    # ("active", "past_due", "canceled", ...) rather than inventing our
-    # own - the billing webhook writes it directly from the event payload.
+    # Paystack: a single one-time payment unlocks lifetime access - there's
+    # no recurring status to track, just whether it's ever happened.
     # `TradingAccount.is_active` is what the scheduler actually checks;
-    # the billing webhook keeps it in sync with this.
-    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    subscription_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # the billing webhook flips it on once `has_paid` is set.
+    has_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    paystack_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="customer", uselist=False, cascade="all, delete-orphan")
 

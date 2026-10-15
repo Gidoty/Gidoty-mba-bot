@@ -1,13 +1,13 @@
 """End-to-end smoke test of the HTTP API using FastAPI's in-process
-TestClient - no real network, no real exchange or Stripe calls.
+TestClient - no real network, no real exchange or Paystack calls.
 
 Env vars are set *before* importing `mba_bot.api.app` so its module-level
 `app = create_app()` and the lifespan's `init_db()` both see this test's
 settings rather than whatever `.env` happens to be on disk.
 
-Billing-webhook *signature verification* isn't re-tested here (that's
-Stripe's own library code); `test_api_billing.py` covers the
-event-handling logic it wraps directly.
+Billing-webhook *signature verification* isn't re-tested here (plain
+HMAC-SHA512, exercised implicitly by Paystack itself); `test_api_billing.py`
+covers the event-handling logic it wraps directly.
 """
 from __future__ import annotations
 

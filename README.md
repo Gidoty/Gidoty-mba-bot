@@ -18,7 +18,7 @@ how well the code is written.
   FastAPI backend (`src/mba_bot/api/`) - email/password auth, an
   onboarding wizard (pair, market type, risk %, Binance key), a Telegram
   linking flow, a dashboard (trial/live status, trade history, pause
-  toggle), and Stripe billing.
+  toggle), and Paystack billing.
 - **Strategy:** EMA(20/50) crossover trend-following, with an ATR
   volatility filter that skips signals when the market is flat/range-bound
   (crossover strategies lose money chopping sideways).
@@ -31,8 +31,8 @@ how well the code is written.
 - **Notifications:** Telegram messages on entries, exits, and daily P&L
   summaries. An account can't trade until Telegram is linked. WhatsApp is
   planned but not implemented (see `src/mba_bot/notifications/whatsapp.py`).
-- **Billing:** Stripe Checkout + a webhook that pauses the trading
-  account automatically if a subscription lapses.
+- **Billing:** a one-time Paystack payment unlocks lifetime access - no
+  subscription, nothing to renew or cancel.
 - **Security:** exchange API keys are provisioned trade-only (no
   withdrawal) on the exchange side, encrypted at rest with Fernet, and
   spot-checked at runtime before live trading.
@@ -79,9 +79,10 @@ Fill in `.env` (see `.env.example` for the full list and comments):
   [@BotFather](https://t.me/BotFather); needed before any account can
   link Telegram (and therefore before it can trade at all).
 - `FRONTEND_ORIGIN` - the frontend's URL; CORS only allows this origin.
-- `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_ID` - from
-  your Stripe dashboard, only needed once you're ready to charge for
-  access.
+- `PAYSTACK_SECRET_KEY` / `PAYSTACK_AMOUNT` / `PAYSTACK_CURRENCY` - from
+  your Paystack dashboard, only needed once you're ready to charge for
+  access. One secret key both signs API calls and verifies webhook
+  signatures - Paystack has no separate webhook secret.
 - Everything else has a sane default.
 
 Run the API (and the trading scheduler, in the same process):
@@ -156,10 +157,10 @@ pytest
 
 Covers the pure logic (indicators, strategy signal generation, risk
 sizing, encryption, trial/bypass resolution), the auth/billing helper
-modules (password hashing, JWT round-trips, Stripe webhook event
+modules (password hashing, JWT round-trips, Paystack webhook event
 handling), and an end-to-end smoke test of the HTTP API using FastAPI's
 in-process `TestClient` (signup -> onboarding -> Telegram link -> live
-bypass) - all without network access or real exchange/Stripe/Telegram
+bypass) - all without network access or real exchange/Paystack/Telegram
 calls. `exchange.py` and the live parts of `trader.py`/`scheduler.py`
 aren't exercised by the test suite since they're thin glue over ccxt;
 exercise them against Binance testnet before trusting them with a live

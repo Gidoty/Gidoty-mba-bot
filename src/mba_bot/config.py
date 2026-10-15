@@ -80,9 +80,13 @@ class Settings:
     # HTTP.
     cookie_secure: bool
 
-    stripe_secret_key: str | None
-    stripe_webhook_secret: str | None
-    stripe_price_id: str | None
+    # Paystack: one secret key both signs API calls and verifies webhook
+    # signatures (HMAC-SHA512 over the raw body) - no separate webhook
+    # secret like Stripe has. `paystack_amount` is in the currency's
+    # lowest unit (kobo for NGN), matching Paystack's own API.
+    paystack_secret_key: str | None
+    paystack_amount: int
+    paystack_currency: str
 
 
 def load_settings() -> Settings:
@@ -112,7 +116,7 @@ def load_settings() -> Settings:
         jwt_expires_minutes=_env_int("JWT_EXPIRES_MINUTES", 60 * 24 * 7),
         frontend_origin=os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173"),
         cookie_secure=_env_bool("COOKIE_SECURE", True),
-        stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY"),
-        stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET"),
-        stripe_price_id=os.environ.get("STRIPE_PRICE_ID"),
+        paystack_secret_key=os.environ.get("PAYSTACK_SECRET_KEY"),
+        paystack_amount=_env_int("PAYSTACK_AMOUNT", 0),
+        paystack_currency=os.environ.get("PAYSTACK_CURRENCY", "NGN"),
     )
