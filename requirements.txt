@@ -1,5 +1,6 @@
 ccxt>=4.3.0
 SQLAlchemy>=2.0
+alembic>=1.13
 cryptography>=42.0
 httpx>=0.27
 python-dotenv>=1.0

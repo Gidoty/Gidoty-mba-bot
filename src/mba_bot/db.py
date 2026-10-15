@@ -1,8 +1,15 @@
 """Engine/session setup plus the handful of queries the scheduler needs.
 
-No migrations tool wired in yet (see README) - `init_db` just calls
-`create_all`, which is fine for SQLite/early Postgres use but should be
-replaced with Alembic before the schema needs to change under live data.
+Schema changes on a deployed database go through Alembic
+(`alembic upgrade head` - see `alembic/` and the README), not through
+this module. `init_db`'s own `create_all` only ever creates missing
+*tables*; it never adds a column to one that already exists, which is
+exactly what broke in production once (see git history) when a column
+was added to `Customer` after the live database already had that table.
+It stays here purely as dev/test convenience - every test builds a
+throwaway SQLite file from scratch, where `create_all` and
+`alembic upgrade head` produce an identical result, so paying Alembic's
+overhead on every test run buys nothing.
 """
 from __future__ import annotations
 

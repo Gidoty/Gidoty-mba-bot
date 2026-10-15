@@ -174,11 +174,10 @@ repeats.
 | `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
 | `api/routers/billing.py` | Paystack one-time payment initialization and webhook. |
 | `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |
+| `alembic/` | Schema migrations (`alembic revision --autogenerate`, `alembic upgrade head`) - the authority for a deployed database's schema; `db.init_db`'s `create_all` is dev/test convenience only. See README's "Database migrations". |
 
 ## Not built yet (out of scope for this pass)
 
-- DB migrations (Alembic) - `db.init_db` just calls `create_all`, fine
-  until the schema needs to change under live data.
 - Backtesting harness for the strategy parameters.
 - WhatsApp notifications (interface exists, implementation doesn't).
 - Automated UI tests for `frontend/` (manual walkthrough only, matching

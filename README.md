@@ -91,6 +91,13 @@ Fill in `.env` (see `.env.example` for the full list and comments):
   signatures - Paystack has no separate webhook secret.
 - Everything else has a sane default.
 
+Create the database schema (see "Database migrations" below for what
+this actually does):
+
+```bash
+alembic upgrade head
+```
+
 Run the API (and the trading scheduler, in the same process):
 
 ```bash
@@ -100,6 +107,53 @@ uvicorn mba_bot.api.app:app --app-dir src --reload --port 8000
 Note the package lives under `src/`; `--app-dir src` (or `PYTHONPATH=src`)
 is how `uvicorn`/scripts find it - `pytest` and the provided scripts
 already handle this themselves.
+
+## Database migrations
+
+Schema changes go through [Alembic](https://alembic.sqlalchemy.org/),
+not `db.init_db`'s `create_all` (which only ever creates missing
+*tables* - it silently does nothing to a table that already exists but
+is missing a new column, which is exactly what broke in production
+once before this was wired in).
+
+**After changing a model in `models.py`:**
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+```
+
+Open the generated file in `alembic/versions/` and read it before
+trusting it - autogenerate is a good first draft, not a guarantee (it
+can miss things like renamed columns, which it sees as a drop + an add).
+Commit the migration file alongside the model change, same PR/commit.
+
+**Deploying that change** (local dev or the VPS alike):
+
+```bash
+git pull
+pip install -r requirements.txt   # alembic itself, or any new dependency
+alembic upgrade head
+sudo systemctl restart mba-bot    # VPS only
+```
+
+**One-time note for this project's VPS specifically:** its database was
+created by `create_all` before Alembic existed in this repo, then had
+`has_paid`/`paystack_reference` added by hand (see git history for that
+incident). Alembic doesn't know about either of those unless told, so
+before the *first* `alembic upgrade head` on that database, run this
+once instead:
+
+```bash
+alembic stamp head
+```
+
+`stamp` records "this database is already at this revision" without
+running any DDL - exactly right for a database that's already correct
+but was never under Alembic's tracking. Running `upgrade head` instead
+at that point would try to `CREATE TABLE` on tables that already exist
+and fail. Any database created via `alembic upgrade head` from the
+start (a fresh dev setup, a fresh install) never needs this - `stamp`
+is a one-time fix for this specific VPS's history, not a normal step.
 
 ## Frontend setup
 
