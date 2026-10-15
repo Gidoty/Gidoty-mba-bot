@@ -2,13 +2,14 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 
-const PAIRS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "CORE/USDT"];
+const PAIRS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT"];
+// Not tradeable yet - CORE isn't listed on Binance. Shown disabled in
+// the selector; never submitted, so the backend never needs to know
+// about it (see UPCOMING_PAIRS in config.py for the same note).
+const UPCOMING_PAIRS = ["CORE/USDT"];
 
-// Fill these in once you have them - the contact block below only
-// renders whichever of these is non-empty, so it's safe to leave one
-// or both blank for now rather than shipping a fake number.
-const SUPPORT_WHATSAPP_NUMBER = ""; // digits only, no "+" - e.g. "2348012345678"
-const SUPPORT_EMAIL = "";
+const SUPPORT_WHATSAPP_NUMBER = "2348124228730"; // 0812 422 8730, in wa.me's international-digits-only format
+const SUPPORT_EMAIL = "support@metabridgeacademy.com";
 
 export default function Onboarding({ account, onLogout, onProgress }) {
   if (!account) {
@@ -80,6 +81,11 @@ function AccountForm({ onLogout, onCreated }) {
           >
             {PAIRS.map((p) => (
               <option key={p}>{p}</option>
+            ))}
+            {UPCOMING_PAIRS.map((p) => (
+              <option key={p} value={p} disabled>
+                {p} - coming soon
+              </option>
             ))}
           </select>
         </label>

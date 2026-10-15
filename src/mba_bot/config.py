@@ -30,7 +30,12 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "CORE/USDT")
+SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")
+# Not tradeable yet - CORE isn't listed on Binance. Shown in the
+# frontend's pair selector as a disabled "coming soon" option; never
+# added here, since accepting it would let an account get created for a
+# pair the exchange integration can't actually trade.
+UPCOMING_PAIRS = ("CORE/USDT",)
 SUPPORTED_MARKET_TYPES = ("spot", "futures")
 SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
 
