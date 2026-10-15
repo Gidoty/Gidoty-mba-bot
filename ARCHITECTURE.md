@@ -104,16 +104,33 @@ it just now also answers requests instead of only looping silently.
   fills in `notification_target`. `trader.process_account` won't trade an
   account with no `notification_target` set, so this is a real gate, not
   just UX polish.
-- **Billing** (`api/routers/billing.py`) uses Paystack's hosted payment
-  page (card data never touches this server) for a single one-time
-  charge - lifetime access, not a subscription, so there's no renewal or
-  cancellation state to track: once `Customer.has_paid` is set it stays
-  set. The webhook verifies Paystack's signature itself (HMAC-SHA512 over
-  the raw body, keyed by the same secret key used for API calls - no
-  separate webhook secret like Stripe has). The event-handling logic
-  (`apply_payment_event`) is split from that signature-verification code
-  specifically so it can be unit tested with a hand-built event dict -
-  see `tests/test_api_billing.py`.
+- **Billing and the lock, by design** (`api/routers/billing.py`,
+  `db.list_active_accounts`): there's deliberately no free trial. A new
+  account's `TradingAccount.is_active` still defaults `True` (that field
+  is the customer's own pause/resume toggle, nothing more), but
+  `db.list_active_accounts` - the only thing the scheduler ever calls to
+  decide what to trade - requires `Customer.has_paid` as well. An account
+  with `has_paid=False` simply never gets fanned out to `trader.py`, paper
+  or live, regardless of what `is_active` says. This keeps the two
+  concerns independent: a customer can pause/resume their own unlocked
+  account, but can't unlock it themselves by touching `is_active` (the
+  `PATCH /api/account` endpoint never sets `has_paid`).
+
+  `has_paid` flips exactly two ways, both ending in the same place:
+  - Paystack's hosted payment page (card data never touches this server)
+    for a one-time charge, confirmed by a webhook that verifies
+    Paystack's own signature (HMAC-SHA512 over the raw body, keyed by the
+    same secret key used for API calls - no separate webhook secret like
+    Stripe has). `apply_payment_event` is split from that
+    signature-verification code so it's unit-testable with a hand-built
+    event dict - see `tests/test_api_billing.py`.
+  - `scripts/mark_customer_paid.py`, run by the operator over SSH, for
+    anyone who paid outside Paystack (bank transfer, cash, a comp). Same
+    flag, same effect - the scheduler can't tell the difference and isn't
+    meant to.
+
+  Lifetime access, not a subscription: once `has_paid` is set it never
+  gets cleared by anything in this codebase.
 - **Deploys separately from the trading engine's own host story:** the
   frontend is a static Vite build that goes to Vercel (or any static
   host) like any other SPA; the backend (API + scheduler, one process)

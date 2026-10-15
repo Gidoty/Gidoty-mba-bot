@@ -16,6 +16,10 @@ Usage:
 
     # to skip the paper trial and go straight to live trading:
     python scripts/signup_customer.py ... --skip-trial --accept-live-risk-disclosure
+
+    # accounts are LOCKED by default (see has_paid in models.py) - add
+    # --mark-paid to unlock immediately, or run mark_customer_paid.py later
+    python scripts/signup_customer.py ... --mark-paid
 """
 from __future__ import annotations
 
@@ -54,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="required alongside --skip-trial: confirms the customer checked the disclosure box",
     )
+    parser.add_argument(
+        "--mark-paid",
+        action="store_true",
+        help="also unlock lifetime access immediately (accounts are locked by default - see has_paid in models.py)",
+    )
     return parser.parse_args()
 
 
@@ -70,7 +79,7 @@ def main() -> None:
     risk_pct = args.risk_pct if args.risk_pct is not None else settings.risk_pct_default
 
     with session_scope() as session:
-        customer = Customer(email=args.email, password_hash=hash_password(args.password))
+        customer = Customer(email=args.email, password_hash=hash_password(args.password), has_paid=args.mark_paid)
         session.add(customer)
         session.flush()
 
@@ -100,6 +109,7 @@ def main() -> None:
 
         print(f"created customer {customer.id} ({customer.email}), account {account.id}")
         print(f"mode: {'LIVE (trial bypassed)' if args.skip_trial else f'PAPER until {account.trial_ends_at.isoformat()}'}")
+        print(f"access: {'UNLOCKED' if args.mark_paid else 'LOCKED - run scripts/mark_customer_paid.py to unlock'}")
 
 
 if __name__ == "__main__":

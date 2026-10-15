@@ -28,6 +28,12 @@ how well the code is written.
 - **Onboarding:** every account starts in a 7-day paper trial on Binance
   testnet with simulated funds. Skipping straight to live trading requires
   checking a disclosure box, logged with a timestamp against the account.
+- **Locked by design, not just by payment:** there's no free trial - a
+  brand-new account doesn't trade (paper or live) until the operator
+  unlocks it. That happens automatically on a Paystack payment, or
+  manually at any time with `scripts/mark_customer_paid.py` for a
+  customer who paid some other way (bank transfer, cash, a comp) - both
+  just flip the same `has_paid` flag.
 - **Notifications:** Telegram messages on entries, exits, and daily P&L
   summaries. An account can't trade until Telegram is linked. WhatsApp is
   planned but not implemented (see `src/mba_bot/notifications/whatsapp.py`).
@@ -134,6 +140,28 @@ seen and agreed to the disclosure text in
 ```bash
 python scripts/signup_customer.py ... --skip-trial --accept-live-risk-disclosure
 ```
+
+## Unlocking an account
+
+Every account - however it was created - starts **locked**: the scheduler
+won't trade it, paper or live, until `Customer.has_paid` is set. That
+happens automatically when the Paystack webhook sees a real payment, or
+you can unlock it yourself for anyone who paid some other way:
+
+```bash
+python scripts/mark_customer_paid.py --email customer@example.com
+python scripts/mark_customer_paid.py --email customer@example.com --reference "UBA transfer 12 Oct"
+```
+
+`--reference` is just a free-text note for your own records (e.g. a bank
+transfer reference) - it's stored but nothing reads it back. Running it
+again on an already-unlocked customer is a no-op, not an error. You can
+also unlock immediately at signup time with `signup_customer.py
+--mark-paid`.
+
+Run this on the server itself (SSH) - it has no authentication of its
+own beyond whoever can run commands on your VPS, which is the point:
+only you can unlock an account, there's no code the customer enters.
 
 ## Paper trading and the live bypass
 

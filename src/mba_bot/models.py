@@ -36,11 +36,17 @@ class Customer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # Paystack: a single one-time payment unlocks lifetime access - there's
-    # no recurring status to track, just whether it's ever happened.
-    # `TradingAccount.is_active` is what the scheduler actually checks;
-    # the billing webhook flips it on once `has_paid` is set.
+    # Lifetime access, unlocked one of two ways: the Paystack webhook
+    # (apply_payment_event) on a real payment, or the operator running
+    # `scripts/mark_customer_paid.py` for anyone who paid outside
+    # Paystack (bank transfer, cash, ...) - both just set this flag the
+    # same way. A new account is locked by default: there's no free
+    # trial here, by the operator's choice - see db.list_active_accounts,
+    # which the scheduler uses and which requires `has_paid` before it
+    # will trade an account at all, paper or live.
     has_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The Paystack transaction reference, or a free-text note (e.g. a
+    # bank transfer reference) when unlocked manually.
     paystack_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="customer", uselist=False, cascade="all, delete-orphan")

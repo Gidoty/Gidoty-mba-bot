@@ -81,48 +81,52 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
           </div>
         )}
 
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
-          {customer.has_paid ? (
-            <p className="text-sm font-medium text-accent-dark">Lifetime access active - thank you.</p>
-          ) : (
-            <div>
-              <p className="text-sm text-slate-600">
-                One-time payment, lifetime access - no subscription, nothing to renew.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-3">
-                <button
-                  onClick={startPayment}
-                  className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark"
-                >
-                  Unlock lifetime access
-                </button>
-                <button
-                  onClick={refreshPaymentStatus}
-                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
-                >
-                  I've paid - refresh status
-                </button>
-              </div>
+        {customer.has_paid ? (
+          <div className="mt-6 rounded-lg border border-accent/30 bg-accent/5 p-4">
+            <p className="text-sm font-medium text-accent-dark">Unlocked - lifetime access active.</p>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4">
+            <p className="text-sm font-semibold text-red-800">Locked - the bot is not trading on this account yet.</p>
+            <p className="mt-1 text-sm text-red-700">
+              Every account starts locked. Pay to unlock it yourself, or ask whoever gave you this link to unlock it
+              for you.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                onClick={startPayment}
+                className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark"
+              >
+                Pay to unlock
+              </button>
+              <button
+                onClick={refreshPaymentStatus}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
+              >
+                I've paid - refresh status
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            onClick={togglePause}
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
-          >
-            {account.is_active ? "Pause trading" : "Resume trading"}
-          </button>
-          {account.mode === "paper" && (
+        {customer.has_paid && (
+          <div className="mt-4 flex flex-wrap gap-3">
             <button
-              onClick={acceptLiveBypass}
-              className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+              onClick={togglePause}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
             >
-              Skip trial and trade live
+              {account.is_active ? "Pause trading" : "Resume trading"}
             </button>
-          )}
-        </div>
+            {account.mode === "paper" && (
+              <button
+                onClick={acceptLiveBypass}
+                className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
+              >
+                Skip trial and trade live
+              </button>
+            )}
+          </div>
+        )}
 
         <h2 className="mt-10 mb-3 text-sm font-semibold text-slate-700">Trade history</h2>
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
