@@ -21,13 +21,21 @@ def _set_session_cookie(response: Response, *, customer_id: str, settings: Setti
         algorithm=settings.jwt_algorithm,
         expires_minutes=settings.jwt_expires_minutes,
     )
+    # Frontend (Vercel) and backend (this API) live on different domains,
+    # so every request between them is cross-site as far as the browser is
+    # concerned. A SameSite=Lax cookie is never sent on a cross-site
+    # fetch()/XHR - only on a top-level link navigation - so Lax silently
+    # drops the session on every API call from the deployed frontend.
+    # SameSite=None is the only setting that works here, and browsers
+    # require Secure whenever SameSite=None is used, so that's hardcoded
+    # rather than left to settings.cookie_secure.
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         max_age=settings.jwt_expires_minutes * 60,
         httponly=True,
-        samesite="lax",
-        secure=settings.cookie_secure,
+        samesite="none",
+        secure=True,
         path="/",
     )
 
@@ -61,7 +69,9 @@ def login(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    # Attributes must match how the cookie was set, or the browser treats
+    # this as a different cookie and leaves the real session cookie in place.
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", samesite="none", secure=True)
 
 
 @router.get("/me", response_model=CustomerOut)

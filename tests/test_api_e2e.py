@@ -8,6 +8,11 @@ settings rather than whatever `.env` happens to be on disk.
 Billing-webhook *signature verification* isn't re-tested here (plain
 HMAC-SHA512, exercised implicitly by Paystack itself); `test_api_billing.py`
 covers the event-handling logic it wraps directly.
+
+The session cookie is Secure (required alongside SameSite=None for the
+real cross-domain frontend/backend split), so the client needs an https
+base_url or httpx's cookie jar drops it between requests, same as a
+real browser would.
 """
 from __future__ import annotations
 
@@ -30,7 +35,7 @@ from mba_bot.api.app import app  # noqa: E402
 
 
 def test_signup_onboarding_telegram_link_and_live_bypass():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         signup = client.post("/api/auth/signup", json={"email": "smoke@example.com", "password": "correct-horse-battery"})
         assert signup.status_code == 201
         assert signup.json()["email"] == "smoke@example.com"
@@ -97,7 +102,7 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
 
 
 def test_telegram_webhook_bare_start_replies_without_crashing():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         client.post("/api/auth/signup", json={"email": "barestart@example.com", "password": "correct-horse-battery"})
         client.post(
             "/api/account",
@@ -120,7 +125,7 @@ def test_telegram_webhook_bare_start_replies_without_crashing():
 
 
 def test_telegram_webhook_invalid_token_replies_without_crashing():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         webhook = client.post(
             "/api/telegram/webhook",
             json={"message": {"chat": {"id": 444555666}, "text": "/start not-a-real-token"}},
@@ -129,7 +134,7 @@ def test_telegram_webhook_invalid_token_replies_without_crashing():
 
 
 def test_telegram_webhook_ignores_unrelated_messages():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         webhook = client.post(
             "/api/telegram/webhook", json={"message": {"chat": {"id": 777888999}, "text": "hello there"}}
         )
@@ -137,14 +142,14 @@ def test_telegram_webhook_ignores_unrelated_messages():
 
 
 def test_signup_rejects_duplicate_email():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         client.post("/api/auth/signup", json={"email": "dup@example.com", "password": "correct-horse-battery"})
         second = client.post("/api/auth/signup", json={"email": "dup@example.com", "password": "another-password"})
         assert second.status_code == 409
 
 
 def test_login_with_wrong_password_is_rejected():
-    with TestClient(app) as client:
+    with TestClient(app, base_url="https://testserver") as client:
         client.post("/api/auth/signup", json={"email": "wrongpw@example.com", "password": "correct-horse-battery"})
         client.post("/api/auth/logout")
         bad_login = client.post("/api/auth/login", json={"email": "wrongpw@example.com", "password": "nope"})
