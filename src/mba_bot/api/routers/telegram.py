@@ -44,6 +44,31 @@ def get_link_url(
     return TelegramLinkOut(link_url=f"https://t.me/{settings.telegram_bot_username}?start={account.telegram_link_token}")
 
 
+async def _reply(chat_id: str, message: str, *, settings: Settings) -> None:
+    """Best-effort send - a failure here must never turn into a non-200
+    response to Telegram, or it'll just retry the same update forever."""
+    if not settings.telegram_bot_token:
+        return
+    try:
+        await TelegramNotifier(settings.telegram_bot_token).send(chat_id, message)
+    except Exception:
+        logger.exception("telegram webhook: failed to send a reply to chat_id=%s", chat_id)
+
+
+_WELCOME_MESSAGE = (
+    "Welcome to MBA Bot. To receive trade alerts here, open your dashboard, go to the Telegram "
+    "step, and tap the \"Open Telegram and link\" link from there - it carries a one-time code "
+    "that connects this chat to your account. This plain /start doesn't link anything by itself."
+)
+
+_INVALID_TOKEN_MESSAGE = (
+    "That link has expired or was already used. Open your dashboard and tap \"Open Telegram and "
+    "link\" again to get a fresh one."
+)
+
+_LINKED_MESSAGE = "Your MBA Bot account is linked. Trade entries, exits, and daily P&L summaries will be sent here."
+
+
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def telegram_webhook(
     request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
@@ -61,25 +86,24 @@ async def telegram_webhook(
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
 
-    if not text.startswith("/start ") or chat_id is None:
+    if chat_id is None or not (text == "/start" or text.startswith("/start ")):
         return {"ok": True}
 
-    token = text.removeprefix("/start ").strip()
+    token = text[len("/start") :].strip()
+    if not token:
+        # A bare /start - either someone poking the bot directly, or a
+        # deep link opened without its ?start= parameter surviving.
+        await _reply(str(chat_id), _WELCOME_MESSAGE, settings=settings)
+        return {"ok": True}
+
     account = get_account_by_telegram_link_token(db, token)
     if account is None:
         logger.info("telegram webhook: no account matches link token")
+        await _reply(str(chat_id), _INVALID_TOKEN_MESSAGE, settings=settings)
         return {"ok": True}
 
     account.notification_target = str(chat_id)
     account.telegram_link_token = None
-
-    if settings.telegram_bot_token:
-        try:
-            await TelegramNotifier(settings.telegram_bot_token).send(
-                str(chat_id),
-                "Your MBA Bot account is linked. Trade entries, exits, and daily P&L summaries will be sent here.",
-            )
-        except Exception:
-            logger.exception("telegram webhook: failed to send link-confirmation message")
+    await _reply(str(chat_id), _LINKED_MESSAGE, settings=settings)
 
     return {"ok": True}

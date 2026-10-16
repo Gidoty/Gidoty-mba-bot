@@ -96,6 +96,46 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         assert locked_out.status_code == 401
 
 
+def test_telegram_webhook_bare_start_replies_without_crashing():
+    with TestClient(app) as client:
+        client.post("/api/auth/signup", json={"email": "barestart@example.com", "password": "correct-horse-battery"})
+        client.post(
+            "/api/account",
+            json={
+                "pair": "BTC/USDT",
+                "market_type": "spot",
+                "notification_channel": "telegram",
+                "api_key": "k",
+                "api_secret": "s",
+            },
+        )
+
+        # A plain /start - no token - must not crash and must not link
+        # the chat id to anything, unlike the real deep-link flow.
+        webhook = client.post("/api/telegram/webhook", json={"message": {"chat": {"id": 111222333}, "text": "/start"}})
+        assert webhook.status_code == 200
+
+        account = client.get("/api/account").json()
+        assert account["notification_target"] is None
+
+
+def test_telegram_webhook_invalid_token_replies_without_crashing():
+    with TestClient(app) as client:
+        webhook = client.post(
+            "/api/telegram/webhook",
+            json={"message": {"chat": {"id": 444555666}, "text": "/start not-a-real-token"}},
+        )
+        assert webhook.status_code == 200
+
+
+def test_telegram_webhook_ignores_unrelated_messages():
+    with TestClient(app) as client:
+        webhook = client.post(
+            "/api/telegram/webhook", json={"message": {"chat": {"id": 777888999}, "text": "hello there"}}
+        )
+        assert webhook.status_code == 200
+
+
 def test_signup_rejects_duplicate_email():
     with TestClient(app) as client:
         client.post("/api/auth/signup", json={"email": "dup@example.com", "password": "correct-horse-battery"})
