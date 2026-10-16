@@ -81,6 +81,8 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
           </div>
         )}
 
+        <TelegramStatus account={account} onAccountChanged={onAccountChanged} />
+
         {customer.has_paid ? (
           <div className="mt-6 rounded-lg border border-accent/30 bg-accent/5 p-4">
             <p className="text-sm font-medium text-accent-dark">Unlocked - lifetime access active.</p>
@@ -164,6 +166,76 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TelegramStatus({ account, onAccountChanged }) {
+  const [linkUrl, setLinkUrl] = useState(null);
+  const [error, setError] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const linked = Boolean(account.notification_target);
+
+  async function getLink() {
+    setError(null);
+    try {
+      const { link_url } = await api.get("/telegram/link-url");
+      setLinkUrl(link_url);
+      window.open(link_url, "_blank", "noopener");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function checkLinked() {
+    setChecking(true);
+    try {
+      await onAccountChanged();
+    } finally {
+      setChecking(false);
+      setLinkUrl(null);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-ink">Telegram</span>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            linked ? "bg-accent/10 text-accent-dark" : "bg-red-50 text-red-700"
+          }`}
+        >
+          {linked ? "Linked" : "Not linked"}
+        </span>
+      </div>
+
+      {!linked && (
+        <p className="mt-1 text-xs text-slate-500">
+          The bot won't send (or trade past the trial without) alerts until this is linked.
+        </p>
+      )}
+
+      {error && <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+
+      <div className="mt-3 flex flex-wrap gap-3">
+        <button
+          onClick={getLink}
+          className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
+        >
+          {linked ? "Relink Telegram" : "Open Telegram and link"}
+        </button>
+        {linkUrl && (
+          <button
+            onClick={checkLinked}
+            disabled={checking}
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:opacity-60"
+          >
+            {checking ? "Checking..." : "I've linked it - refresh"}
+          </button>
+        )}
       </div>
     </div>
   );
