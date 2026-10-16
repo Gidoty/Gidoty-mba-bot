@@ -166,6 +166,8 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
             </tbody>
           </table>
         </div>
+
+        <p className="mt-6 text-center text-[10px] text-slate-300">build marker: telegram-dashboard-section-v1</p>
       </div>
     </div>
   );
