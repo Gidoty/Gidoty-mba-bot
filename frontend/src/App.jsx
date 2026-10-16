@@ -33,17 +33,27 @@ export default function App() {
     });
   }
 
+  let content;
   if (customer === undefined) {
-    return <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
+    content = <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
+  } else if (!customer) {
+    if (route === "login") content = <Login onAuthed={handleAuthed} />;
+    else if (route === "signup") content = <Signup onAuthed={handleAuthed} />;
+    else content = <Landing />;
+  } else {
+    content = <AuthedApp customer={customer} onLogout={handleLogout} onCustomerChanged={refreshCustomer} />;
   }
 
-  if (!customer) {
-    if (route === "login") return <Login onAuthed={handleAuthed} />;
-    if (route === "signup") return <Signup onAuthed={handleAuthed} />;
-    return <Landing />;
-  }
-
-  return <AuthedApp customer={customer} onLogout={handleLogout} onCustomerChanged={refreshCustomer} />;
+  return (
+    <>
+      {content}
+      {/* Diagnostic build marker - renders on every page/state, regardless
+          of auth or account status, so it's possible to tell by eye
+          whether a given browser is loading this build at all. Remove
+          once the Telegram-linking deploy question is settled. */}
+      <p className="fixed bottom-1 right-1 z-50 text-[9px] text-slate-300">build: telegram-dashboard-section-v1</p>
+    </>
+  );
 }
 
 // Decides Onboarding vs Dashboard off whether an account already exists,
