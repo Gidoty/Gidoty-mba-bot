@@ -91,6 +91,25 @@ class TradingAccount(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_pnl_summary_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "YYYY-MM-DD", UTC
 
+    # Persisted runtime state, written every scheduler cycle (trader.py) so
+    # the dashboard can show real status instead of assuming the bot is
+    # working. last_scanned_at updates on every attempt, success or not;
+    # last_signal/last_signal_at only update on a successful evaluation;
+    # last_error/last_error_at are set on failure and cleared back to None
+    # on the next success - "error" is deliberately not sticky forever,
+    # it reflects the most recent cycle only. All customer-facing, so
+    # last_error is always a short sanitized message (see
+    # exchange.safe_error_message), never a raw exception or traceback.
+    last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_signal: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    last_signal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set once, the first time this account's mode ever resolves to LIVE,
+    # so the one-time "you're now live" Telegram message never repeats -
+    # not cleared by pausing/resuming or by a later pair/market change.
+    live_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

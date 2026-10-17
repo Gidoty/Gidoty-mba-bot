@@ -57,6 +57,31 @@ def quote_currency(pair: str) -> str:
     return pair.split("/", 1)[1]
 
 
+def safe_error_message(exc: Exception) -> str:
+    """Turns any exception from a trading cycle into a short, generic,
+    customer-facing message. Deliberately never includes `str(exc)` -
+    ccxt/exchange error text can echo back request details (key
+    fragments, raw HTTP bodies, internal URLs) that have no business
+    reaching a customer's dashboard. Only the category is shown; the
+    real exception and its traceback still go to the server log via
+    `logger.exception` in scheduler.py, unaffected by this function.
+    """
+    if isinstance(exc, WithdrawalPermissionDetected):
+        return (
+            "Your Binance API key has withdrawal permission enabled. For your safety, trading is "
+            "paused on this account until you replace it with a trade-only key."
+        )
+    if isinstance(exc, ccxt_async.AuthenticationError):
+        return "Binance rejected this account's API key or secret. Please check it in your Binance account."
+    if isinstance(exc, ccxt_async.InsufficientFunds):
+        return "Your Binance balance is too low for the bot's current position size."
+    if isinstance(exc, (ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable, ccxt_async.RequestTimeout)):
+        return "Temporary connection issue reaching Binance. The bot will try again on its next check."
+    if isinstance(exc, ccxt_async.ExchangeError):
+        return "Binance rejected a request from the bot. Please check your account settings on Binance."
+    return "An unexpected error occurred while checking the market for this account."
+
+
 async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) -> float:
     balance = await client.fetch_balance()
     quote = quote_currency(pair)

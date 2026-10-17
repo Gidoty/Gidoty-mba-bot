@@ -65,6 +65,18 @@ class AccountCreateRequest(BaseModel):
 class AccountUpdateRequest(BaseModel):
     risk_pct: float | None = Field(default=None, gt=0, le=100)
     is_active: bool | None = None
+    pair: str | None = None
+    market_type: str | None = None
+
+    @field_validator("pair")
+    @classmethod
+    def _valid_pair(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_choice(v, SUPPORTED_PAIRS, "pair")
+
+    @field_validator("market_type")
+    @classmethod
+    def _valid_market_type(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_choice(v, SUPPORTED_MARKET_TYPES, "market_type")
 
 
 class LiveBypassRequest(BaseModel):
@@ -91,6 +103,17 @@ class AccountOut(BaseModel):
     paper_balance: float
     live_bypass_accepted_at: datetime | None
     is_active: bool
+
+    # Persisted runtime state (trader.py writes these every scheduler
+    # cycle - see models.py) plus a server-computed summary of them, so
+    # the frontend never has to re-derive "is this actually working" from
+    # raw timestamps itself.
+    runtime_status: str  # "paused" | "error" | "trade_open" | "active"
+    last_scanned_at: datetime | None
+    last_signal: str | None  # "none" | "bullish_crossover" | "bearish_crossover"
+    last_signal_at: datetime | None
+    last_error: str | None  # already a short, customer-safe message - see exchange.safe_error_message
+    last_error_at: datetime | None
 
     model_config = {"from_attributes": True}
 

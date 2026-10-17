@@ -2,12 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
-
-const PAIRS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT"];
-// Not tradeable yet - CORE isn't listed on Binance. Shown disabled in
-// the selector; never submitted, so the backend never needs to know
-// about it (see UPCOMING_PAIRS in config.py for the same note).
-const UPCOMING_PAIRS = ["CORE/USDT"];
+import { PAIRS, UPCOMING_PAIRS } from "../constants.js";
 
 const SUPPORT_WHATSAPP_NUMBER = "2348124228730"; // 0812 422 8730, in wa.me's international-digits-only format
 const SUPPORT_EMAIL = "support@metabridgeacademy.com";

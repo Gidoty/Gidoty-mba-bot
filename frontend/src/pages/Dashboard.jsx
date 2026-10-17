@@ -2,6 +2,31 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
+import { MARKET_TYPES, PAIRS, UPCOMING_PAIRS } from "../constants.js";
+
+const STATUS_STYLES = {
+  active: { label: "Active — scanning market", dot: "bg-accent", text: "text-accent-dark", bg: "bg-accent/5 border-accent/30" },
+  trade_open: { label: "Trade open", dot: "bg-sky-500", text: "text-sky-800", bg: "bg-sky-50 border-sky-200" },
+  paused: { label: "Paused", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
+  error: { label: "Error", dot: "bg-red-500", text: "text-red-800", bg: "bg-red-50 border-red-200" },
+};
+
+const SIGNAL_LABELS = {
+  none: "No crossover yet",
+  bullish_crossover: "Bullish crossover (buy signal)",
+  bearish_crossover: "Bearish crossover (sell signal)",
+};
+
+function formatRelativeTime(iso) {
+  if (!iso) return null;
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(diffMs / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
 
 export default function Dashboard({ customer, account, onLogout, onAccountChanged, onCustomerChanged }) {
   const [trades, setTrades] = useState([]);
@@ -73,7 +98,9 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
 
         {error && <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <BotStatus account={account} />
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard
             label="Mode"
             value={account.mode === "live" ? "Live" : customer.has_paid ? `Paper (${daysLeft}d left)` : "Paper (free trial)"}
@@ -165,6 +192,8 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
           )}
         </div>
 
+        <TradingSettings account={account} onAccountChanged={onAccountChanged} />
+
         <h2 className="mt-10 mb-3 text-sm font-semibold text-slate-700">Trade history</h2>
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
           <table className="w-full text-left text-sm">
@@ -203,6 +232,133 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
         </div>
       </div>
     </div>
+  );
+}
+
+function BotStatus({ account }) {
+  const style = STATUS_STYLES[account.runtime_status] ?? STATUS_STYLES.active;
+  const lastScanned = formatRelativeTime(account.last_scanned_at);
+  const signalLabel = account.last_signal ? SIGNAL_LABELS[account.last_signal] ?? account.last_signal : null;
+  const lastSignalTime = formatRelativeTime(account.last_signal_at);
+
+  return (
+    <div className={`rounded-lg border p-4 ${style.bg}`}>
+      <div className="flex items-center gap-2">
+        <span className={`h-2.5 w-2.5 rounded-full ${style.dot}`} />
+        <span className={`text-sm font-semibold ${style.text}`}>{style.label}</span>
+        <HelpTip
+          text={
+            "Active: the bot is checking the market on schedule. Trade open: it's currently holding a position. " +
+            "Paused: you turned trading off yourself. Error: the last check hit a problem - see the message below."
+          }
+        />
+      </div>
+
+      <p className="mt-2 text-xs text-slate-500">
+        Last checked: {lastScanned ?? "not yet checked"}
+        {" · "}
+        Last signal: {signalLabel ? `${signalLabel}${lastSignalTime ? ` (${lastSignalTime})` : ""}` : "not yet evaluated"}
+      </p>
+
+      {account.runtime_status === "error" && account.last_error && (
+        <p className="mt-2 rounded-md bg-red-100 px-3 py-2 text-xs text-red-800">{account.last_error}</p>
+      )}
+    </div>
+  );
+}
+
+function TradingSettings({ account, onAccountChanged }) {
+  const [pair, setPair] = useState(account.pair);
+  const [marketType, setMarketType] = useState(account.market_type);
+  const [riskPct, setRiskPct] = useState(String(account.risk_pct));
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const dirty = pair !== account.pair || marketType !== account.market_type || riskPct !== String(account.risk_pct);
+
+  async function save(e) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      await api.patch("/account", {
+        pair,
+        market_type: marketType,
+        risk_pct: riskPct ? Number(riskPct) : undefined,
+      });
+      onAccountChanged();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="flex items-center gap-1">
+        <h2 className="text-sm font-medium text-ink">Trading settings</h2>
+        <HelpTip text="Payment unlocks your account, not a specific pair - change pair, market, or risk anytime. Switching pair or market is blocked while you have an open trade, so nothing gets left unmanaged." />
+      </div>
+
+      {error && <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Pair</span>
+          <select
+            value={pair}
+            onChange={(e) => setPair(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {PAIRS.map((p) => (
+              <option key={p}>{p}</option>
+            ))}
+            {UPCOMING_PAIRS.map((p) => (
+              <option key={p} value={p} disabled>
+                {p} - coming soon
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Market</span>
+          <select
+            value={marketType}
+            onChange={(e) => setMarketType(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {MARKET_TYPES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Risk per trade (%)</span>
+          <input
+            type="number"
+            min="0.1"
+            max="2"
+            step="0.1"
+            value={riskPct}
+            onChange={(e) => setRiskPct(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+      </div>
+
+      <button
+        type="submit"
+        disabled={!dirty || saving}
+        className="mt-3 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {saving ? "Saving..." : "Save changes"}
+      </button>
+    </form>
   );
 }
 

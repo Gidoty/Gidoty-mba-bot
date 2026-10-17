@@ -31,6 +31,11 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         return
 
     now = datetime.now(timezone.utc)
+    # We attempted a real cycle for this account - record that regardless
+    # of how the rest of this function goes, so "last checked" on the
+    # dashboard reflects reality even during a run of errors.
+    account.last_scanned_at = now
+
     trial_state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
@@ -39,9 +44,19 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     )
     is_paper = trial_state.mode == TradingMode.PAPER
 
+    if not is_paper and account.live_notified_at is None:
+        account.live_notified_at = now
+        await _notify_safe(
+            notifier,
+            account,
+            f"Your MBA Bot is now live and actively scanning {account.pair} ({account.market_type}) for trade "
+            "signals, using your own Binance funds. You'll hear from this chat the moment it opens or closes a trade.",
+        )
+
     api_key, api_secret = _resolve_credentials(account, settings, is_paper=is_paper)
     if api_key is None:
         logger.warning("account %s has no usable credentials for mode=%s, skipping", account.id, trial_state.mode.value)
+        await _record_error(notifier, account, "No usable trading credentials are configured for this account.", now=now)
         return
 
     client = exchange.build_exchange_client(
@@ -59,6 +74,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         candles = candles_from_ohlcv(ohlcv)
         if not candles:
             logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
+            await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
             return
         current_price = candles[-1].close
 
@@ -70,6 +86,13 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             atr_flat_threshold=settings.atr_flat_threshold,
             atr_rolling_window=settings.atr_rolling_window,
         )
+        # A successful evaluation, whatever it concluded, is a healthy
+        # cycle - record the signal and clear any previously-recorded
+        # error so "Error" status doesn't linger past the problem itself.
+        account.last_signal = signal.signal.value
+        account.last_signal_at = now
+        account.last_error = None
+        account.last_error_at = None
 
         open_trade = get_open_trade(session, account.id)
         if open_trade is None:
@@ -78,11 +101,38 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             await _maybe_exit(session, account, client, open_trade, signal, current_price, notifier, is_paper=is_paper, now=now)
 
         await _maybe_send_daily_summary(session, account, notifier, now=now)
-    except exchange.WithdrawalPermissionDetected:
+    except exchange.WithdrawalPermissionDetected as exc:
+        await _record_error(notifier, account, exchange.safe_error_message(exc), now=now)
         logger.error("account %s: stored key has withdrawal permission, refusing to trade", account.id)
+        raise
+    except Exception as exc:
+        await _record_error(notifier, account, exchange.safe_error_message(exc), now=now)
         raise
     finally:
         await client.close()
+
+
+async def _notify_safe(notifier: Notifier, account: TradingAccount, message: str) -> None:
+    """Best-effort send for the new status notifications below - a failed
+    delivery here must never crash or mislabel an otherwise-healthy cycle,
+    mirroring the same pattern the Telegram webhook uses for its own replies."""
+    try:
+        await notifier.send(account.notification_target, message)
+    except Exception:
+        logger.exception("account %s: failed to send a status notification", account.id)
+
+
+async def _record_error(notifier: Notifier, account: TradingAccount, message: str, *, now: datetime) -> None:
+    """Persists a short, already-sanitized message (see
+    exchange.safe_error_message - never raw exception text) and notifies
+    once per error *episode*: only when the account wasn't already in an
+    error state, so a persistent problem doesn't page the customer every
+    cycle until it's fixed."""
+    is_new_episode = account.last_error is None
+    account.last_error = message
+    account.last_error_at = now
+    if is_new_episode:
+        await _notify_safe(notifier, account, f"MBA Bot hit a problem: {message}")
 
 
 def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool) -> tuple[str | None, str | None]:

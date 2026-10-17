@@ -145,6 +145,35 @@ it just now also answers requests instead of only looping silently.
 
   Lifetime access, not a subscription: once `has_paid` is set it never
   gets cleared by anything in this codebase.
+- **Pair/market switching, and why it's safe to do mid-lifetime**
+  (`api/routers/account.py`'s `update_account`): `has_paid` unlocks the
+  account, not a pair - `PATCH /api/account` accepts `pair`/`market_type`
+  at any time, for paid and unpaid customers alike, validated against the
+  same `SUPPORTED_PAIRS`/`SUPPORTED_MARKET_TYPES` creation uses. The one
+  thing it refuses is switching while `db.get_open_trade` finds an open
+  position: `trader.py` always closes using the account's *current*
+  `pair`/`market_type`, not whatever the trade was opened under (nothing
+  per-trade records that), so a switch mid-trade would have the next
+  cycle try to exit through the wrong symbol - `409` instead. A real
+  switch also clears the runtime-status fields below, since a reading
+  from the old pair has nothing to say about the new one.
+- **Runtime status, persisted rather than assumed** (`trader.py`,
+  `TradingAccount.last_scanned_at`/`last_signal`/`last_signal_at`/
+  `last_error`/`last_error_at`): every scheduler cycle writes these,
+  success or failure, so the dashboard reflects what actually happened
+  rather than assuming the bot is working because nothing crashed.
+  `last_error` is cleared on the next healthy cycle - it describes the
+  most recent attempt, not a sticky fault flag - and is always a short
+  category from `exchange.safe_error_message`, never a raw exception or
+  traceback (those still go to the server log via `scheduler.py`'s
+  `logger.exception`, untouched). `api/routers/account.py` derives a
+  single `runtime_status` (`paused` > `error` > `trade_open` > `active`)
+  from these plus `is_active` and an open-trade check, so the frontend
+  never re-implements that priority logic itself. Telegram only gets a
+  new message when an error episode *starts* (`last_error` goes from
+  `None` to set) and once, lifetime, the first time an account's mode
+  resolves to LIVE (`live_notified_at`) - not every poll, which would
+  just be noise.
 - **Deploys separately from the trading engine's own host story:** the
   frontend is a static Vite build that goes to Vercel (or any static
   host) like any other SPA; the backend (API + scheduler, one process)
