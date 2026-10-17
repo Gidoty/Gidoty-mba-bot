@@ -32,6 +32,16 @@ os.environ["POLL_INTERVAL_SECONDS"] = "3600"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from mba_bot.api.app import app  # noqa: E402
+from mba_bot.db import session_scope  # noqa: E402
+from mba_bot.models import Customer  # noqa: E402
+
+
+def _mark_paid(email: str) -> None:
+    """Stands in for the Paystack webhook / mark_customer_paid.py in
+    tests that need a paid customer without going through either."""
+    with session_scope() as session:
+        customer = session.query(Customer).filter(Customer.email == email).one()
+        customer.has_paid = True
 
 
 def test_signup_onboarding_telegram_link_and_live_bypass():
@@ -58,6 +68,7 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         body = created.json()
         assert body["mode"] == "paper"
         assert body["notification_target"] is None
+        assert body["bot_code"].startswith("MBA-")
 
         duplicate = client.post(
             "/api/account",
@@ -84,13 +95,21 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         after_link = client.get("/api/account").json()
         assert after_link["notification_target"] == "987654321"
 
+        # Accepting the bypass is recorded immediately, but has no effect
+        # on actual mode until the customer has paid - an unpaid account
+        # is a permanent, free paper trial regardless of the bypass.
         bypass = client.post("/api/account/live-bypass", json={"accept": True})
         assert bypass.status_code == 200
-        assert bypass.json()["mode"] == "live"
+        assert bypass.json()["mode"] == "paper"
         assert bypass.json()["live_bypass_accepted_at"] is not None
 
         again = client.post("/api/account/live-bypass", json={"accept": True})
         assert again.status_code == 409
+
+        # Paying flips the previously-recorded bypass into effect right away.
+        _mark_paid("smoke@example.com")
+        after_payment = client.get("/api/account")
+        assert after_payment.json()["mode"] == "live"
 
         update = client.patch("/api/account", json={"risk_pct": 1.5})
         assert update.status_code == 200

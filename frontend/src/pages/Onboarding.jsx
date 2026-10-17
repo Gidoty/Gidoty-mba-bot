@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
+import HelpTip from "../components/HelpTip.jsx";
 
 const PAIRS = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT"];
 // Not tradeable yet - CORE isn't listed on Binance. Shown disabled in
@@ -15,7 +16,7 @@ export default function Onboarding({ account, onLogout, onProgress }) {
   if (!account) {
     return <AccountForm onLogout={onLogout} onCreated={onProgress} />;
   }
-  return <TelegramLinkStep onLogout={onLogout} onLinked={onProgress} />;
+  return <TelegramLinkStep account={account} onLogout={onLogout} onLinked={onProgress} />;
 }
 
 function Shell({ title, onLogout, children }) {
@@ -73,7 +74,10 @@ function AccountForm({ onLogout, onCreated }) {
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">Pair</span>
+          <span className="text-sm font-medium text-slate-700">
+            Pair
+            <HelpTip text="The crypto pair the bot watches and trades, e.g. BTC/USDT means it trades Bitcoin priced in Tether. Pick one you're comfortable with - you can't change this later without creating a new account." />
+          </span>
           <select
             value={pair}
             onChange={(e) => setPair(e.target.value)}
@@ -91,7 +95,10 @@ function AccountForm({ onLogout, onCreated }) {
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">Market</span>
+          <span className="text-sm font-medium text-slate-700">
+            Market
+            <HelpTip text="Spot: you buy and sell the actual coin, simplest and lowest risk. Futures: you trade with leverage, which can multiply both gains and losses. If you're not sure, choose Spot." />
+          </span>
           <select
             value={marketType}
             onChange={(e) => setMarketType(e.target.value)}
@@ -103,7 +110,10 @@ function AccountForm({ onLogout, onCreated }) {
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">Risk per trade (%)</span>
+          <span className="text-sm font-medium text-slate-700">
+            Risk per trade (%)
+            <HelpTip text="How much of your balance the bot risks on a single trade before its stop-loss triggers. Lower means smaller, steadier moves; higher means bigger swings, up and down. Kept at 2% or less either way." />
+          </span>
           <input
             type="number"
             min="0.1"
@@ -126,7 +136,10 @@ function AccountForm({ onLogout, onCreated }) {
         <HowToGetApiKey />
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">Binance API key</span>
+          <span className="text-sm font-medium text-slate-700">
+            Binance API key
+            <HelpTip text={'A code Binance generates for you under API Management, so this bot can place trades on your behalf without needing your password. See "Don\'t know how to get a Binance API key?" above for the full walkthrough.'} />
+          </span>
           <input
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
@@ -136,7 +149,10 @@ function AccountForm({ onLogout, onCreated }) {
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">Binance API secret</span>
+          <span className="text-sm font-medium text-slate-700">
+            Binance API secret
+            <HelpTip text="Shown by Binance only once, right next to your API key when you create it. Copy both at the same time - if you leave that page first, you'll need to delete the key and make a new one." />
+          </span>
           <input
             type="password"
             value={apiSecret}
@@ -226,7 +242,7 @@ function ContactSupport() {
   );
 }
 
-function TelegramLinkStep({ onLogout, onLinked }) {
+function TelegramLinkStep({ account, onLogout, onLinked }) {
   const [linkUrl, setLinkUrl] = useState(null);
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(false);
@@ -253,9 +269,15 @@ function TelegramLinkStep({ onLogout, onLinked }) {
 
   return (
     <Shell title="Connect Telegram" onLogout={onLogout}>
+      {account?.bot_code && (
+        <p className="mb-4 inline-block rounded-full bg-slate-100 px-3 py-1 font-mono text-xs text-slate-600">
+          Bot code: {account.bot_code}
+        </p>
+      )}
       <p className="text-sm text-slate-600">
-        Your account is created and in its 7-day paper trial. Last step: link Telegram so we can send you trade
-        entries, exits, and daily P&L summaries - the bot won't start trading until this is done.
+        Your account is created with a free, unlimited paper trading trial - no card needed, no real funds at risk.
+        Last step: link Telegram so we can send you trade entries, exits, and daily P&L summaries. The bot won't
+        trade at all, paper or live, until this is done.
       </p>
       {error && <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
       <div className="mt-6 space-y-3">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "./api/client.js";
+import HowToUseGuide from "./components/HowToUseGuide.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Landing from "./pages/Landing.jsx";
 import Login from "./pages/Login.jsx";
@@ -47,11 +48,7 @@ export default function App() {
   return (
     <>
       {content}
-      {/* Diagnostic build marker - renders on every page/state, regardless
-          of auth or account status, so it's possible to tell by eye
-          whether a given browser is loading this build at all. Remove
-          once the Telegram-linking deploy question is settled. */}
-      <p className="fixed bottom-1 right-1 z-50 text-[9px] text-slate-300">build: telegram-dashboard-section-v1</p>
+      <HowToUseGuide />
     </>
   );
 }

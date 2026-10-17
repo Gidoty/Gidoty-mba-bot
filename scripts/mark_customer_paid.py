@@ -51,7 +51,8 @@ def main() -> None:
         if customer.account is not None:
             customer.account.is_active = True
 
-        print(f"unlocked lifetime access for {customer.email}")
+        bot_code = customer.account.bot_code if customer.account else None
+        print(f"unlocked lifetime access for {customer.email}" + (f" (bot code: {bot_code})" if bot_code else ""))
 
 
 if __name__ == "__main__":

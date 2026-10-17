@@ -30,11 +30,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from mba_bot.api.security import hash_password  # noqa: E402
+from mba_bot.botcode import assign_unique_bot_code  # noqa: E402
 from mba_bot.config import SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS, SUPPORTED_PAIRS, load_settings  # noqa: E402
 from mba_bot.crypto_utils import encrypt  # noqa: E402
 from mba_bot.db import init_db, session_scope  # noqa: E402
 from mba_bot.models import ApiCredential, Customer, TradingAccount  # noqa: E402
-from mba_bot.onboarding import LIVE_TRADING_DISCLOSURE, accept_live_bypass, start_trial  # noqa: E402
+from mba_bot.onboarding import LIVE_TRADING_DISCLOSURE, accept_live_bypass, resolve_trading_mode, start_trial  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,6 +86,7 @@ def main() -> None:
 
         account = TradingAccount(
             customer_id=customer.id,
+            bot_code=assign_unique_bot_code(session),
             pair=args.pair,
             market_type=args.market_type,
             notification_channel=args.notification_channel,
@@ -107,8 +109,15 @@ def main() -> None:
         )
         session.add(credential)
 
+        state = resolve_trading_mode(
+            trial_ends_at=account.trial_ends_at,
+            live_bypass_accepted_at=account.live_bypass_accepted_at,
+            has_paid=customer.has_paid,
+        )
+
         print(f"created customer {customer.id} ({customer.email}), account {account.id}")
-        print(f"mode: {'LIVE (trial bypassed)' if args.skip_trial else f'PAPER until {account.trial_ends_at.isoformat()}'}")
+        print(f"bot code: {account.bot_code}")
+        print(f"mode: {state.mode.value.upper()}" + (" (bypass recorded, takes effect once paid)" if args.skip_trial and not customer.has_paid else ""))
         print(f"access: {'UNLOCKED' if args.mark_paid else 'LOCKED - run scripts/mark_customer_paid.py to unlock'}")
 
 

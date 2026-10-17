@@ -21,7 +21,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import Base, Customer, Trade, TradingAccount
+from .models import Base, Trade, TradingAccount
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
@@ -51,19 +51,16 @@ def session_scope() -> Iterator[Session]:
 
 
 def list_active_accounts(session: Session) -> list[TradingAccount]:
-    """Accounts the scheduler should actually trade: the customer hasn't
-    paused it (`is_active`) AND the operator has unlocked it
-    (`Customer.has_paid` - set by the Paystack webhook or
-    `scripts/mark_customer_paid.py`). A brand-new account is locked by
-    default until one of those happens - there's no free trial here by
-    design, see ARCHITECTURE.md."""
-    return list(
-        session.scalars(
-            select(TradingAccount)
-            .join(Customer, TradingAccount.customer_id == Customer.id)
-            .where(TradingAccount.is_active.is_(True), Customer.has_paid.is_(True))
-        )
-    )
+    """Accounts the scheduler should actually trade this tick: anything
+    the customer hasn't paused (`is_active`). Payment is deliberately NOT
+    a filter here any more - an unpaid account still runs, it just never
+    gets past PAPER, because `resolve_trading_mode` (onboarding.py) is
+    where `Customer.has_paid` is actually enforced, keyed off this same
+    account's `customer` relationship. Keeping that check in exactly one
+    place means a free, unlimited paper trial for anyone and a hard
+    payment wall in front of LIVE can't drift out of sync with each
+    other. See ARCHITECTURE.md."""
+    return list(session.scalars(select(TradingAccount).where(TradingAccount.is_active.is_(True))))
 
 
 def get_open_trade(session: Session, account_id: str) -> Trade | None:

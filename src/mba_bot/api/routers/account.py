@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from ...botcode import assign_unique_bot_code
 from ...config import Settings
 from ...crypto_utils import encrypt
 from ...models import ApiCredential, Customer, TradingAccount
@@ -25,10 +26,15 @@ def _require_account(customer: Customer) -> TradingAccount:
     return customer.account
 
 
-def _to_account_out(account: TradingAccount) -> AccountOut:
-    state = resolve_trading_mode(trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at)
+def _to_account_out(account: TradingAccount, *, has_paid: bool) -> AccountOut:
+    state = resolve_trading_mode(
+        trial_ends_at=account.trial_ends_at,
+        live_bypass_accepted_at=account.live_bypass_accepted_at,
+        has_paid=has_paid,
+    )
     return AccountOut(
         id=account.id,
+        bot_code=account.bot_code,
         pair=account.pair,
         market_type=account.market_type,
         notification_channel=account.notification_channel,
@@ -61,8 +67,14 @@ def create_account(
     except InvalidRiskParameters as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
+    try:
+        bot_code = assign_unique_bot_code(db)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+
     account = TradingAccount(
         customer_id=customer.id,
+        bot_code=bot_code,
         pair=body.pair,
         market_type=body.market_type,
         notification_channel=body.notification_channel,
@@ -81,12 +93,12 @@ def create_account(
             encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
         )
     )
-    return _to_account_out(account)
+    return _to_account_out(account, has_paid=customer.has_paid)
 
 
 @router.get("", response_model=AccountOut)
 def get_account(customer: Customer = Depends(get_current_customer)) -> AccountOut:
-    return _to_account_out(_require_account(customer))
+    return _to_account_out(_require_account(customer), has_paid=customer.has_paid)
 
 
 @router.patch("", response_model=AccountOut)
@@ -103,7 +115,7 @@ def update_account(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.is_active is not None:
         account.is_active = body.is_active
-    return _to_account_out(account)
+    return _to_account_out(account, has_paid=customer.has_paid)
 
 
 @router.post("/live-bypass", response_model=AccountOut)
@@ -113,4 +125,4 @@ def accept_live_trading_bypass(body: LiveBypassRequest, customer: Customer = Dep
         raise HTTPException(status.HTTP_409_CONFLICT, "live trading was already accepted for this account")
     account.live_bypass_accepted_at = accept_live_bypass()
     account.live_bypass_disclosure_text = LIVE_TRADING_DISCLOSURE
-    return _to_account_out(account)
+    return _to_account_out(account, has_paid=customer.has_paid)

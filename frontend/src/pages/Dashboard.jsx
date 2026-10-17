@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
+import HelpTip from "../components/HelpTip.jsx";
 
 export default function Dashboard({ customer, account, onLogout, onAccountChanged, onCustomerChanged }) {
   const [trades, setTrades] = useState([]);
@@ -54,7 +55,15 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
     <div className="min-h-screen bg-slate-50 px-4 py-10">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6 flex items-center justify-between">
-          <span className="text-lg font-semibold text-ink">MBA Bot</span>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-semibold text-ink">MBA Bot</span>
+            {account.bot_code && (
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 font-mono text-xs text-slate-600">
+                {account.bot_code}
+                <HelpTip text="Your bot's reference code. Keep it handy - if you ever contact support, this is the fastest way for us to find your account." />
+              </span>
+            )}
+          </div>
           <div className="space-x-4 text-sm">
             <button onClick={onLogout} className="text-slate-500 hover:text-ink">
               Log out
@@ -65,7 +74,15 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
         {error && <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatCard label="Mode" value={account.mode === "live" ? "Live" : `Paper (${daysLeft}d left)`} />
+          <StatCard
+            label="Mode"
+            value={account.mode === "live" ? "Live" : customer.has_paid ? `Paper (${daysLeft}d left)` : "Paper (free trial)"}
+            help={
+              account.mode === "live"
+                ? "Trading with your real Binance funds."
+                : "Simulated trades against Binance testnet - no real money is ever at risk in this mode."
+            }
+          />
           <StatCard label="Pair" value={`${account.pair} · ${account.market_type}`} />
           <StatCard label="Risk per trade" value={`${account.risk_pct}%`} />
         </div>
@@ -85,21 +102,24 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
 
         {customer.has_paid ? (
           <div className="mt-6 rounded-lg border border-accent/30 bg-accent/5 p-4">
-            <p className="text-sm font-medium text-accent-dark">Unlocked - lifetime access active.</p>
+            <p className="text-sm font-medium text-accent-dark">Unlocked - lifetime access to live trading.</p>
           </div>
         ) : (
-          <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-semibold text-red-800">Locked - the bot is not trading on this account yet.</p>
-            <p className="mt-1 text-sm text-red-700">
-              Every account starts locked. Pay to unlock it yourself, or ask whoever gave you this link to unlock it
-              for you.
+          <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p className="text-sm font-semibold text-amber-800">
+              Free trial - paper trading only
+              <HelpTip text="Unpaid accounts trade on Binance testnet forever, for free - there's no time limit and no risk to real funds. Paying is only required to switch this account to live trading with your own money." />
+            </p>
+            <p className="mt-1 text-sm text-amber-700">
+              You can keep testing the bot on paper for as long as you like, at no cost. When you're ready to trade
+              with real funds, pay to unlock live trading.
             </p>
             <div className="mt-3 flex flex-wrap gap-3">
               <button
                 onClick={startPayment}
                 className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark"
               >
-                Pay to unlock
+                Pay to unlock live trading
               </button>
               <button
                 onClick={refreshPaymentStatus}
@@ -111,24 +131,39 @@ export default function Dashboard({ customer, account, onLogout, onAccountChange
           </div>
         )}
 
-        {customer.has_paid && (
-          <div className="mt-4 flex flex-wrap gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1">
             <button
               onClick={togglePause}
               className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
             >
               {account.is_active ? "Pause trading" : "Resume trading"}
             </button>
-            {account.mode === "paper" && (
+            <HelpTip text="Pausing stops the bot from opening new trades on this account - a trade already open is still managed through to its exit. Resume anytime." />
+          </div>
+          {account.mode === "paper" && !account.live_bypass_accepted_at && (
+            <div className="flex items-center gap-1">
               <button
                 onClick={acceptLiveBypass}
                 className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100"
               >
-                Skip trial and trade live
+                {customer.has_paid ? "Skip trial and trade live" : "Accept live-trading disclosure"}
               </button>
-            )}
-          </div>
-        )}
+              <HelpTip
+                text={
+                  customer.has_paid
+                    ? "Switches this account to live trading right now, with your own funds, instead of waiting out the rest of the 7-day trial."
+                    : "Records your agreement to trade live now. It has no effect until you pay - the moment you unlock live trading, this account switches to live immediately with no extra step."
+                }
+              />
+            </div>
+          )}
+          {account.mode === "paper" && account.live_bypass_accepted_at && !customer.has_paid && (
+            <p className="text-xs text-slate-500">
+              Live-trading disclosure accepted - this account will switch to live the moment you unlock it.
+            </p>
+          )}
+        </div>
 
         <h2 className="mt-10 mb-3 text-sm font-semibold text-slate-700">Trade history</h2>
         <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
@@ -202,7 +237,10 @@ function TelegramStatus({ account, onAccountChanged }) {
   return (
     <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-ink">Telegram</span>
+        <span className="text-sm font-medium text-ink">
+          Telegram
+          <HelpTip text="The bot messages this chat whenever it opens or closes a trade, plus a daily P&L summary. It won't trade at all, paper or live, until this is linked." />
+        </span>
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
             linked ? "bg-accent/10 text-accent-dark" : "bg-red-50 text-red-700"
@@ -241,10 +279,13 @@ function TelegramStatus({ account, onAccountChanged }) {
   );
 }
 
-function StatCard({ label, value }) {
+function StatCard({ label, value, help }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <dt className="text-xs uppercase text-slate-500">{label}</dt>
+      <dt className="text-xs uppercase text-slate-500">
+        {label}
+        {help && <HelpTip text={help} />}
+      </dt>
       <dd className="mt-1 text-lg font-semibold text-ink">{value}</dd>
     </div>
   );

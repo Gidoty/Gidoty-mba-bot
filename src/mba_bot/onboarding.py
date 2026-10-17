@@ -1,10 +1,14 @@
 """Paper-trading trial and the live-trading bypass disclosure.
 
-Every account starts in a 7-day paper trial on testnet. It can move to live
-trading two ways: the trial simply expires, or the customer explicitly
-bypasses it by accepting a disclosure - which this module logs with a
-timestamp and a copy of the disclosure text they agreed to, so there's a
-durable record of informed consent if it's ever disputed.
+Every account starts in a 7-day paper trial on testnet - and stays there
+indefinitely, free, with no expiry, until the customer pays. `has_paid`
+is a hard ceiling on `resolve_trading_mode`, checked before the trial
+clock or the bypass: an unpaid account can test the bot for as long as it
+wants with no financial risk, but paying is what allows it to ever reach
+LIVE at all, either by the trial simply expiring or by the customer
+explicitly bypassing it and accepting a disclosure - which this module
+logs with a timestamp and a copy of the disclosure text they agreed to,
+so there's a durable record of informed consent if it's ever disputed.
 """
 from __future__ import annotations
 
@@ -54,12 +58,18 @@ def resolve_trading_mode(
     *,
     trial_ends_at: datetime,
     live_bypass_accepted_at: datetime | None,
+    has_paid: bool,
     now: datetime | None = None,
 ) -> TrialState:
     """The single source of truth for "is this account allowed to place
     real orders right now". Fails safe: any ambiguity resolves to PAPER,
     never LIVE - an account only trades live when it has explicitly
-    earned it, either by finishing the trial or by a logged bypass.
+    earned it, either by finishing the trial or by a logged bypass, AND
+    has paid. `has_paid` is checked first and wins outright: an unpaid
+    account is PAPER forever, no matter what the trial clock or a past
+    bypass says, so there's exactly one place in the codebase deciding
+    "would this account ever place a real order" - not split between
+    here and the scheduler's own account filter.
     """
     now = now or datetime.now(timezone.utc)
     # SQLite drops tzinfo on round-trip (it stores DateTime as a plain
@@ -69,6 +79,9 @@ def resolve_trading_mode(
     # rather than letting the comparison below raise.
     if trial_ends_at.tzinfo is None:
         trial_ends_at = trial_ends_at.replace(tzinfo=timezone.utc)
+
+    if not has_paid:
+        return TrialState(mode=TradingMode.PAPER, trial_ends_at=trial_ends_at, bypassed=False, bypass_accepted_at=None)
 
     if live_bypass_accepted_at is not None:
         return TrialState(

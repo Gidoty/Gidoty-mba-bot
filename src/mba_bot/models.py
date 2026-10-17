@@ -58,6 +58,12 @@ class TradingAccount(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False, unique=True)
 
+    # Short support-facing code ("MBA-7F3K9Q"), always set by application
+    # code at creation time (see botcode.py) - nullable at the DB level
+    # only because SQLite can't cheaply add a NOT NULL column to a table
+    # that may already have rows (see the migration that introduced it).
+    bot_code: Mapped[str | None] = mapped_column(String(20), nullable=True, unique=True)
+
     pair: Mapped[str] = mapped_column(String(20), nullable=False)
     market_type: Mapped[str] = mapped_column(String(10), nullable=False)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)

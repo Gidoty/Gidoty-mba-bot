@@ -75,7 +75,8 @@ purely a property of our own records.
 
 The customer's own mainnet key (`ApiCredential`, encrypted at rest) is
 collected at signup but stays unused until the account reaches live mode
-(trial expiry or the logged bypass) - see `onboarding.py`.
+(trial expiry or the logged bypass, and the customer has paid) - see
+`onboarding.py`.
 
 ## Web API and frontend: one process still does the trading
 
@@ -89,8 +90,13 @@ serves HTTP. There's still exactly one process to deploy on the VPS -
 it just now also answers requests instead of only looping silently.
 
 - **Auth** is email+password (bcrypt) with a JWT in an httpOnly,
-  `SameSite=Lax` cookie (`api/security.py`) - no token for the frontend
-  to manage itself, no OAuth integration for v1.
+  `SameSite=None; Secure` cookie (`api/routers/auth.py`) - no token for
+  the frontend to manage itself, no OAuth integration for v1.
+  `SameSite=None` specifically because the frontend (Vercel) and backend
+  (this API) are on different domains, making every request between them
+  cross-site; `SameSite=Lax` is never sent on a cross-site fetch/XHR, only
+  on a top-level link navigation, so Lax silently breaks auth the moment
+  the two are split across domains like this.
 - **Onboarding as HTTP** (`api/routers/account.py`) calls the exact same
   `onboarding.start_trial`/`accept_live_bypass` and `crypto_utils.encrypt`
   functions the CLI script (`scripts/signup_customer.py`) always used -
@@ -105,16 +111,24 @@ it just now also answers requests instead of only looping silently.
   account with no `notification_target` set, so this is a real gate, not
   just UX polish.
 - **Billing and the lock, by design** (`api/routers/billing.py`,
-  `db.list_active_accounts`): there's deliberately no free trial. A new
-  account's `TradingAccount.is_active` still defaults `True` (that field
-  is the customer's own pause/resume toggle, nothing more), but
-  `db.list_active_accounts` - the only thing the scheduler ever calls to
-  decide what to trade - requires `Customer.has_paid` as well. An account
-  with `has_paid=False` simply never gets fanned out to `trader.py`, paper
-  or live, regardless of what `is_active` says. This keeps the two
-  concerns independent: a customer can pause/resume their own unlocked
-  account, but can't unlock it themselves by touching `is_active` (the
-  `PATCH /api/account` endpoint never sets `has_paid`).
+  `onboarding.resolve_trading_mode`): the free trial is unlimited, the
+  payment wall is in front of LIVE only. A new account's
+  `TradingAccount.is_active` defaults `True` (that field is the
+  customer's own pause/resume toggle, nothing more) and
+  `db.list_active_accounts` - the only thing the scheduler calls to
+  decide what to run this tick - only checks that. Payment is enforced
+  one layer in, by `resolve_trading_mode`: `has_paid=False` pins an
+  account to PAPER forever regardless of the trial clock or a logged
+  bypass, and PAPER never places a real order (see "Paper trading"
+  above), so an unpaid account can run indefinitely at zero financial
+  risk - it just can never reach LIVE. This keeps three concerns
+  independent: a customer can pause/resume their own account via
+  `is_active`, test the bot for as long as they like for free, but can't
+  reach live trading by touching anything client-side (the `PATCH
+  /api/account` endpoint never sets `has_paid`, and `has_paid` is
+  checked in exactly one place - `resolve_trading_mode` - so the
+  scheduler's own account filter and the mode decision can't drift out
+  of sync with each other).
 
   `has_paid` flips exactly two ways, both ending in the same place:
   - Paystack's hosted payment page (card data never touches this server)
@@ -151,7 +165,10 @@ customer's trial performance and live performance are never mixed in a
 P&L query. `Customer` additionally carries `password_hash` and the
 Paystack fields (`has_paid`, `paystack_reference`); neither is a
 separate table since they're 1:1 with the customer, not something that
-repeats.
+repeats. `TradingAccount.bot_code` (`botcode.py`, "MBA-7F3K9Q") is a
+support-facing lookup handle, not a secret or an auth token - something a
+customer can read aloud over WhatsApp so the operator can find their
+account without needing their UUID.
 
 ## Module map
 
@@ -162,6 +179,7 @@ repeats.
 | `risk.py` | Position sizing (risk % of balance / stop distance) and stop-loss placement. Enforces the 1-2% cap. |
 | `onboarding.py` | Trial start/expiry, the live-trading bypass and its logged disclosure/timestamp. |
 | `crypto_utils.py` | Fernet encryption for stored API credentials. |
+| `botcode.py` | Generates the support-facing "MBA-XXXXXX" account code. |
 | `models.py` / `db.py` | SQLAlchemy schema and session/query helpers. |
 | `exchange.py` | ccxt client construction (spot vs futures, sandbox vs live) and the trade-only permission check. |
 | `notifications/` | `Notifier` interface; `TelegramNotifier` implemented, `WhatsAppNotifier` a stub per the "added later" spec. |

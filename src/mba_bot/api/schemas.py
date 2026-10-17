@@ -80,6 +80,7 @@ class LiveBypassRequest(BaseModel):
 
 class AccountOut(BaseModel):
     id: str
+    bot_code: str | None
     pair: str
     market_type: str
     notification_channel: str

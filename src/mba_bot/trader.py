@@ -32,7 +32,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
 
     now = datetime.now(timezone.utc)
     trial_state = resolve_trading_mode(
-        trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at, now=now
+        trial_ends_at=account.trial_ends_at,
+        live_bypass_accepted_at=account.live_bypass_accepted_at,
+        has_paid=account.customer.has_paid,
+        now=now,
     )
     is_paper = trial_state.mode == TradingMode.PAPER
 

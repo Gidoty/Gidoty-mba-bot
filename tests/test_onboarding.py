@@ -12,7 +12,7 @@ def test_start_trial_is_n_days_from_now():
 def test_within_trial_window_is_paper_mode():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     trial_ends_at = now + timedelta(days=3)
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, now=now)
+    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=True, now=now)
     assert state.mode == TradingMode.PAPER
     assert not state.bypassed
 
@@ -20,7 +20,7 @@ def test_within_trial_window_is_paper_mode():
 def test_trial_expiry_moves_to_live_without_bypass():
     now = datetime(2026, 1, 10, tzinfo=timezone.utc)
     trial_ends_at = datetime(2026, 1, 8, tzinfo=timezone.utc)
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, now=now)
+    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=True, now=now)
     assert state.mode == TradingMode.LIVE
     assert not state.bypassed
 
@@ -29,7 +29,7 @@ def test_explicit_bypass_is_live_even_during_trial_window():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     trial_ends_at = now + timedelta(days=6)  # trial not over yet
     bypass_at = now
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=bypass_at, now=now)
+    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=bypass_at, has_paid=True, now=now)
     assert state.mode == TradingMode.LIVE
     assert state.bypassed
     assert state.bypass_accepted_at == bypass_at
@@ -38,3 +38,30 @@ def test_explicit_bypass_is_live_even_during_trial_window():
 def test_accept_live_bypass_returns_a_timestamp():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     assert accept_live_bypass(now=now) == now
+
+
+def test_unpaid_account_stays_paper_even_after_trial_expiry():
+    now = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    trial_ends_at = datetime(2026, 1, 1, tzinfo=timezone.utc)  # long expired
+    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=False, now=now)
+    assert state.mode == TradingMode.PAPER
+
+
+def test_unpaid_account_stays_paper_even_with_bypass_accepted():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    trial_ends_at = now + timedelta(days=6)
+    state = resolve_trading_mode(
+        trial_ends_at=trial_ends_at, live_bypass_accepted_at=now, has_paid=False, now=now
+    )
+    assert state.mode == TradingMode.PAPER
+    assert not state.bypassed
+
+
+def test_paying_after_a_bypass_unlocks_live_immediately():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    trial_ends_at = now + timedelta(days=6)  # trial still running
+    state = resolve_trading_mode(
+        trial_ends_at=trial_ends_at, live_bypass_accepted_at=now, has_paid=True, now=now
+    )
+    assert state.mode == TradingMode.LIVE
+    assert state.bypassed
