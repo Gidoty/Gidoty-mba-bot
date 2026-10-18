@@ -13,10 +13,18 @@ from ...config import Settings
 from ...crypto_utils import encrypt
 from ...db import get_open_trade
 from ...models import ApiCredential, Customer, TradingAccount
-from ...onboarding import LIVE_TRADING_DISCLOSURE, accept_live_bypass, resolve_trading_mode, start_trial
+from ...onboarding import (
+    LIVE_TRADING_ACTIVATION_DISCLOSURE,
+    LIVE_TRADING_DISCLOSURE,
+    accept_live_bypass,
+    enable_live_trading,
+    is_live_eligible,
+    resolve_trading_mode,
+    start_trial,
+)
 from ...risk import InvalidRiskParameters, clamp_risk_pct
 from ..deps import get_current_customer, get_db, get_settings
-from ..schemas import AccountCreateRequest, AccountOut, AccountUpdateRequest, LiveBypassRequest
+from ..schemas import AccountCreateRequest, AccountOut, AccountUpdateRequest, CredentialUpdateRequest, LiveBypassRequest
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
@@ -32,6 +40,8 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         trial_ends_at=account.trial_ends_at,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
         has_paid=has_paid,
+        live_trading_enabled_at=account.live_trading_enabled_at,
+        has_mainnet_credential=account.has_mainnet_credential,
     )
 
     # Priority order: a customer's own pause always wins (nothing else
@@ -62,6 +72,9 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         paper_balance=account.paper_balance,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
         is_active=account.is_active,
+        credential_environment=account.credential.environment if account.credential else None,
+        has_mainnet_credential=account.has_mainnet_credential,
+        live_trading_enabled_at=account.live_trading_enabled_at,
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -69,6 +82,21 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         last_error=account.last_error,
         last_error_at=account.last_error_at,
     )
+
+
+def _require_no_open_trade(db: Session, account: TradingAccount, *, action: str) -> None:
+    """Shared guard for anything that could orphan a position still being
+    managed: changing pair, market type, the stored credential, or the
+    live-trading activation switch. trader.py always acts on the
+    account's *current* configuration, never what a trade was opened
+    under, so changing any of these mid-trade would have the next cycle
+    try to manage that position through the wrong client entirely."""
+    if get_open_trade(db, account.id) is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"you have an open trade on {account.pair} ({account.market_type}) - wait for it to close, or close it "
+            f"yourself on Binance, before {action}",
+        )
 
 
 @router.post("", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
@@ -112,6 +140,7 @@ def create_account(
         ApiCredential(
             account_id=account.id,
             exchange="binance",
+            environment=body.environment,
             encrypted_api_key=encrypt(body.api_key, key=settings.encryption_key),
             encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
         )
@@ -138,17 +167,8 @@ def update_account(
     if changing_pair or changing_market:
         # Payment unlocks the account, not a pair - a paid customer can
         # switch pairs freely. What they can't do is switch out from
-        # under a position the bot is still managing: trader.py always
-        # closes using the account's *current* pair/market_type, so
-        # changing either while a trade is open would have the next
-        # cycle try to exit the old position through the new pair's
-        # client - wrong symbol, and the real position left unmanaged.
-        if get_open_trade(db, account.id) is not None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"you have an open trade on {account.pair} ({account.market_type}) - wait for it to close, or "
-                "close it yourself on Binance, before switching pair or market type",
-            )
+        # under a position the bot is still managing.
+        _require_no_open_trade(db, account, action="switching pair or market type")
         if changing_pair:
             account.pair = body.pair
         if changing_market:
@@ -180,4 +200,79 @@ def accept_live_trading_bypass(
         raise HTTPException(status.HTTP_409_CONFLICT, "live trading was already accepted for this account")
     account.live_bypass_accepted_at = accept_live_bypass()
     account.live_bypass_disclosure_text = LIVE_TRADING_DISCLOSURE
+    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+
+
+@router.put("/credentials", response_model=AccountOut)
+def update_credentials(
+    body: CredentialUpdateRequest,
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AccountOut:
+    account = _require_account(customer)
+    if not settings.encryption_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
+
+    # Replacing the credential while a trade is open is exactly as unsafe
+    # as switching pair/market mid-trade - the next cycle would try to
+    # manage that position with a key that may not even be valid for it.
+    _require_no_open_trade(db, account, action="changing your API credentials")
+
+    credential = account.credential
+    if credential is None:
+        credential = ApiCredential(account_id=account.id, exchange="binance")
+        db.add(credential)
+    credential.environment = body.environment
+    credential.encrypted_api_key = encrypt(body.api_key, key=settings.encryption_key)
+    credential.encrypted_api_secret = encrypt(body.api_secret, key=settings.encryption_key)
+
+    # A credential that's no longer mainnet-tagged can't back live
+    # trading - turn the switch back off explicitly rather than leaving
+    # it set and relying only on resolve_trading_mode's own re-check
+    # (which still applies regardless, as a second independent guard).
+    if body.environment != "mainnet" and account.live_trading_enabled_at is not None:
+        account.live_trading_enabled_at = None
+        account.live_trading_disclosure_text = None
+
+    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+
+
+@router.post("/enable-live-trading", response_model=AccountOut)
+def enable_live_trading_route(
+    body: LiveBypassRequest, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)
+) -> AccountOut:
+    """The one and only action that can set live_trading_enabled_at -
+    paying, finishing the trial, and accepting the bypass are all
+    eligibility, never activation. See onboarding.resolve_trading_mode."""
+    account = _require_account(customer)
+
+    if not customer.has_paid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock live trading before enabling it")
+
+    eligible = is_live_eligible(trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at)
+    if not eligible:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this account hasn't finished its trial yet - wait for it to end, or accept the trial bypass first",
+        )
+
+    if not account.has_mainnet_credential:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "add a Binance API key explicitly tagged \"mainnet\" before enabling live trading - a testnet "
+            "credential can never be used for this",
+        )
+
+    if account.live_trading_enabled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "live trading is already enabled for this account")
+
+    # Enabling live trading while a (paper) trade is open is its own
+    # hazard: the very next cycle could resolve to LIVE and try to
+    # manage that paper position with a real production order against a
+    # position that only exists in our own simulated ledger.
+    _require_no_open_trade(db, account, action="enabling live trading")
+
+    account.live_trading_enabled_at = enable_live_trading()
+    account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     return _to_account_out(account, has_paid=customer.has_paid, db=db)

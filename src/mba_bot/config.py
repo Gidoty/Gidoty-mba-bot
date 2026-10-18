@@ -64,11 +64,17 @@ class Settings:
     risk_pct_default: float
     risk_pct_max: float
 
-    # Shared platform-level Binance testnet key used for every account's
-    # paper-trading trial. Each customer's own mainnet key (ApiCredential)
-    # is only used once they reach live trading - see models.py.
-    testnet_api_key: str | None
-    testnet_api_secret: str | None
+    # Shared platform-level Binance testnet keys used for every account's
+    # paper-trading trial - never exposed to customers. Split by market
+    # type because Binance's spot testnet (testnet.binance.vision) and
+    # futures testnet (testnet.binancefuture.com) are separate systems
+    # with separate key registrations; a key issued on one is not valid
+    # on the other. A customer's own key (ApiCredential) is only ever
+    # used once an account reaches LIVE - see models.py/onboarding.py.
+    testnet_spot_api_key: str | None
+    testnet_spot_api_secret: str | None
+    testnet_futures_api_key: str | None
+    testnet_futures_api_secret: str | None
     paper_starting_balance: float
 
     telegram_bot_token: str | None
@@ -110,8 +116,18 @@ def load_settings() -> Settings:
         atr_rolling_window=_env_int("ATR_ROLLING_WINDOW", 50),
         risk_pct_default=_env_float("RISK_PCT_DEFAULT", 1.0),
         risk_pct_max=_env_float("RISK_PCT_MAX", 2.0),
-        testnet_api_key=os.environ.get("TESTNET_API_KEY"),
-        testnet_api_secret=os.environ.get("TESTNET_API_SECRET"),
+        # TESTNET_API_KEY/SECRET are the legacy, pre-split var names -
+        # kept as a fallback for the spot pair only, so an existing
+        # deployment's working spot paper trading doesn't go dark the
+        # moment this ships. Futures has no such legacy name to fall
+        # back to: it was silently sharing the spot key before this
+        # change (the actual bug being fixed here), so it now fails
+        # safe (no usable credentials) until TESTNET_FUTURES_API_KEY/
+        # SECRET is set explicitly, rather than keep guessing.
+        testnet_spot_api_key=os.environ.get("TESTNET_SPOT_API_KEY") or os.environ.get("TESTNET_API_KEY"),
+        testnet_spot_api_secret=os.environ.get("TESTNET_SPOT_API_SECRET") or os.environ.get("TESTNET_API_SECRET"),
+        testnet_futures_api_key=os.environ.get("TESTNET_FUTURES_API_KEY"),
+        testnet_futures_api_secret=os.environ.get("TESTNET_FUTURES_API_SECRET"),
         paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10_000.0),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
         telegram_bot_username=os.environ.get("TELEGRAM_BOT_USERNAME"),

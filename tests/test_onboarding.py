@@ -1,6 +1,30 @@
 from datetime import datetime, timedelta, timezone
 
-from mba_bot.onboarding import TradingMode, accept_live_bypass, resolve_trading_mode, start_trial
+from mba_bot.onboarding import (
+    TradingMode,
+    accept_live_bypass,
+    enable_live_trading,
+    is_live_eligible,
+    resolve_trading_mode,
+    start_trial,
+)
+
+NOW = datetime(2026, 1, 10, tzinfo=timezone.utc)
+EXPIRED_TRIAL = datetime(2026, 1, 1, tzinfo=timezone.utc)  # already in the past relative to NOW
+ACTIVE_TRIAL = NOW + timedelta(days=6)  # still running relative to NOW
+
+
+def _resolve(**overrides):
+    defaults = dict(
+        trial_ends_at=ACTIVE_TRIAL,
+        live_bypass_accepted_at=None,
+        has_paid=False,
+        live_trading_enabled_at=None,
+        has_mainnet_credential=False,
+        now=NOW,
+    )
+    defaults.update(overrides)
+    return resolve_trading_mode(**defaults)
 
 
 def test_start_trial_is_n_days_from_now():
@@ -9,59 +33,124 @@ def test_start_trial_is_n_days_from_now():
     assert ends_at == now + timedelta(days=7)
 
 
-def test_within_trial_window_is_paper_mode():
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    trial_ends_at = now + timedelta(days=3)
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=True, now=now)
-    assert state.mode == TradingMode.PAPER
-    assert not state.bypassed
-
-
-def test_trial_expiry_moves_to_live_without_bypass():
-    now = datetime(2026, 1, 10, tzinfo=timezone.utc)
-    trial_ends_at = datetime(2026, 1, 8, tzinfo=timezone.utc)
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=True, now=now)
-    assert state.mode == TradingMode.LIVE
-    assert not state.bypassed
-
-
-def test_explicit_bypass_is_live_even_during_trial_window():
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    trial_ends_at = now + timedelta(days=6)  # trial not over yet
-    bypass_at = now
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=bypass_at, has_paid=True, now=now)
-    assert state.mode == TradingMode.LIVE
-    assert state.bypassed
-    assert state.bypass_accepted_at == bypass_at
-
-
 def test_accept_live_bypass_returns_a_timestamp():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     assert accept_live_bypass(now=now) == now
 
 
-def test_unpaid_account_stays_paper_even_after_trial_expiry():
-    now = datetime(2026, 1, 10, tzinfo=timezone.utc)
-    trial_ends_at = datetime(2026, 1, 1, tzinfo=timezone.utc)  # long expired
-    state = resolve_trading_mode(trial_ends_at=trial_ends_at, live_bypass_accepted_at=None, has_paid=False, now=now)
-    assert state.mode == TradingMode.PAPER
-
-
-def test_unpaid_account_stays_paper_even_with_bypass_accepted():
+def test_enable_live_trading_returns_a_timestamp():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    trial_ends_at = now + timedelta(days=6)
-    state = resolve_trading_mode(
-        trial_ends_at=trial_ends_at, live_bypass_accepted_at=now, has_paid=False, now=now
+    assert enable_live_trading(now=now) == now
+
+
+# --- is_live_eligible: trial clock / bypass, independent of everything else ---
+
+
+def test_not_eligible_within_an_active_trial_with_no_bypass():
+    assert is_live_eligible(trial_ends_at=ACTIVE_TRIAL, live_bypass_accepted_at=None, now=NOW) is False
+
+
+def test_eligible_once_trial_has_expired():
+    assert is_live_eligible(trial_ends_at=EXPIRED_TRIAL, live_bypass_accepted_at=None, now=NOW) is True
+
+
+def test_eligible_via_bypass_even_during_an_active_trial():
+    assert is_live_eligible(trial_ends_at=ACTIVE_TRIAL, live_bypass_accepted_at=NOW, now=NOW) is True
+
+
+# --- resolve_trading_mode: the user's required scenario list ---
+
+
+def test_unpaid_is_paper_regardless_of_anything_else():
+    state = _resolve(
+        has_paid=False,
+        trial_ends_at=EXPIRED_TRIAL,
+        live_bypass_accepted_at=NOW,
+        live_trading_enabled_at=NOW,
+        has_mainnet_credential=True,
     )
     assert state.mode == TradingMode.PAPER
-    assert not state.bypassed
 
 
-def test_paying_after_a_bypass_unlocks_live_immediately():
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    trial_ends_at = now + timedelta(days=6)  # trial still running
-    state = resolve_trading_mode(
-        trial_ends_at=trial_ends_at, live_bypass_accepted_at=now, has_paid=True, now=now
+def test_paid_but_still_within_trial_and_untouched_is_paper():
+    state = _resolve(has_paid=True, trial_ends_at=ACTIVE_TRIAL)
+    assert state.mode == TradingMode.PAPER
+
+
+def test_paid_and_trial_expired_stays_paper_unless_explicitly_enabled():
+    state = _resolve(has_paid=True, trial_ends_at=EXPIRED_TRIAL, live_trading_enabled_at=None, has_mainnet_credential=True)
+    assert state.mode == TradingMode.PAPER
+
+
+def test_paid_and_bypass_accepted_stays_paper_unless_explicitly_enabled():
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=ACTIVE_TRIAL,
+        live_bypass_accepted_at=NOW,
+        live_trading_enabled_at=None,
+        has_mainnet_credential=True,
+    )
+    assert state.mode == TradingMode.PAPER
+    assert state.bypassed
+
+
+def test_mainnet_credential_present_but_not_explicitly_authorized_stays_paper():
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=EXPIRED_TRIAL,
+        live_trading_enabled_at=None,
+        has_mainnet_credential=True,
+    )
+    assert state.mode == TradingMode.PAPER
+
+
+def test_explicit_authorization_without_a_valid_mainnet_credential_fails_closed():
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=EXPIRED_TRIAL,
+        live_trading_enabled_at=NOW,
+        has_mainnet_credential=False,
+    )
+    assert state.mode == TradingMode.PAPER
+
+
+def test_every_condition_satisfied_is_the_only_way_to_reach_live():
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=EXPIRED_TRIAL,
+        live_trading_enabled_at=NOW,
+        has_mainnet_credential=True,
     )
     assert state.mode == TradingMode.LIVE
-    assert state.bypassed
+
+
+def test_trial_expiry_alone_can_never_reach_live():
+    # Expired trial, paid, mainnet credential present - everything except
+    # the one dedicated switch. Must still be PAPER.
+    state = _resolve(has_paid=True, trial_ends_at=EXPIRED_TRIAL, live_trading_enabled_at=None, has_mainnet_credential=True)
+    assert state.mode == TradingMode.PAPER
+
+
+def test_bypass_alone_can_never_reach_live():
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=ACTIVE_TRIAL,
+        live_bypass_accepted_at=NOW,
+        live_trading_enabled_at=None,
+        has_mainnet_credential=True,
+    )
+    assert state.mode == TradingMode.PAPER
+
+
+def test_live_requires_reaching_eligibility_too_not_just_paid_and_enabled():
+    # Paid, explicitly enabled, valid credential - but still inside the
+    # trial window with no bypass. The activation switch alone can't
+    # skip eligibility.
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=ACTIVE_TRIAL,
+        live_bypass_accepted_at=None,
+        live_trading_enabled_at=NOW,
+        has_mainnet_credential=True,
+    )
+    assert state.mode == TradingMode.PAPER

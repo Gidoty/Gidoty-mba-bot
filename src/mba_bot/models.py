@@ -88,6 +88,20 @@ class TradingAccount(Base):
     live_bypass_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     live_bypass_disclosure_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # A SEPARATE gate from the bypass above. live_bypass_accepted_at only
+    # ever meant "don't make me wait out the 7-day trial" - it says
+    # nothing about which Binance environment to actually trade against.
+    # live_trading_enabled_at is the one and only switch that lets
+    # resolve_trading_mode (onboarding.py) ever return LIVE: paying,
+    # finishing the trial, or accepting the bypass are all eligibility
+    # conditions, never sufficient on their own. Cleared automatically
+    # whenever the stored credential stops being mainnet-tagged (see
+    # api/routers/account.py's credential-update endpoint) so swapping
+    # back to a testnet key can't leave this account live-authorized
+    # against nothing valid.
+    live_trading_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    live_trading_disclosure_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_pnl_summary_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "YYYY-MM-DD", UTC
 
@@ -117,19 +131,38 @@ class TradingAccount(Base):
     credential: Mapped["ApiCredential"] = relationship(back_populates="account", uselist=False, cascade="all, delete-orphan")
     trades: Mapped[list["Trade"]] = relationship(back_populates="account", cascade="all, delete-orphan")
 
+    @property
+    def has_mainnet_credential(self) -> bool:
+        """The one check resolve_trading_mode (onboarding.py) trusts to
+        ever allow LIVE - kept in exactly one place so trader.py and
+        api/routers/account.py can't drift into checking it differently."""
+        return self.credential is not None and self.credential.environment == "mainnet"
+
 
 class ApiCredential(Base):
-    """The customer's own mainnet exchange key. Must be provisioned
-    trade-only, no withdrawal permission (enforced on the exchange side at
-    key-creation time, and spot-checked at runtime - see exchange.py). Only
-    used once the account leaves paper mode; the trial trades against a
-    separate platform-level testnet key, not this one."""
+    """The customer's own exchange key - NOT necessarily mainnet, despite
+    this class historically assuming that. `environment` says which
+    Binance system this key is actually registered against ("testnet" |
+    "mainnet" | "unknown"), set explicitly by the customer, never
+    inferred. This is the only thing resolve_trading_mode trusts to ever
+    allow LIVE: a key tagged anything other than "mainnet" can never be
+    used for live trading, no matter what else is true about the account
+    (see trader.py's _resolve_credentials and onboarding.py). Must be
+    provisioned trade-only, no withdrawal permission (enforced on the
+    exchange side at key-creation time, and spot-checked at runtime - see
+    exchange.py)."""
 
     __tablename__ = "api_credentials"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     account_id: Mapped[str] = mapped_column(ForeignKey("trading_accounts.id"), nullable=False, unique=True)
     exchange: Mapped[str] = mapped_column(String(30), default="binance")
+    # "unknown" is the deliberately-unprivileged default: a credential
+    # that was never explicitly tagged must never be treated as mainnet.
+    # See the migration that added this column for why existing rows
+    # before this concept existed are backfilled to "unknown", not
+    # "testnet" or "mainnet" - we genuinely don't know which they are.
+    environment: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown", server_default="unknown")
     encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
     encrypted_api_secret: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

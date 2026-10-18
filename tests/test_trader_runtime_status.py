@@ -71,8 +71,10 @@ def _settings(**overrides) -> Settings:
         atr_rolling_window=3,
         risk_pct_default=1.0,
         risk_pct_max=2.0,
-        testnet_api_key="testnet-key",
-        testnet_api_secret="testnet-secret",
+        testnet_spot_api_key="testnet-spot-key",
+        testnet_spot_api_secret="testnet-spot-secret",
+        testnet_futures_api_key="testnet-futures-key",
+        testnet_futures_api_secret="testnet-futures-secret",
         paper_starting_balance=10_000.0,
         telegram_bot_token="test-bot-token",
         telegram_bot_username="mba_test_bot",
@@ -95,7 +97,22 @@ def db(tmp_path):
     init_db(f"sqlite:///{tmp_path}/test.db")
 
 
-def _make_account(session, *, email, has_paid, is_paper, encryption_key: str) -> str:
+def _make_account(
+    session,
+    *,
+    email,
+    has_paid,
+    encryption_key: str,
+    market_type: str = "spot",
+    trial_expired: bool = False,
+    live_trading_enabled: bool = False,
+    credential_environment: str = "mainnet",
+) -> str:
+    """By default builds a plain paper account (trial active, nothing
+    enabled). Pass trial_expired=True, live_trading_enabled=True, and
+    credential_environment="mainnet" together to actually reach LIVE -
+    none of them alone is enough, which is the entire point of this
+    change."""
     customer = Customer(email=email, password_hash="x", has_paid=has_paid)
     session.add(customer)
     session.flush()
@@ -105,10 +122,11 @@ def _make_account(session, *, email, has_paid, is_paper, encryption_key: str) ->
         customer_id=customer.id,
         bot_code=f"MBA-{email[:6].upper()}",
         pair="BTC/USDT",
-        market_type="spot",
+        market_type=market_type,
         notification_channel="telegram",
         notification_target="555000111",
-        trial_ends_at=(now + timedelta(days=7)) if is_paper else (now - timedelta(days=1)),
+        trial_ends_at=(now - timedelta(days=1)) if trial_expired else (now + timedelta(days=7)),
+        live_trading_enabled_at=now if live_trading_enabled else None,
     )
     session.add(account)
     session.flush()
@@ -117,8 +135,9 @@ def _make_account(session, *, email, has_paid, is_paper, encryption_key: str) ->
         ApiCredential(
             account_id=account.id,
             exchange="binance",
-            encrypted_api_key=encrypt("mainnet-key", key=encryption_key),
-            encrypted_api_secret=encrypt("mainnet-secret", key=encryption_key),
+            environment=credential_environment,
+            encrypted_api_key=encrypt("some-key", key=encryption_key),
+            encrypted_api_secret=encrypt("some-secret", key=encryption_key),
         )
     )
     return account.id
@@ -130,7 +149,7 @@ def test_successful_cycle_records_scan_signal_and_clears_error(db, monkeypatch):
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="paper1@example.com", has_paid=False, is_paper=True, encryption_key=settings.encryption_key
+            session, email="paper1@example.com", has_paid=False, encryption_key=settings.encryption_key
         )
 
     async def run():
@@ -155,7 +174,7 @@ def test_empty_market_data_records_a_safe_error_and_notifies_once(db, monkeypatc
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="paper2@example.com", has_paid=False, is_paper=True, encryption_key=settings.encryption_key
+            session, email="paper2@example.com", has_paid=False, encryption_key=settings.encryption_key
         )
 
     notifier = FakeNotifier()
@@ -183,7 +202,7 @@ def test_recovering_from_an_error_clears_it(db, monkeypatch):
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="paper3@example.com", has_paid=False, is_paper=True, encryption_key=settings.encryption_key
+            session, email="paper3@example.com", has_paid=False, encryption_key=settings.encryption_key
         )
 
     notifier = FakeNotifier()
@@ -205,12 +224,12 @@ def test_recovering_from_an_error_clears_it(db, monkeypatch):
 
 
 def test_missing_credentials_records_error_without_raising(db, monkeypatch):
-    settings = _settings(testnet_api_key=None, testnet_api_secret=None)
+    settings = _settings(testnet_spot_api_key=None, testnet_spot_api_secret=None)
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: FakeExchangeClient())
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="paper4@example.com", has_paid=False, is_paper=True, encryption_key=settings.encryption_key
+            session, email="paper4@example.com", has_paid=False, encryption_key=settings.encryption_key
         )
 
     notifier = FakeNotifier()
@@ -233,7 +252,7 @@ def test_unexpected_exception_is_recorded_safely_and_still_reraised(db, monkeypa
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="paper5@example.com", has_paid=False, is_paper=True, encryption_key=settings.encryption_key
+            session, email="paper5@example.com", has_paid=False, encryption_key=settings.encryption_key
         )
 
     notifier = FakeNotifier()
@@ -255,7 +274,13 @@ def test_going_live_sends_a_one_time_activation_message(db, monkeypatch):
 
     with session_scope() as session:
         account_id = _make_account(
-            session, email="live1@example.com", has_paid=True, is_paper=False, encryption_key=settings.encryption_key
+            session,
+            email="live1@example.com",
+            has_paid=True,
+            trial_expired=True,
+            live_trading_enabled=True,
+            credential_environment="mainnet",
+            encryption_key=settings.encryption_key,
         )
 
     notifier = FakeNotifier()
@@ -301,5 +326,84 @@ def test_unlinked_account_is_skipped_and_untouched(db):
             await process_account(session, account, settings, notifier)
             assert account.last_scanned_at is None
             assert notifier.sent == []
+
+    asyncio.run(run())
+
+
+def test_spot_paper_account_uses_the_spot_testnet_credential(db, monkeypatch):
+    # Binance's spot and futures testnets are separate systems with
+    # separate key registrations - a paper account must get the pair
+    # that actually matches its own market_type, never the other one.
+    settings = _settings()
+    captured = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return FakeExchangeClient()
+
+    monkeypatch.setattr(exchange, "build_exchange_client", fake_build)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session, email="spot-paper@example.com", has_paid=False, market_type="spot", encryption_key=settings.encryption_key
+        )
+
+    async def run():
+        with session_scope() as session:
+            account = session.get(TradingAccount, account_id)
+            await process_account(session, account, settings, FakeNotifier())
+
+    asyncio.run(run())
+    assert captured["api_key"] == settings.testnet_spot_api_key
+    assert captured["market_type"] == "spot"
+
+
+def test_futures_paper_account_uses_the_futures_testnet_credential_not_spots(db, monkeypatch):
+    settings = _settings()
+    captured = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return FakeExchangeClient()
+
+    monkeypatch.setattr(exchange, "build_exchange_client", fake_build)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session, email="fut-paper@example.com", has_paid=False, market_type="futures", encryption_key=settings.encryption_key
+        )
+
+    async def run():
+        with session_scope() as session:
+            account = session.get(TradingAccount, account_id)
+            await process_account(session, account, settings, FakeNotifier())
+
+    asyncio.run(run())
+    assert captured["api_key"] == settings.testnet_futures_api_key
+    assert captured["api_key"] != settings.testnet_spot_api_key
+    assert captured["market_type"] == "futures"
+
+
+def test_futures_paper_account_with_no_futures_testnet_key_fails_safe_not_wrong_key(db, monkeypatch):
+    # Before the spot/futures split, a futures account would silently
+    # reuse the spot testnet key - this proves that can't happen anymore:
+    # with no futures key configured, it's a clean "no credentials"
+    # error, never a mismatched key reaching Binance.
+    settings = _settings(testnet_futures_api_key=None, testnet_futures_api_secret=None)
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: FakeExchangeClient())
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session, email="fut-nokey@example.com", has_paid=False, market_type="futures", encryption_key=settings.encryption_key
+        )
+
+    notifier = FakeNotifier()
+
+    async def run():
+        with session_scope() as session:
+            account = session.get(TradingAccount, account_id)
+            await process_account(session, account, settings, notifier)
+            assert account.last_error is not None
+            assert "credential" in account.last_error.lower()
 
     asyncio.run(run())

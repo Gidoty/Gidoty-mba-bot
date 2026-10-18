@@ -106,10 +106,38 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         again = client.post("/api/account/live-bypass", json={"accept": True})
         assert again.status_code == 409
 
-        # Paying flips the previously-recorded bypass into effect right away.
+        # Paying buys eligibility, not live trading itself: the account
+        # created above was never told its credential is mainnet (it
+        # defaults to testnet), and live trading hasn't been explicitly
+        # enabled - paying alone must never be enough to reach LIVE.
         _mark_paid("smoke@example.com")
         after_payment = client.get("/api/account")
-        assert after_payment.json()["mode"] == "live"
+        assert after_payment.json()["mode"] == "paper"
+        assert after_payment.json()["credential_environment"] == "testnet"
+
+        # Trying to enable live trading with a testnet-tagged credential
+        # on file must be refused.
+        refused = client.post("/api/account/enable-live-trading", json={"accept": True})
+        assert refused.status_code == 409
+
+        # Only once the customer explicitly re-tags their credential as
+        # mainnet AND explicitly enables live trading does the account
+        # ever reach LIVE.
+        retag = client.put(
+            "/api/account/credentials",
+            json={"api_key": "real-mainnet-key", "api_secret": "real-mainnet-secret", "environment": "mainnet"},
+        )
+        assert retag.status_code == 200
+        assert retag.json()["credential_environment"] == "mainnet"
+        assert retag.json()["mode"] == "paper"  # still not enabled yet
+
+        enabled = client.post("/api/account/enable-live-trading", json={"accept": True})
+        assert enabled.status_code == 200
+        assert enabled.json()["mode"] == "live"
+        assert enabled.json()["live_trading_enabled_at"] is not None
+
+        again_enabled = client.post("/api/account/enable-live-trading", json={"accept": True})
+        assert again_enabled.status_code == 409
 
         update = client.patch("/api/account", json={"risk_pct": 1.5})
         assert update.status_code == 200

@@ -11,3 +11,10 @@ export const MARKET_TYPES = [
   { value: "spot", label: "Spot" },
   { value: "futures", label: "Futures" },
 ];
+
+// Matches the backend's CREDENTIAL_ENVIRONMENTS (schemas.py) - "unknown"
+// is deliberately excluded, it's a migration-only state nobody chooses.
+export const CREDENTIAL_ENVIRONMENTS = [
+  { value: "testnet", label: "Testnet (practice, no real funds)" },
+  { value: "mainnet", label: "Mainnet (real Binance account)" },
+];

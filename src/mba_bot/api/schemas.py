@@ -12,6 +12,12 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from ..config import SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS, SUPPORTED_PAIRS
 
+# "unknown" is deliberately excluded - it's a migration-only state for
+# credentials that predate this concept (see the migration that added
+# ApiCredential.environment), never a value a customer can choose. A
+# customer always explicitly says testnet or mainnet.
+CREDENTIAL_ENVIRONMENTS = ("testnet", "mainnet")
+
 
 def _validate_choice(value: str, choices: tuple[str, ...], field_name: str) -> str:
     if value not in choices:
@@ -45,6 +51,10 @@ class AccountCreateRequest(BaseModel):
     risk_pct: float | None = Field(default=None, gt=0, le=100)
     api_key: str = Field(min_length=1)
     api_secret: str = Field(min_length=1)
+    # Defaults to the safe choice: a credential nobody explicitly tagged
+    # mainnet can never be used for live trading, no matter what else is
+    # true about the account (see models.py's has_mainnet_credential).
+    environment: str = "testnet"
 
     @field_validator("pair")
     @classmethod
@@ -60,6 +70,22 @@ class AccountCreateRequest(BaseModel):
     @classmethod
     def _valid_channel(cls, v: str) -> str:
         return _validate_choice(v, SUPPORTED_NOTIFICATION_CHANNELS, "notification_channel")
+
+    @field_validator("environment")
+    @classmethod
+    def _valid_environment(cls, v: str) -> str:
+        return _validate_choice(v, CREDENTIAL_ENVIRONMENTS, "environment")
+
+
+class CredentialUpdateRequest(BaseModel):
+    api_key: str = Field(min_length=1)
+    api_secret: str = Field(min_length=1)
+    environment: str
+
+    @field_validator("environment")
+    @classmethod
+    def _valid_environment(cls, v: str) -> str:
+        return _validate_choice(v, CREDENTIAL_ENVIRONMENTS, "environment")
 
 
 class AccountUpdateRequest(BaseModel):
@@ -103,6 +129,14 @@ class AccountOut(BaseModel):
     paper_balance: float
     live_bypass_accepted_at: datetime | None
     is_active: bool
+
+    # Environment/live-activation state, kept separate from `mode` and
+    # from payment (see Customer.has_paid, fetched separately via
+    # /api/auth/me) so the frontend never has to conflate "paid for the
+    # capability" with "currently connected to Binance production".
+    credential_environment: str | None  # "testnet" | "mainnet" | "unknown" | None (no credential on file yet)
+    has_mainnet_credential: bool
+    live_trading_enabled_at: datetime | None
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so

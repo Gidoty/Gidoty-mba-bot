@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
-import { PAIRS, UPCOMING_PAIRS } from "../constants.js";
+import { CREDENTIAL_ENVIRONMENTS, PAIRS, UPCOMING_PAIRS } from "../constants.js";
 
 const SUPPORT_WHATSAPP_NUMBER = "2348124228730"; // 0812 422 8730, in wa.me's international-digits-only format
 const SUPPORT_EMAIL = "support@metabridgeacademy.com";
@@ -37,6 +37,7 @@ function AccountForm({ onLogout, onCreated }) {
   const [pair, setPair] = useState(PAIRS[0]);
   const [marketType, setMarketType] = useState("spot");
   const [riskPct, setRiskPct] = useState("1");
+  const [environment, setEnvironment] = useState("testnet");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [error, setError] = useState(null);
@@ -54,6 +55,7 @@ function AccountForm({ onLogout, onCreated }) {
         risk_pct: riskPct ? Number(riskPct) : undefined,
         api_key: apiKey,
         api_secret: apiSecret,
+        environment,
       });
       onCreated();
     } catch (err) {
@@ -132,6 +134,24 @@ function AccountForm({ onLogout, onCreated }) {
 
         <label className="block">
           <span className="text-sm font-medium text-slate-700">
+            Is this a testnet or a real Binance key?
+            <HelpTip text="Testnet is practice only - it looks and behaves like Binance but no real money is ever involved, and the bot will only ever paper-trade with it. Mainnet is your real Binance account - get this wrong and the bot simply won't be able to connect, nothing worse than that. Not sure? Pick Testnet - you can add a mainnet key later from your dashboard whenever you're ready." />
+          </span>
+          <select
+            value={environment}
+            onChange={(e) => setEnvironment(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            {CREDENTIAL_ENVIRONMENTS.map((e) => (
+              <option key={e.value} value={e.value}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">
             Binance API key
             <HelpTip text={'A code Binance generates for you under API Management, so this bot can place trades on your behalf without needing your password. See "Don\'t know how to get a Binance API key?" above for the full walkthrough.'} />
           </span>
@@ -177,6 +197,11 @@ function HowToGetApiKey() {
       <summary className="cursor-pointer font-medium text-ink">
         Don't know how to get a Binance API key? Click here - step by step
       </summary>
+      <p className="mt-3 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+        These steps are for a <strong>real (mainnet)</strong> key, at binance.com. For a <strong>testnet</strong> key
+        instead, use testnet.binance.vision (spot) or testnet.binancefuture.com (futures) - a different site, a
+        different account, and a different key that only ever works there.
+      </p>
       <ol className="mt-3 list-decimal space-y-2 pl-5 text-slate-600">
         <li>Log in to your account at binance.com (or open the Binance app).</li>
         <li>

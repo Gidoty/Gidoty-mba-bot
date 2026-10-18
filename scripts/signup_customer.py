@@ -12,14 +12,22 @@ Usage:
         --email customer@example.com --password "a-strong-password" \\
         --pair BTC/USDT --market-type spot \\
         --notification-channel telegram --notification-target 123456789 \\
-        --api-key <mainnet-key> --api-secret <mainnet-secret>
-
-    # to skip the paper trial and go straight to live trading:
-    python scripts/signup_customer.py ... --skip-trial --accept-live-risk-disclosure
+        --api-key <key> --api-secret <secret> --environment testnet
 
     # accounts are LOCKED by default (see has_paid in models.py) - add
     # --mark-paid to unlock immediately, or run mark_customer_paid.py later
     python scripts/signup_customer.py ... --mark-paid
+
+    # to skip the 7-day trial wait (eligibility only - does not by
+    # itself enable live trading, see below):
+    python scripts/signup_customer.py ... --skip-trial --accept-live-risk-disclosure
+
+    # to actually enable live trading, ALL of these are required: paid,
+    # eligible (trial done or skipped), a mainnet-tagged credential, and
+    # this flag with its own disclosure acceptance:
+    python scripts/signup_customer.py ... \\
+        --environment mainnet --mark-paid --skip-trial --accept-live-risk-disclosure \\
+        --enable-live-trading --accept-live-activation-disclosure
 """
 from __future__ import annotations
 
@@ -34,8 +42,16 @@ from mba_bot.botcode import assign_unique_bot_code  # noqa: E402
 from mba_bot.config import SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS, SUPPORTED_PAIRS, load_settings  # noqa: E402
 from mba_bot.crypto_utils import encrypt  # noqa: E402
 from mba_bot.db import init_db, session_scope  # noqa: E402
+from mba_bot.api.schemas import CREDENTIAL_ENVIRONMENTS  # noqa: E402
 from mba_bot.models import ApiCredential, Customer, TradingAccount  # noqa: E402
-from mba_bot.onboarding import LIVE_TRADING_DISCLOSURE, accept_live_bypass, resolve_trading_mode, start_trial  # noqa: E402
+from mba_bot.onboarding import (  # noqa: E402
+    LIVE_TRADING_ACTIVATION_DISCLOSURE,
+    LIVE_TRADING_DISCLOSURE,
+    accept_live_bypass,
+    enable_live_trading,
+    resolve_trading_mode,
+    start_trial,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,17 +63,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--notification-channel", required=True, choices=SUPPORTED_NOTIFICATION_CHANNELS)
     parser.add_argument("--notification-target", required=True, help="Telegram chat id / WhatsApp number")
     parser.add_argument("--risk-pct", type=float, default=None, help="defaults to RISK_PCT_DEFAULT, capped at RISK_PCT_MAX")
-    parser.add_argument("--api-key", required=True, help="customer's mainnet Binance API key (trade-only, no withdrawal)")
+    parser.add_argument("--api-key", required=True, help="trade-only, no withdrawal - testnet or mainnet, see --environment")
     parser.add_argument("--api-secret", required=True)
+    parser.add_argument(
+        "--environment",
+        choices=CREDENTIAL_ENVIRONMENTS,
+        default="testnet",
+        help="which Binance system --api-key/--api-secret are registered against (default: testnet, the safe default)",
+    )
     parser.add_argument(
         "--skip-trial",
         action="store_true",
-        help="go straight to live trading instead of the 7-day paper trial",
+        help="become eligible for live trading sooner than the 7-day trial - eligibility only, does NOT by itself "
+        "enable live trading, see --enable-live-trading",
     )
     parser.add_argument(
         "--accept-live-risk-disclosure",
         action="store_true",
-        help="required alongside --skip-trial: confirms the customer checked the disclosure box",
+        help="required alongside --skip-trial: confirms the customer checked the trial-bypass disclosure box",
+    )
+    parser.add_argument(
+        "--enable-live-trading",
+        action="store_true",
+        help="the one thing that actually turns on live trading - requires --environment mainnet, --mark-paid, "
+        "eligibility (--skip-trial or an already-expired trial), and --accept-live-activation-disclosure",
+    )
+    parser.add_argument(
+        "--accept-live-activation-disclosure",
+        action="store_true",
+        help="required alongside --enable-live-trading: confirms the customer checked the live-activation disclosure box",
     )
     parser.add_argument(
         "--mark-paid",
@@ -71,6 +105,15 @@ def main() -> None:
     args = parse_args()
     if args.skip_trial and not args.accept_live_risk_disclosure:
         raise SystemExit("--skip-trial requires --accept-live-risk-disclosure (the logged, timestamped consent)")
+    if args.enable_live_trading:
+        if not args.accept_live_activation_disclosure:
+            raise SystemExit("--enable-live-trading requires --accept-live-activation-disclosure")
+        if args.environment != "mainnet":
+            raise SystemExit("--enable-live-trading requires --environment mainnet - a testnet credential can never be used for it")
+        if not args.mark_paid:
+            raise SystemExit("--enable-live-trading requires --mark-paid")
+        if not (args.skip_trial or args.accept_live_risk_disclosure):
+            raise SystemExit("--enable-live-trading requires eligibility: pass --skip-trial --accept-live-risk-disclosure too")
 
     settings = load_settings()
     if not settings.encryption_key:
@@ -98,12 +141,16 @@ def main() -> None:
         if args.skip_trial:
             account.live_bypass_accepted_at = accept_live_bypass()
             account.live_bypass_disclosure_text = LIVE_TRADING_DISCLOSURE
+        if args.enable_live_trading:
+            account.live_trading_enabled_at = enable_live_trading()
+            account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
         session.add(account)
         session.flush()
 
         credential = ApiCredential(
             account_id=account.id,
             exchange="binance",
+            environment=args.environment,
             encrypted_api_key=encrypt(args.api_key, key=settings.encryption_key),
             encrypted_api_secret=encrypt(args.api_secret, key=settings.encryption_key),
         )
@@ -113,11 +160,14 @@ def main() -> None:
             trial_ends_at=account.trial_ends_at,
             live_bypass_accepted_at=account.live_bypass_accepted_at,
             has_paid=customer.has_paid,
+            live_trading_enabled_at=account.live_trading_enabled_at,
+            has_mainnet_credential=account.has_mainnet_credential,
         )
 
         print(f"created customer {customer.id} ({customer.email}), account {account.id}")
         print(f"bot code: {account.bot_code}")
-        print(f"mode: {state.mode.value.upper()}" + (" (bypass recorded, takes effect once paid)" if args.skip_trial and not customer.has_paid else ""))
+        print(f"credential environment: {args.environment}")
+        print(f"mode: {state.mode.value.upper()}")
         print(f"access: {'UNLOCKED' if args.mark_paid else 'LOCKED - run scripts/mark_customer_paid.py to unlock'}")
 
 

@@ -40,6 +40,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         trial_ends_at=account.trial_ends_at,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
         has_paid=account.customer.has_paid,
+        live_trading_enabled_at=account.live_trading_enabled_at,
+        has_mainnet_credential=account.has_mainnet_credential,
         now=now,
     )
     is_paper = trial_state.mode == TradingMode.PAPER
@@ -137,7 +139,13 @@ async def _record_error(notifier: Notifier, account: TradingAccount, message: st
 
 def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool) -> tuple[str | None, str | None]:
     if is_paper:
-        return settings.testnet_api_key, settings.testnet_api_secret
+        # Spot and futures testnet are separate Binance systems with
+        # separate key registrations - a key from one is not valid on
+        # the other, so which pair to use depends on market_type, not
+        # just "is this paper mode".
+        if account.market_type == "futures":
+            return settings.testnet_futures_api_key, settings.testnet_futures_api_secret
+        return settings.testnet_spot_api_key, settings.testnet_spot_api_secret
     credential = account.credential
     if credential is None:
         return None, None

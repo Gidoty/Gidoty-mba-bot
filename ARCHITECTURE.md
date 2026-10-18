@@ -60,9 +60,14 @@ mainnet key can't be used against testnet endpoints, and asking every
 signup to also go generate a personal testnet key is friction a resale
 product shouldn't add.
 
-So: the platform holds **one** Binance testnet key
-(`TESTNET_API_KEY`/`TESTNET_API_SECRET`), used for every account's 7-day
-trial. What's customer-specific isn't the exchange credential, it's the
+So: the platform holds **two** Binance testnet keys, one per market type
+(`TESTNET_SPOT_API_KEY`/`TESTNET_SPOT_API_SECRET`,
+`TESTNET_FUTURES_API_KEY`/`TESTNET_FUTURES_API_SECRET`) - not one shared
+pair. Binance's spot testnet (testnet.binance.vision) and futures
+testnet (testnet.binancefuture.com) are separate systems with separate
+key registrations; a key issued on one is not valid on the other, so
+`trader._resolve_credentials` picks the pair matching `account.market_type`.
+What's customer-specific isn't the exchange credential, it's the
 simulated ledger - `TradingAccount.paper_balance` tracks each account's
 own equity curve independently in our database, starting from
 `PAPER_STARTING_BALANCE`. Orders during the trial aren't actually sent to
@@ -73,10 +78,13 @@ against `paper_balance`. This keeps paper accounts free of any real
 funds or exchange-side state, and makes "how much would I have made"
 purely a property of our own records.
 
-The customer's own mainnet key (`ApiCredential`, encrypted at rest) is
-collected at signup but stays unused until the account reaches live mode
-(trial expiry or the logged bypass, and the customer has paid) - see
-`onboarding.py`.
+The customer's own key (`ApiCredential`, encrypted at rest) is collected
+at signup, tagged with an explicit `environment` ("testnet" | "mainnet" |
+"unknown") the customer chooses - never inferred - and stays unused for
+trading either way until the account reaches LIVE, which requires far
+more than trial expiry or payment alone. See "Live trading: four
+independent gates, not one" below for why, and for the real incident
+that made this its own section.
 
 ## Web API and frontend: one process still does the trading
 
@@ -110,25 +118,15 @@ it just now also answers requests instead of only looping silently.
   fills in `notification_target`. `trader.process_account` won't trade an
   account with no `notification_target` set, so this is a real gate, not
   just UX polish.
-- **Billing and the lock, by design** (`api/routers/billing.py`,
-  `onboarding.resolve_trading_mode`): the free trial is unlimited, the
-  payment wall is in front of LIVE only. A new account's
+- **Billing and the lock, by design** (`api/routers/billing.py`): the
+  free trial is unlimited; payment buys *entitlement* to live trading,
+  never live trading itself - see the next bullet for why that's now a
+  hard separation, not a one-flag gate. A new account's
   `TradingAccount.is_active` defaults `True` (that field is the
   customer's own pause/resume toggle, nothing more) and
   `db.list_active_accounts` - the only thing the scheduler calls to
-  decide what to run this tick - only checks that. Payment is enforced
-  one layer in, by `resolve_trading_mode`: `has_paid=False` pins an
-  account to PAPER forever regardless of the trial clock or a logged
-  bypass, and PAPER never places a real order (see "Paper trading"
-  above), so an unpaid account can run indefinitely at zero financial
-  risk - it just can never reach LIVE. This keeps three concerns
-  independent: a customer can pause/resume their own account via
-  `is_active`, test the bot for as long as they like for free, but can't
-  reach live trading by touching anything client-side (the `PATCH
-  /api/account` endpoint never sets `has_paid`, and `has_paid` is
-  checked in exactly one place - `resolve_trading_mode` - so the
-  scheduler's own account filter and the mode decision can't drift out
-  of sync with each other).
+  decide what to run this tick - only checks that; it does not check
+  `has_paid` at all, by design (see the next bullet for what does).
 
   `has_paid` flips exactly two ways, both ending in the same place:
   - Paystack's hosted payment page (card data never touches this server)
@@ -137,7 +135,10 @@ it just now also answers requests instead of only looping silently.
     same secret key used for API calls - no separate webhook secret like
     Stripe has). `apply_payment_event` is split from that
     signature-verification code so it's unit-testable with a hand-built
-    event dict - see `tests/test_api_billing.py`.
+    event dict - see `tests/test_api_billing.py`. It only ever touches
+    `has_paid` and `TradingAccount.is_active`; it has no code path that
+    can set `live_trading_enabled_at` or an `ApiCredential.environment` -
+    see `tests/test_api_live_trading_safety.py::test_payment_webhook_never_sets_live_trading_fields`.
   - `scripts/mark_customer_paid.py`, run by the operator over SSH, for
     anyone who paid outside Paystack (bank transfer, cash, a comp). Same
     flag, same effect - the scheduler can't tell the difference and isn't
@@ -145,6 +146,46 @@ it just now also answers requests instead of only looping silently.
 
   Lifetime access, not a subscription: once `has_paid` is set it never
   gets cleared by anything in this codebase.
+
+- **Live trading: four independent gates, not one** (`onboarding.resolve_trading_mode`):
+  this exists because of a real incident - an account reached LIVE
+  carrying a Binance *testnet* key, and production correctly rejected
+  it, because back then `has_paid` plus trial expiry/bypass alone was
+  sufficient to flip `is_paper` to `False`, and `_resolve_credentials`
+  just handed over whatever credential was on file with no idea whether
+  it was even valid for the environment it was about to hit.
+  `resolve_trading_mode` now checks four conditions, in order, and fails
+  closed to PAPER the moment any one of them doesn't hold:
+
+  1. `has_paid` - buys the *right* to use live trading, nothing more.
+  2. Eligibility (`is_live_eligible`) - the trial ran its course, or the
+     customer accepted the bypass to skip waiting. Still just eligibility.
+  3. `TradingAccount.live_trading_enabled_at` is set - a dedicated,
+     separate action (`POST /api/account/enable-live-trading`) distinct
+     from both of the above. Nothing in billing.py or the trial-expiry
+     check can ever set this; the endpoint itself refuses unless 1 and 2
+     already hold, a mainnet-tagged credential is on file, and there's no
+     open trade (switching environment mid-trade is exactly as unsafe as
+     switching pair/market mid-trade, see below).
+  4. `TradingAccount.has_mainnet_credential` (a model property: the
+     account's `ApiCredential.environment == "mainnet"`) - re-checked
+     every single scheduler cycle, not just at the moment live trading
+     was enabled. If the stored credential is later downgraded to
+     testnet or replaced, this alone makes LIVE fail closed again on the
+     account's very next cycle. `api/routers/account.py`'s credential
+     endpoint also explicitly clears `live_trading_enabled_at` on a
+     downgrade, as a second, independent safeguard - but even without
+     that bookkeeping, condition 4 alone is enough to stop it.
+
+  `ApiCredential.environment` ("testnet" | "mainnet" | "unknown") is set
+  by explicit customer choice at signup and updatable afterward via
+  `PUT /api/account/credentials` - never inferred from the key's content,
+  since there's no reliable way to tell a testnet key from a mainnet one
+  by looking at it. "unknown" is what every credential that predates
+  this concept was migrated to (see the migration that added this
+  column) - deliberately not "testnet" or "mainnet", since a credential
+  nobody has confirmed must never be treated as authorized for either,
+  and specifically can never satisfy condition 4 above.
 - **Pair/market switching, and why it's safe to do mid-lifetime**
   (`api/routers/account.py`'s `update_account`): `has_paid` unlocks the
   account, not a pair - `PATCH /api/account` accepts `pair`/`market_type`
@@ -217,7 +258,7 @@ account without needing their UUID.
 | `api/app.py` | FastAPI app: CORS, router wiring, and the lifespan hook that starts `scheduler.run_forever` as a background task. |
 | `api/security.py` | Password hashing (bcrypt) and session JWT create/verify. |
 | `api/routers/auth.py` | Signup/login/logout; sets/clears the session cookie. |
-| `api/routers/account.py` | Onboarding (create account + credential), settings updates, pause/resume, live-bypass - as HTTP. |
+| `api/routers/account.py` | Onboarding (create account + credential), settings updates (pair/market/risk), pause/resume, trial-bypass, credential updates, and the separate enable-live-trading step - as HTTP. |
 | `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
 | `api/routers/billing.py` | Paystack one-time payment initialization and webhook. |
 | `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |

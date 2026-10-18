@@ -78,9 +78,18 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"  # paste into .env 
 
 Fill in `.env` (see `.env.example` for the full list and comments):
 
-- `TESTNET_API_KEY` / `TESTNET_API_SECRET` - one Binance testnet key
-  ([testnet.binance.vision](https://testnet.binance.vision)), shared by
-  every account's paper trial.
+- `TESTNET_SPOT_API_KEY` / `TESTNET_SPOT_API_SECRET` - a Binance **spot**
+  testnet key ([testnet.binance.vision](https://testnet.binance.vision)),
+  shared by every spot account's paper trial.
+- `TESTNET_FUTURES_API_KEY` / `TESTNET_FUTURES_API_SECRET` - a separate
+  Binance **futures** testnet key
+  ([testnet.binancefuture.com](https://testnet.binancefuture.com)), shared
+  by every futures account's paper trial. Spot and futures testnet are
+  separate Binance systems with separate key registrations - a key from
+  one does not work on the other, so both need setting if you have
+  customers on both market types. (`TESTNET_API_KEY`/`TESTNET_API_SECRET`
+  still work as a legacy fallback for the spot pair only, if you're
+  upgrading an existing deployment.)
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` - create a bot via
   [@BotFather](https://t.me/BotFather); needed before any account can
   link Telegram (and therefore before it can trade at all).
