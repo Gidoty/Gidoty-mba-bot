@@ -8,9 +8,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from ... import exchange
 from ...botcode import assign_unique_bot_code
 from ...config import Settings
-from ...crypto_utils import encrypt
+from ...crypto_utils import decrypt, encrypt
 from ...db import get_open_trade
 from ...legal import RISK_DISCLOSURE_VERSION, record_acceptance
 from ...models import ApiCredential, Customer, TradingAccount
@@ -29,9 +30,12 @@ from ..schemas import (
     AccountCreateRequest,
     AccountOut,
     AccountUpdateRequest,
+    BalanceOut,
+    CredentialTestOut,
     CredentialUpdateRequest,
     EnableLiveTradingRequest,
     LiveBypassRequest,
+    PositionOut,
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -120,6 +124,16 @@ def create_account(
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "WhatsApp notifications aren't available yet - use telegram")
     if not settings.encryption_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
+    if (body.api_key is None) != (body.api_secret is None):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "api_key and api_secret must be provided together")
+    # Mainnet credential entry only ever becomes available after payment
+    # - checked server-side, not just left to the frontend never
+    # offering the option. An unpaid customer could never reach LIVE
+    # anyway (resolve_trading_mode's own has_paid gate), but we also
+    # don't want a real Binance key sitting in storage for an account
+    # that was never meant to have one yet.
+    if body.environment == "mainnet" and not customer.has_paid:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "pay to unlock before connecting a mainnet Binance account")
 
     try:
         risk_pct = clamp_risk_pct(body.risk_pct or settings.risk_pct_default, max_risk_pct=settings.risk_pct_max)
@@ -144,15 +158,21 @@ def create_account(
     db.add(account)
     db.flush()
 
-    db.add(
-        ApiCredential(
-            account_id=account.id,
-            exchange="binance",
-            environment=body.environment,
-            encrypted_api_key=encrypt(body.api_key, key=settings.encryption_key),
-            encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
+    # No credential at all is a valid starting state - paper-mode
+    # trading never reads it (see trader.py), so a fresh unpaid account
+    # has nothing to store yet. One gets created later by the Connect
+    # Binance step (PUT /api/account/credentials), the same codepath
+    # that handles `account.credential is None` already.
+    if body.api_key is not None and body.api_secret is not None:
+        db.add(
+            ApiCredential(
+                account_id=account.id,
+                exchange="binance",
+                environment=body.environment,
+                encrypted_api_key=encrypt(body.api_key, key=settings.encryption_key),
+                encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
+            )
         )
-    )
     return _to_account_out(account, has_paid=customer.has_paid, db=db)
 
 
@@ -221,6 +241,8 @@ def update_credentials(
     account = _require_account(customer)
     if not settings.encryption_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
+    if body.environment == "mainnet" and not customer.has_paid:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "pay to unlock before connecting a mainnet Binance account")
 
     # Replacing the credential while a trade is open is exactly as unsafe
     # as switching pair/market mid-trade - the next cycle would try to
@@ -300,3 +322,140 @@ def enable_live_trading_route(
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
     return _to_account_out(account, has_paid=customer.has_paid, db=db)
+
+
+def _paper_credentials(account: TradingAccount, settings: Settings) -> tuple[str | None, str | None]:
+    """Mirrors trader.py's `_resolve_credentials` paper-mode branch
+    exactly (same spot/futures split) - duplicated rather than imported
+    because trader.py's version is a private helper scoped to the
+    trading cycle, and this read-only endpoint has no business pulling
+    in trader.py's module surface for two lines of logic."""
+    if account.market_type == "futures":
+        return settings.testnet_futures_api_key, settings.testnet_futures_api_secret
+    return settings.testnet_spot_api_key, settings.testnet_spot_api_secret
+
+
+@router.get("/balance", response_model=BalanceOut)
+async def get_balance(
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BalanceOut:
+    """Live Binance balance - only ever meaningful once this account is
+    actually LIVE (reuses the exact same mode computation as every other
+    account response, never a separate check that could drift)."""
+    account = _require_account(customer)
+    if _to_account_out(account, has_paid=customer.has_paid, db=db).mode != "live":
+        raise HTTPException(status.HTTP_409_CONFLICT, "balance is only available once live trading is enabled")
+    if not settings.encryption_key or account.credential is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable trading credentials are configured")
+
+    api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
+    api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
+    client = exchange.build_exchange_client(
+        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=False
+    )
+    try:
+        available = await exchange.fetch_available_quote_balance(client, account.pair)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, exchange.safe_error_message(exc)) from exc
+    finally:
+        await client.close()
+    return BalanceOut(quote_currency=exchange.quote_currency(account.pair), available_balance=available)
+
+
+@router.get("/position", response_model=PositionOut)
+async def get_position(
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> PositionOut:
+    """The account's open position (if any) with a live current price
+    layered on top. Never places an order - a single read-only ticker
+    fetch, same credential selection a real cycle would use for this
+    account's current mode. A failed price fetch degrades to
+    `current_price`/`unrealized_pnl` of None rather than a 5xx, since a
+    dashboard shouldn't break just because one ticker call was slow."""
+    account = _require_account(customer)
+    open_trade = get_open_trade(db, account.id)
+    if open_trade is None:
+        return PositionOut(has_position=False)
+
+    is_live = _to_account_out(account, has_paid=customer.has_paid, db=db).mode == "live"
+    current_price: float | None = None
+    try:
+        if is_live:
+            if not settings.encryption_key or account.credential is None:
+                raise RuntimeError("no usable live credentials")
+            api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
+            api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
+        else:
+            api_key, api_secret = _paper_credentials(account, settings)
+            if api_key is None:
+                raise RuntimeError("no usable testnet credentials")
+
+        client = exchange.build_exchange_client(
+            exchange="binance",
+            market_type=account.market_type,
+            api_key=api_key,
+            api_secret=api_secret,
+            sandbox=not is_live,
+        )
+        try:
+            ticker = await client.fetch_ticker(account.pair)
+            current_price = ticker.get("last") or ticker.get("close")
+        finally:
+            await client.close()
+    except Exception:
+        current_price = None  # dashboard still shows the position itself, just without a live price
+
+    unrealized_pnl = None
+    if current_price is not None:
+        if open_trade.side == "long":
+            unrealized_pnl = (current_price - open_trade.entry_price) * open_trade.quantity
+        else:
+            unrealized_pnl = (open_trade.entry_price - current_price) * open_trade.quantity
+
+    return PositionOut(
+        has_position=True,
+        pair=account.pair,
+        side=open_trade.side,
+        is_paper=open_trade.is_paper,
+        entry_price=open_trade.entry_price,
+        current_price=current_price,
+        quantity=open_trade.quantity,
+        stop_loss_price=open_trade.stop_loss_price,
+        unrealized_pnl=unrealized_pnl,
+        opened_at=open_trade.opened_at,
+    )
+
+
+@router.post("/credentials/test", response_model=CredentialTestOut)
+async def test_credentials(
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CredentialTestOut:
+    """Verifies the currently stored credential actually works, without
+    running a full trading cycle and without ever placing an order -
+    one read-only `fetch_balance` call against whichever environment
+    (testnet/mainnet) the credential is tagged for."""
+    account = _require_account(customer)
+    if account.credential is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no credential is stored yet")
+    if not settings.encryption_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
+
+    api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
+    api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
+    sandbox = account.credential.environment != "mainnet"
+    client = exchange.build_exchange_client(
+        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=sandbox
+    )
+    try:
+        await client.fetch_balance()
+    except Exception as exc:
+        return CredentialTestOut(ok=False, message=exchange.safe_error_message(exc))
+    finally:
+        await client.close()
+    return CredentialTestOut(ok=True, message="Connection verified.")

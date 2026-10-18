@@ -18,3 +18,25 @@ export const CREDENTIAL_ENVIRONMENTS = [
   { value: "testnet", label: "Testnet (practice, no real funds)" },
   { value: "mainnet", label: "Mainnet (real Binance account)" },
 ];
+
+// The approved drawer navigation, used on both mobile and desktop (see
+// NavDrawer.jsx). No Admin Dashboard entry yet - deliberately left out
+// until that's built and real authorization exists for it.
+export const NAV_ITEMS = [
+  { route: "dashboard", label: "Dashboard" },
+  { route: "positions", label: "Positions" },
+  { route: "trade-history", label: "Trade History" },
+  { route: "performance", label: "Performance" },
+  { route: "bot-settings", label: "Bot Settings" },
+  { route: "exchange-connection", label: "Exchange Connection" },
+  { route: "notifications", label: "Notifications" },
+  { route: "practice", label: "Testnet / Practice" },
+  { route: "help", label: "Help & Guide" },
+  { route: "account", label: "Account" },
+];
+
+export const LEGAL_NAV_ITEMS = [
+  { route: "terms", label: "Terms of Service" },
+  { route: "privacy", label: "Privacy Policy" },
+  { route: "risk-disclosure", label: "Trading Risk Disclosure" },
+];

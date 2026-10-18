@@ -3,23 +3,27 @@ import { useState } from "react";
 const STEPS = [
   {
     title: "1. Create your account",
-    body: "Pick a trading pair, choose spot or futures, and paste in a Binance API key with trading enabled and withdrawals switched off. Your funds stay in your own Binance account the whole time - the bot can never withdraw anything.",
+    body: "Pick a trading pair, choose spot or futures, and set your risk level. No Binance account is needed yet.",
   },
   {
     title: "2. Try it free, no risk",
-    body: "Every account starts on unlimited paper trading against Binance's testnet - real signals, fake money. There's no time limit and no card required to try it.",
+    body: "Every account starts in an unlimited practice environment against Binance's testnet - real signals, no real money. There's no time limit and no card required to try it.",
   },
   {
     title: "3. Link Telegram",
     body: "Tap \"Open Telegram and link\" so the bot can message you when it enters or exits a trade, plus a daily summary.",
   },
   {
-    title: "4. Unlock live trading when you're ready",
-    body: "Tap \"Pay to unlock\" on your dashboard. This is the only thing that turns on real trading with your own funds - paper trading stays free either way, so there's no rush.",
+    title: "4. Activate when you're ready",
+    body: "Tap \"Activate\" on your dashboard to unlock the full trading environment through a one-time payment. This does not turn on real trading by itself.",
   },
   {
-    title: "5. Manage your bot",
-    body: "Pause or resume trading anytime from your dashboard. Your bot code at the top is your reference number - have it ready if you ever contact support.",
+    title: "5. Connect Binance and go live",
+    body: "Once activated, connect a Binance account with a trade-only key, then explicitly enable live trading - two separate, deliberate steps, each with its own confirmation.",
+  },
+  {
+    title: "6. Manage your bot",
+    body: "Pause or resume trading anytime from Bot Settings. Your bot code in the menu is your reference number - have it ready if you ever contact support.",
   },
 ];
 
@@ -49,7 +53,7 @@ export default function HowToUseGuide() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-ink">How to use MBA Bot</h2>
+              <h2 className="text-lg font-semibold text-ink">How to use Metabridge Trading Bot</h2>
               <button
                 type="button"
                 onClick={() => setOpen(false)}

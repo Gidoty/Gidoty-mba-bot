@@ -357,6 +357,7 @@ def test_legal_acceptance_rows_never_contain_credentials_or_secrets():
                 "acknowledge_privacy": True,
             },
         )
+        _mark_paid("nosecrets@example.com")  # storing a mainnet credential now requires payment first
         created = client.post(
             "/api/account",
             json={
@@ -369,7 +370,6 @@ def test_legal_acceptance_rows_never_contain_credentials_or_secrets():
             },
         )
         assert created.status_code == 201
-        _mark_paid("nosecrets@example.com")
         _make_eligible("nosecrets@example.com")
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200

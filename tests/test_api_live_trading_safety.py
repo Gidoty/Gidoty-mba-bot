@@ -96,8 +96,16 @@ def _retag_mainnet(client: TestClient) -> dict:
 def test_enable_live_trading_rejected_when_unpaid():
     with TestClient(app, base_url="https://testserver") as client:
         _signup_with_account(client, "unpaid-enable@example.com")
+        # Storing a mainnet credential itself requires payment (see
+        # test_mainnet_credential_rejected_when_unpaid below) - pay
+        # first to legitimately set one up, then revert has_paid
+        # directly so the actual thing under test here (enable-live-
+        # trading refusing an unpaid account) is isolated from that.
+        _mark_paid("unpaid-enable@example.com")
         _retag_mainnet(client)
         _make_eligible("unpaid-enable@example.com")
+        with session_scope() as session:
+            session.query(Customer).filter(Customer.email == "unpaid-enable@example.com").one().has_paid = False
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
@@ -168,6 +176,7 @@ def test_enable_live_trading_is_idempotent_not_repeatable():
 def test_update_credentials_rejected_with_open_trade():
     with TestClient(app, base_url="https://testserver") as client:
         _signup_with_account(client, "credopen@example.com")
+        _mark_paid("credopen@example.com")  # paid so this test isolates the open-trade guard, not the payment gate
         _open_a_trade("credopen@example.com")
         response = client.put(
             "/api/account/credentials",
@@ -175,6 +184,75 @@ def test_update_credentials_rejected_with_open_trade():
         )
         assert response.status_code == 409
         assert "open trade" in response.json()["detail"].lower()
+
+
+def test_mainnet_credential_rejected_when_unpaid_on_account_creation():
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "unpaidmainnet1@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
+        response = client.post(
+            "/api/account",
+            json={
+                "pair": "BTC/USDT",
+                "market_type": "spot",
+                "notification_channel": "telegram",
+                "api_key": "k",
+                "api_secret": "s",
+                "environment": "mainnet",
+            },
+        )
+        assert response.status_code == 403
+
+    with session_scope() as session:
+        customer = session.query(Customer).filter(Customer.email == "unpaidmainnet1@example.com").one()
+        assert customer.account is None  # nothing was created
+
+
+def test_mainnet_credential_rejected_when_unpaid_on_credential_update():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "unpaidmainnet2@example.com")  # defaults to a testnet credential
+        response = client.put(
+            "/api/account/credentials",
+            json={"api_key": "k", "api_secret": "s", "environment": "mainnet"},
+        )
+        assert response.status_code == 403
+
+    with session_scope() as session:
+        customer = session.query(Customer).filter(Customer.email == "unpaidmainnet2@example.com").one()
+        assert customer.account.credential.environment == "testnet"  # untouched by the rejected attempt
+
+
+def test_testnet_credential_allowed_when_unpaid():
+    with TestClient(app, base_url="https://testserver") as client:
+        response = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "unpaidtestnet@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
+        assert response.status_code == 201
+        created = client.post(
+            "/api/account",
+            json={
+                "pair": "BTC/USDT",
+                "market_type": "spot",
+                "notification_channel": "telegram",
+                "api_key": "k",
+                "api_secret": "s",
+                "environment": "testnet",
+            },
+        )
+        assert created.status_code == 201
 
 
 def test_downgrading_credential_to_testnet_disables_live_trading():
@@ -235,6 +313,49 @@ def test_account_creation_defaults_credential_to_testnet():
         body = _signup_with_account(client, "defaultenv@example.com")
         assert body["credential_environment"] == "testnet"
         assert body["has_mainnet_credential"] is False
+
+
+def test_account_creation_without_any_credential_is_allowed():
+    """New onboarding never asks for a Binance key at all (paper mode
+    never reads the account's own credential - see trader.py) - an
+    account can be created with no api_key/api_secret whatsoever."""
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "nocred@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
+        created = client.post(
+            "/api/account",
+            json={"pair": "BTC/USDT", "market_type": "spot", "notification_channel": "telegram"},
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["credential_environment"] is None
+        assert body["has_mainnet_credential"] is False
+        assert body["mode"] == "paper"
+
+
+def test_account_creation_rejects_only_one_of_key_or_secret():
+    with TestClient(app, base_url="https://testserver") as client:
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "halfcred@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
+        response = client.post(
+            "/api/account",
+            json={"pair": "BTC/USDT", "market_type": "spot", "notification_channel": "telegram", "api_key": "k"},
+        )
+        assert response.status_code == 422
 
 
 # --- nothing except enable-live-trading can ever flip the switch ---

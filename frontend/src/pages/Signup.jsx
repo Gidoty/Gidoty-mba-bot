@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
+import BrandLogo from "../components/BrandLogo.jsx";
 import ConsentCheckbox from "../components/ConsentCheckbox.jsx";
 import { navigate } from "../useHashRoute.js";
 
@@ -32,7 +33,10 @@ export default function Signup({ onAuthed }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4 py-10">
+      <div className="mb-6">
+        <BrandLogo dark={false} subtitle={null} />
+      </div>
       <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
         <h1 className="text-xl font-semibold text-ink">Create your account</h1>
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}

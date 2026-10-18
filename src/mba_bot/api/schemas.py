@@ -94,8 +94,16 @@ class AccountCreateRequest(BaseModel):
     market_type: str
     notification_channel: str
     risk_pct: float | None = Field(default=None, gt=0, le=100)
-    api_key: str = Field(min_length=1)
-    api_secret: str = Field(min_length=1)
+    # Both optional: paper-mode trading never reads an account's own
+    # credential (it always uses the shared platform testnet keys - see
+    # trader.py's _resolve_credentials), so a brand-new, unpaid account
+    # has no reason to be asked for a Binance key of any kind at
+    # signup - Mainnet credential entry only becomes available later,
+    # after payment, through the dedicated Connect Binance step
+    # (PUT /api/account/credentials). Provided only for callers that
+    # still want to set one up front (e.g. an admin script).
+    api_key: str | None = Field(default=None, min_length=1)
+    api_secret: str | None = Field(default=None, min_length=1)
     # Defaults to the safe choice: a credential nobody explicitly tagged
     # mainnet can never be used for live trading, no matter what else is
     # true about the account (see models.py's has_mainnet_credential).
@@ -237,8 +245,15 @@ class TradesSummaryOut(BaseModel):
     total_trades: int
     open_trades: int
     closed_trades: int
-    net_pnl: float
+    net_pnl: float  # all-time, scoped by the `is_paper` filter if one was passed
     win_rate: float | None  # None when there are no closed trades yet
+    # Windowed P&L, same `is_paper` scope as net_pnl - lets the dashboard
+    # show Today/7D/30D without re-deriving date math client-side, and
+    # without ever mixing paper and live figures into one number.
+    pnl_today: float
+    pnl_7d: float
+    pnl_30d: float
+    pnl_90d: float
 
 
 class TelegramLinkOut(BaseModel):
@@ -247,3 +262,36 @@ class TelegramLinkOut(BaseModel):
 
 class PaymentInitOut(BaseModel):
     authorization_url: str
+
+
+class BalanceOut(BaseModel):
+    """Live Binance balance, fetched on demand - never persisted, never
+    available until an account is actually LIVE. `available_balance` is
+    the free (not locked in orders) balance of the pair's quote currency,
+    same figure trader.py itself sizes positions off."""
+
+    quote_currency: str
+    available_balance: float
+
+
+class PositionOut(BaseModel):
+    """The account's one open position, if any, with a live current
+    price layered on top of the persisted Trade row. `current_price`/
+    `unrealized_pnl` are best-effort - None if the live price couldn't
+    be fetched just now, never fabricated."""
+
+    has_position: bool
+    pair: str | None = None
+    side: str | None = None  # "long" | "short"
+    is_paper: bool | None = None
+    entry_price: float | None = None
+    current_price: float | None = None
+    quantity: float | None = None
+    stop_loss_price: float | None = None
+    unrealized_pnl: float | None = None
+    opened_at: datetime | None = None
+
+
+class CredentialTestOut(BaseModel):
+    ok: bool
+    message: str
