@@ -5,12 +5,29 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...config import Settings
+from ...legal import (
+    PRIVACY_VERSION,
+    TERMS_VERSION,
+    has_current_acceptance,
+    has_current_terms_and_privacy,
+    record_acceptance,
+)
 from ...models import Customer
 from ..deps import get_current_customer, get_db, get_settings
-from ..schemas import CustomerOut, LoginRequest, SignupRequest
+from ..schemas import AcceptLegalRequest, CustomerOut, LoginRequest, SignupRequest
 from ..security import SESSION_COOKIE_NAME, create_session_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _to_customer_out(customer: Customer, db: Session) -> CustomerOut:
+    return CustomerOut(
+        id=customer.id,
+        email=customer.email,
+        created_at=customer.created_at,
+        has_paid=customer.has_paid,
+        legal_acceptance_current=has_current_terms_and_privacy(db, customer_id=customer.id),
+    )
 
 def _set_session_cookie(response: Response, *, customer_id: str, settings: Settings) -> None:
     if not settings.jwt_secret:
@@ -43,7 +60,11 @@ def _set_session_cookie(response: Response, *, customer_id: str, settings: Setti
 @router.post("/signup", response_model=CustomerOut, status_code=status.HTTP_201_CREATED)
 def signup(
     body: SignupRequest, response: Response, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
-) -> Customer:
+) -> CustomerOut:
+    # body.accept_terms / body.acknowledge_privacy are already guaranteed
+    # True here - SignupRequest's validators reject a False/missing value
+    # with a 422 before this function body ever runs, so there is no
+    # direct-API path that creates a customer without both.
     customer = Customer(email=body.email.lower(), password_hash=hash_password(body.password))
     db.add(customer)
     try:
@@ -51,20 +72,23 @@ def signup(
     except IntegrityError:
         raise HTTPException(status.HTTP_409_CONFLICT, "an account with this email already exists")
 
+    record_acceptance(db, customer_id=customer.id, document_type="terms", version=TERMS_VERSION)
+    record_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION)
+
     _set_session_cookie(response, customer_id=customer.id, settings=settings)
-    return customer
+    return _to_customer_out(customer, db)
 
 
 @router.post("/login", response_model=CustomerOut)
 def login(
     body: LoginRequest, response: Response, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
-) -> Customer:
+) -> CustomerOut:
     customer = db.query(Customer).filter(Customer.email == body.email.lower()).first()
     if customer is None or not verify_password(body.password, customer.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "incorrect email or password")
 
     _set_session_cookie(response, customer_id=customer.id, settings=settings)
-    return customer
+    return _to_customer_out(customer, db)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -75,5 +99,22 @@ def logout(response: Response) -> None:
 
 
 @router.get("/me", response_model=CustomerOut)
-def me(customer: Customer = Depends(get_current_customer)) -> Customer:
-    return customer
+def me(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)) -> CustomerOut:
+    return _to_customer_out(customer, db)
+
+
+@router.post("/accept-legal", response_model=CustomerOut)
+def accept_legal(
+    body: AcceptLegalRequest, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)
+) -> CustomerOut:
+    """For a customer who is already logged in but whose on-file
+    acceptance predates the current Terms/Privacy version - most
+    notably every customer who existed before this feature shipped.
+    Idempotent: calling it again once already current is a no-op rather
+    than a duplicate-row error, same spirit as mark_customer_paid.py
+    being a no-op on an already-paid customer."""
+    if not has_current_acceptance(db, customer_id=customer.id, document_type="terms", version=TERMS_VERSION):
+        record_acceptance(db, customer_id=customer.id, document_type="terms", version=TERMS_VERSION)
+    if not has_current_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION):
+        record_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION)
+    return _to_customer_out(customer, db)

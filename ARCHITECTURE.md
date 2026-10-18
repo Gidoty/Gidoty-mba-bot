@@ -186,6 +186,29 @@ it just now also answers requests instead of only looping silently.
   column) - deliberately not "testnet" or "mainnet", since a credential
   nobody has confirmed must never be treated as authorized for either,
   and specifically can never satisfy condition 4 above.
+- **Legal consent is a fifth, additive gate - never a substitute for any
+  of the four above** (`legal.py`, `api/deps.require_legal_acceptance`,
+  `models.LegalAcceptance`): every customer must affirmatively accept
+  the Terms of Service and acknowledge the Privacy Policy at signup
+  (`SignupRequest.accept_terms`/`acknowledge_privacy`, both required
+  `True` or the request 422s before any row is written), and every
+  `/api/account/*` route re-checks that the customer's acceptance is
+  still current before doing anything else - including create-account,
+  so there's no way to reach trading functionality without it. A
+  customer who signed up before these documents existed simply has zero
+  `LegalAcceptance` rows and fails this exactly like anyone else; nothing
+  backfills history for them - they catch up once via
+  `POST /api/auth/accept-legal`. Enabling live trading additionally
+  requires `EnableLiveTradingRequest.accept_risk_disclosure = True`,
+  recorded as its own `LegalAcceptance` row alongside
+  `live_trading_enabled_at` in the same request/transaction as the
+  four-gate check above - a failed gate check never leaves a
+  risk-disclosure row behind, since every gate is checked before any
+  write. `LegalAcceptance` stores only `(customer_id, document_type,
+  version, accepted_at)` - no credentials, ever - and a unique
+  constraint on `(customer_id, document_type, version)` stops the same
+  acceptance from ever being recorded twice; a new document version is
+  simply a new row, not an update to an old one.
 - **Pair/market switching, and why it's safe to do mid-lifetime**
   (`api/routers/account.py`'s `update_account`): `has_paid` unlocks the
   account, not a pair - `PATCH /api/account` accepts `pair`/`market_type`
@@ -224,7 +247,8 @@ it just now also answers requests instead of only looping silently.
 
 ```
 Customer 1---1 TradingAccount 1---1 ApiCredential
-                      |
+   |                  |
+   1---N LegalAcceptance
                       1---N Trade
 ```
 
@@ -248,6 +272,7 @@ account without needing their UUID.
 | `strategy.py` | EMA(20/50) crossover + ATR volatility filter -> a `StrategySignal`. Stateless: doesn't know about open positions. |
 | `risk.py` | Position sizing (risk % of balance / stop distance) and stop-loss placement. Enforces the 1-2% cap. |
 | `onboarding.py` | Trial start/expiry, the live-trading bypass and its logged disclosure/timestamp. |
+| `legal.py` | Terms/Privacy/Risk-Disclosure document versions and the single "is this customer's acceptance current" check. |
 | `crypto_utils.py` | Fernet encryption for stored API credentials. |
 | `botcode.py` | Generates the support-facing "MBA-XXXXXX" account code. |
 | `models.py` / `db.py` | SQLAlchemy schema and session/query helpers. |
@@ -257,8 +282,8 @@ account without needing their UUID.
 | `scheduler.py` | The shared loop described above. |
 | `api/app.py` | FastAPI app: CORS, router wiring, and the lifespan hook that starts `scheduler.run_forever` as a background task. |
 | `api/security.py` | Password hashing (bcrypt) and session JWT create/verify. |
-| `api/routers/auth.py` | Signup/login/logout; sets/clears the session cookie. |
-| `api/routers/account.py` | Onboarding (create account + credential), settings updates (pair/market/risk), pause/resume, trial-bypass, credential updates, and the separate enable-live-trading step - as HTTP. |
+| `api/routers/auth.py` | Signup (requires Terms/Privacy consent) /login/logout/accept-legal; sets/clears the session cookie. |
+| `api/routers/account.py` | Onboarding (create account + credential), settings updates (pair/market/risk), pause/resume, trial-bypass, credential updates, and the separate enable-live-trading step (requires risk-disclosure consent) - as HTTP, all gated by `require_legal_acceptance`. |
 | `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
 | `api/routers/billing.py` | Paystack one-time payment initialization and webhook. |
 | `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |

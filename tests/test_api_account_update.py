@@ -63,7 +63,15 @@ def _open_a_trade(email: str) -> None:
 
 
 def _signup_with_account(client: TestClient, email: str) -> dict:
-    signup = client.post("/api/auth/signup", json={"email": email, "password": "correct-horse-battery"})
+    signup = client.post(
+        "/api/auth/signup",
+        json={
+            "email": email,
+            "password": "correct-horse-battery",
+            "accept_terms": True,
+            "acknowledge_privacy": True,
+        },
+    )
     assert signup.status_code == 201
     created = client.post(
         "/api/account",

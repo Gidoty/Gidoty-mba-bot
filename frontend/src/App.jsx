@@ -1,20 +1,32 @@
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "./api/client.js";
+import Footer from "./components/Footer.jsx";
 import HowToUseGuide from "./components/HowToUseGuide.jsx";
+import LegalConsentGate from "./components/LegalConsentGate.jsx";
+import { PRIVACY_POLICY, RISK_DISCLOSURE, TERMS_OF_SERVICE } from "./legalContent.js";
 import Dashboard from "./pages/Dashboard.jsx";
 import Landing from "./pages/Landing.jsx";
+import LegalPage from "./pages/LegalPage.jsx";
 import Login from "./pages/Login.jsx";
 import Onboarding from "./pages/Onboarding.jsx";
 import Signup from "./pages/Signup.jsx";
 import { navigate, useHashRoute } from "./useHashRoute.js";
+
+// Static legal pages - reachable regardless of auth state, and
+// deliberately checked before anything that depends on login/consent.
+const LEGAL_ROUTES = {
+  terms: TERMS_OF_SERVICE,
+  "risk-disclosure": RISK_DISCLOSURE,
+  privacy: PRIVACY_POLICY,
+};
 
 export default function App() {
   const route = useHashRoute();
   const [customer, setCustomer] = useState(undefined); // undefined = loading, null = logged out
 
   function refreshCustomer() {
-    api
+    return api
       .get("/auth/me")
       .then(setCustomer)
       .catch(() => setCustomer(null));
@@ -35,12 +47,24 @@ export default function App() {
   }
 
   let content;
-  if (customer === undefined) {
+  if (LEGAL_ROUTES[route]) {
+    // Always reachable, even while a logged-in customer is blocked by
+    // the legal-consent gate below, or still "loading".
+    content = <LegalPage document={LEGAL_ROUTES[route]} />;
+  } else if (customer === undefined) {
     content = <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
   } else if (!customer) {
     if (route === "login") content = <Login onAuthed={handleAuthed} />;
     else if (route === "signup") content = <Signup onAuthed={handleAuthed} />;
     else content = <Landing />;
+  } else if (!customer.legal_acceptance_current) {
+    // Covers both a brand-new customer somehow reaching here before the
+    // signup response lands, and - far more commonly - an existing
+    // customer who logged in before accepting the current Terms and
+    // Privacy Policy. The backend's own require_legal_acceptance
+    // dependency enforces this independently on every /api/account/*
+    // call, so this isn't just a frontend-only gate.
+    content = <LegalConsentGate onAccepted={refreshCustomer} onLogout={handleLogout} />;
   } else {
     content = <AuthedApp customer={customer} onLogout={handleLogout} onCustomerChanged={refreshCustomer} />;
   }
@@ -48,6 +72,7 @@ export default function App() {
   return (
     <>
       {content}
+      <Footer />
       <HowToUseGuide />
     </>
   );

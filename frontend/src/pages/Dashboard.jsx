@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
+import ConsentCheckbox from "../components/ConsentCheckbox.jsx";
 import HelpTip from "../components/HelpTip.jsx";
 import { CREDENTIAL_ENVIRONMENTS, MARKET_TYPES, PAIRS, UPCOMING_PAIRS } from "../constants.js";
+
+const LIVE_TRADING_RISK_SENTENCE =
+  "You are enabling LIVE automated cryptocurrency trading. Real orders may be submitted to your connected " +
+  "Binance account using real funds. Trading can result in substantial financial loss.";
 
 function isLiveEligible(account) {
   return Boolean(account.live_bypass_accepted_at) || new Date() >= new Date(account.trial_ends_at);
@@ -269,6 +274,7 @@ function EnvironmentBadge({ mode }) {
 
 function EnableLiveTrading({ account, customer, onAccountChanged }) {
   const [confirming, setConfirming] = useState(false);
+  const [acceptRiskDisclosure, setAcceptRiskDisclosure] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -304,7 +310,7 @@ function EnableLiveTrading({ account, customer, onAccountChanged }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.post("/account/enable-live-trading", { accept: true });
+      await api.post("/account/enable-live-trading", { accept_risk_disclosure: acceptRiskDisclosure });
       setConfirming(false);
       onAccountChanged();
     } catch (err) {
@@ -333,15 +339,38 @@ function EnableLiveTrading({ account, customer, onAccountChanged }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
             <h3 className="text-base font-bold text-red-700">Enable live trading with real funds?</h3>
-            <p className="mt-3 text-sm text-slate-600">
-              From this point forward, MBA Bot will place <strong>real orders on Binance production</strong>, using
-              your own funds and the Binance API credentials you've provided. Trading carries the risk of financial
-              loss. MBA Bot's signals are not guaranteed to be profitable, and you are solely responsible for any
-              losses incurred.
+            <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+              {LIVE_TRADING_RISK_SENTENCE}
             </p>
+            <p className="mt-3 text-sm text-slate-600">
+              MBA Bot's signals are not guaranteed to be profitable, and you are solely responsible for any losses
+              incurred.
+            </p>
+            <div className="mt-4">
+              <ConsentCheckbox
+                checked={acceptRiskDisclosure}
+                onChange={setAcceptRiskDisclosure}
+                label={
+                  <>
+                    I acknowledge the{" "}
+                    <a
+                      href="#/risk-disclosure"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-accent hover:underline"
+                    >
+                      Trading Risk Disclosure
+                    </a>
+                  </>
+                }
+              />
+            </div>
             <div className="mt-5 flex flex-wrap justify-end gap-3">
               <button
-                onClick={() => setConfirming(false)}
+                onClick={() => {
+                  setConfirming(false);
+                  setAcceptRiskDisclosure(false);
+                }}
                 disabled={submitting}
                 className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
               >
@@ -349,8 +378,8 @@ function EnableLiveTrading({ account, customer, onAccountChanged }) {
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={submitting}
-                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+                disabled={submitting || !acceptRiskDisclosure}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {submitting ? "Enabling..." : "Yes, enable live trading with real funds"}
               </button>

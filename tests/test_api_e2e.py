@@ -46,9 +46,18 @@ def _mark_paid(email: str) -> None:
 
 def test_signup_onboarding_telegram_link_and_live_bypass():
     with TestClient(app, base_url="https://testserver") as client:
-        signup = client.post("/api/auth/signup", json={"email": "smoke@example.com", "password": "correct-horse-battery"})
+        signup = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "smoke@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
         assert signup.status_code == 201
         assert signup.json()["email"] == "smoke@example.com"
+        assert signup.json()["legal_acceptance_current"] is True
 
         # account endpoints require the session cookie signup just set
         missing = client.get("/api/account")
@@ -117,7 +126,7 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
 
         # Trying to enable live trading with a testnet-tagged credential
         # on file must be refused.
-        refused = client.post("/api/account/enable-live-trading", json={"accept": True})
+        refused = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert refused.status_code == 409
 
         # Only once the customer explicitly re-tags their credential as
@@ -131,12 +140,12 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         assert retag.json()["credential_environment"] == "mainnet"
         assert retag.json()["mode"] == "paper"  # still not enabled yet
 
-        enabled = client.post("/api/account/enable-live-trading", json={"accept": True})
+        enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
         assert enabled.json()["mode"] == "live"
         assert enabled.json()["live_trading_enabled_at"] is not None
 
-        again_enabled = client.post("/api/account/enable-live-trading", json={"accept": True})
+        again_enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert again_enabled.status_code == 409
 
         update = client.patch("/api/account", json={"risk_pct": 1.5})
@@ -150,7 +159,15 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
 
 def test_telegram_webhook_bare_start_replies_without_crashing():
     with TestClient(app, base_url="https://testserver") as client:
-        client.post("/api/auth/signup", json={"email": "barestart@example.com", "password": "correct-horse-battery"})
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "barestart@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
         client.post(
             "/api/account",
             json={
@@ -190,14 +207,77 @@ def test_telegram_webhook_ignores_unrelated_messages():
 
 def test_signup_rejects_duplicate_email():
     with TestClient(app, base_url="https://testserver") as client:
-        client.post("/api/auth/signup", json={"email": "dup@example.com", "password": "correct-horse-battery"})
-        second = client.post("/api/auth/signup", json={"email": "dup@example.com", "password": "another-password"})
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "dup@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
+        second = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "dup@example.com",
+                "password": "another-password",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
         assert second.status_code == 409
+
+
+def test_signup_rejected_without_accepting_terms_and_privacy():
+    """Direct-API proof: no combination of missing/false consent flags
+    creates an account - the validators on SignupRequest reject all of
+    them with 422 before the route body (and therefore any DB write)
+    ever runs."""
+    with TestClient(app, base_url="https://testserver") as client:
+        missing_both = client.post(
+            "/api/auth/signup", json={"email": "nobypass1@example.com", "password": "correct-horse-battery"}
+        )
+        assert missing_both.status_code == 422
+
+        terms_false = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "nobypass2@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": False,
+                "acknowledge_privacy": True,
+            },
+        )
+        assert terms_false.status_code == 422
+
+        privacy_false = client.post(
+            "/api/auth/signup",
+            json={
+                "email": "nobypass3@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": False,
+            },
+        )
+        assert privacy_false.status_code == 422
+
+        # None of the above may have created a customer row at all.
+        for email in ("nobypass1@example.com", "nobypass2@example.com", "nobypass3@example.com"):
+            with session_scope() as session:
+                assert session.query(Customer).filter(Customer.email == email).first() is None
 
 
 def test_login_with_wrong_password_is_rejected():
     with TestClient(app, base_url="https://testserver") as client:
-        client.post("/api/auth/signup", json={"email": "wrongpw@example.com", "password": "correct-horse-battery"})
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "wrongpw@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
         client.post("/api/auth/logout")
         bad_login = client.post("/api/auth/login", json={"email": "wrongpw@example.com", "password": "nope"})
         assert bad_login.status_code == 401

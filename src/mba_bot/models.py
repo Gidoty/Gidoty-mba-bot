@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -168,6 +168,31 @@ class ApiCredential(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="credential")
+
+
+class LegalAcceptance(Base):
+    """One row per acceptance event - terms, privacy, or risk_disclosure -
+    never overwritten and never backdated. A customer with no row for a
+    given (document_type, version) has NOT accepted it, full stop; that
+    includes every customer who existed before this table did, since the
+    migration that introduces it adds an empty table, not fabricated
+    history (see legal.py, which is the only module that reads/writes
+    this and the single place "is this customer's acceptance current"
+    is decided). No API key, secret, or other sensitive account data is
+    ever stored here - just which document, which version, and when."""
+
+    __tablename__ = "legal_acceptances"
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id", "document_type", "version", name="uq_legal_acceptance_customer_document_version"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    document_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "terms" | "privacy" | "risk_disclosure"
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Trade(Base):

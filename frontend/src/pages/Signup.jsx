@@ -1,11 +1,14 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
+import ConsentCheckbox from "../components/ConsentCheckbox.jsx";
 import { navigate } from "../useHashRoute.js";
 
 export default function Signup({ onAuthed }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acknowledgePrivacy, setAcknowledgePrivacy] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -14,7 +17,12 @@ export default function Signup({ onAuthed }) {
     setError(null);
     setSubmitting(true);
     try {
-      const customer = await api.post("/auth/signup", { email, password });
+      const customer = await api.post("/auth/signup", {
+        email,
+        password,
+        accept_terms: acceptTerms,
+        acknowledge_privacy: acknowledgePrivacy,
+      });
       onAuthed(customer);
     } catch (err) {
       setError(err.message);
@@ -30,10 +38,36 @@ export default function Signup({ onAuthed }) {
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <Field label="Email" type="email" value={email} onChange={setEmail} required />
         <Field label="Password" type="password" value={password} onChange={setPassword} minLength={8} required />
+
+        <ConsentCheckbox
+          checked={acceptTerms}
+          onChange={setAcceptTerms}
+          label={
+            <>
+              I accept the{" "}
+              <a href="#/terms" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                Terms of Service
+              </a>
+            </>
+          }
+        />
+        <ConsentCheckbox
+          checked={acknowledgePrivacy}
+          onChange={setAcknowledgePrivacy}
+          label={
+            <>
+              I acknowledge the{" "}
+              <a href="#/privacy" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                Privacy Policy
+              </a>
+            </>
+          }
+        />
+
         <button
           type="submit"
-          disabled={submitting}
-          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark disabled:opacity-60"
+          disabled={submitting || !acceptTerms || !acknowledgePrivacy}
+          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
         >
           {submitting ? "Creating account..." : "Sign up"}
         </button>

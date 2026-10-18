@@ -28,6 +28,25 @@ def _validate_choice(value: str, choices: tuple[str, ...], field_name: str) -> s
 class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
+    # Both required true at signup - never pre-checked, no way to
+    # register without them. See mba_bot.legal for the document
+    # versions these are recorded against.
+    accept_terms: bool
+    acknowledge_privacy: bool
+
+    @field_validator("accept_terms")
+    @classmethod
+    def _must_accept_terms(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("you must accept the Terms of Service to create an account")
+        return v
+
+    @field_validator("acknowledge_privacy")
+    @classmethod
+    def _must_acknowledge_privacy(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("you must acknowledge the Privacy Policy to create an account")
+        return v
 
 
 class LoginRequest(BaseModel):
@@ -35,11 +54,37 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AcceptLegalRequest(BaseModel):
+    """For an already-authenticated customer catching up to the current
+    Terms/Privacy version - e.g. an account created before these
+    documents existed. Same all-or-nothing validation as signup."""
+
+    accept_terms: bool
+    acknowledge_privacy: bool
+
+    @field_validator("accept_terms")
+    @classmethod
+    def _must_accept_terms(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("accept_terms must be true")
+        return v
+
+    @field_validator("acknowledge_privacy")
+    @classmethod
+    def _must_acknowledge_privacy(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("acknowledge_privacy must be true")
+        return v
+
+
 class CustomerOut(BaseModel):
     id: str
     email: str
     created_at: datetime
     has_paid: bool
+    # Whether the CURRENT Terms+Privacy version is accepted - the
+    # frontend blocks everything past login on this until it's true.
+    legal_acceptance_current: bool
 
     model_config = {"from_attributes": True}
 
@@ -113,6 +158,25 @@ class LiveBypassRequest(BaseModel):
     def _must_accept(cls, v: bool) -> bool:
         if not v:
             raise ValueError("accept must be true - this endpoint only does something when you're accepting")
+        return v
+
+
+class EnableLiveTradingRequest(BaseModel):
+    """A dedicated field, not the generic `accept` LiveBypassRequest uses
+    for other endpoints - this one specifically means "I acknowledge the
+    Trading Risk Disclosure", and is required true in addition to (never
+    instead of) the four existing paid/eligible/enabled/mainnet gates."""
+
+    accept_risk_disclosure: bool
+
+    @field_validator("accept_risk_disclosure")
+    @classmethod
+    def _must_accept_risk_disclosure(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError(
+                "accept_risk_disclosure must be true - enabling live trading requires acknowledging the "
+                "Trading Risk Disclosure"
+            )
         return v
 
 

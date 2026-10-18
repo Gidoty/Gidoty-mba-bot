@@ -12,6 +12,7 @@ from ...botcode import assign_unique_bot_code
 from ...config import Settings
 from ...crypto_utils import encrypt
 from ...db import get_open_trade
+from ...legal import RISK_DISCLOSURE_VERSION, record_acceptance
 from ...models import ApiCredential, Customer, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -23,8 +24,15 @@ from ...onboarding import (
     start_trial,
 )
 from ...risk import InvalidRiskParameters, clamp_risk_pct
-from ..deps import get_current_customer, get_db, get_settings
-from ..schemas import AccountCreateRequest, AccountOut, AccountUpdateRequest, CredentialUpdateRequest, LiveBypassRequest
+from ..deps import get_db, get_settings, require_legal_acceptance
+from ..schemas import (
+    AccountCreateRequest,
+    AccountOut,
+    AccountUpdateRequest,
+    CredentialUpdateRequest,
+    EnableLiveTradingRequest,
+    LiveBypassRequest,
+)
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
@@ -102,7 +110,7 @@ def _require_no_open_trade(db: Session, account: TradingAccount, *, action: str)
 @router.post("", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 def create_account(
     body: AccountCreateRequest,
-    customer: Customer = Depends(get_current_customer),
+    customer: Customer = Depends(require_legal_acceptance),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AccountOut:
@@ -149,14 +157,14 @@ def create_account(
 
 
 @router.get("", response_model=AccountOut)
-def get_account(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)) -> AccountOut:
+def get_account(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)) -> AccountOut:
     return _to_account_out(_require_account(customer), has_paid=customer.has_paid, db=db)
 
 
 @router.patch("", response_model=AccountOut)
 def update_account(
     body: AccountUpdateRequest,
-    customer: Customer = Depends(get_current_customer),
+    customer: Customer = Depends(require_legal_acceptance),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AccountOut:
@@ -193,7 +201,7 @@ def update_account(
 
 @router.post("/live-bypass", response_model=AccountOut)
 def accept_live_trading_bypass(
-    body: LiveBypassRequest, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)
+    body: LiveBypassRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)
 ) -> AccountOut:
     account = _require_account(customer)
     if account.live_bypass_accepted_at is not None:
@@ -206,7 +214,7 @@ def accept_live_trading_bypass(
 @router.put("/credentials", response_model=AccountOut)
 def update_credentials(
     body: CredentialUpdateRequest,
-    customer: Customer = Depends(get_current_customer),
+    customer: Customer = Depends(require_legal_acceptance),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AccountOut:
@@ -240,11 +248,26 @@ def update_credentials(
 
 @router.post("/enable-live-trading", response_model=AccountOut)
 def enable_live_trading_route(
-    body: LiveBypassRequest, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)
+    body: EnableLiveTradingRequest,
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
 ) -> AccountOut:
     """The one and only action that can set live_trading_enabled_at -
     paying, finishing the trial, and accepting the bypass are all
-    eligibility, never activation. See onboarding.resolve_trading_mode."""
+    eligibility, never activation. See onboarding.resolve_trading_mode.
+    The four existing safety gates below are unchanged; the risk
+    disclosure acknowledgment (`body.accept_risk_disclosure`, already
+    guaranteed True by EnableLiveTradingRequest's validator, same as
+    SignupRequest's) is a FIFTH, additional requirement, not a
+    replacement for any of them.
+
+    Every check below runs and can raise before any database write, so
+    a failed check never leaves a risk-disclosure acceptance record on
+    file for an activation that didn't happen - the account mutation and
+    the acceptance row are only ever written together, right at the
+    end, inside this same request's transaction (see db.session_scope,
+    which commits once at the end of the request and rolls back
+    everything written so far if anything above raises)."""
     account = _require_account(customer)
 
     if not customer.has_paid:
@@ -275,4 +298,5 @@ def enable_live_trading_route(
 
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
+    record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
     return _to_account_out(account, has_paid=customer.has_paid, db=db)

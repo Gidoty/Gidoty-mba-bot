@@ -58,7 +58,15 @@ def _open_a_trade(email: str) -> None:
 
 
 def _signup_with_account(client: TestClient, email: str) -> dict:
-    client.post("/api/auth/signup", json={"email": email, "password": "correct-horse-battery"})
+    client.post(
+        "/api/auth/signup",
+        json={
+            "email": email,
+            "password": "correct-horse-battery",
+            "accept_terms": True,
+            "acknowledge_privacy": True,
+        },
+    )
     created = client.post(
         "/api/account",
         json={
@@ -90,7 +98,7 @@ def test_enable_live_trading_rejected_when_unpaid():
         _signup_with_account(client, "unpaid-enable@example.com")
         _retag_mainnet(client)
         _make_eligible("unpaid-enable@example.com")
-        response = client.post("/api/account/enable-live-trading", json={"accept": True})
+        response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
 
@@ -100,7 +108,7 @@ def test_enable_live_trading_rejected_when_not_eligible():
         _mark_paid("noteligible@example.com")
         _retag_mainnet(client)
         # Trial is still running, no bypass accepted.
-        response = client.post("/api/account/enable-live-trading", json={"accept": True})
+        response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
 
@@ -110,7 +118,7 @@ def test_enable_live_trading_rejected_without_mainnet_credential():
         _mark_paid("notagged@example.com")
         _make_eligible("notagged@example.com")
         # Credential defaults to testnet at signup - never retagged.
-        response = client.post("/api/account/enable-live-trading", json={"accept": True})
+        response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
         assert "mainnet" in response.json()["detail"].lower()
 
@@ -122,7 +130,7 @@ def test_enable_live_trading_rejected_with_open_trade():
         _retag_mainnet(client)
         _make_eligible("openenable@example.com")
         _open_a_trade("openenable@example.com")
-        response = client.post("/api/account/enable-live-trading", json={"accept": True})
+        response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
         assert "open trade" in response.json()["detail"].lower()
 
@@ -137,7 +145,7 @@ def test_enable_live_trading_succeeds_when_every_condition_is_met():
         before = client.get("/api/account").json()
         assert before["mode"] == "paper"
 
-        response = client.post("/api/account/enable-live-trading", json={"accept": True})
+        response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 200
         assert response.json()["mode"] == "live"
         assert response.json()["live_trading_enabled_at"] is not None
@@ -149,8 +157,8 @@ def test_enable_live_trading_is_idempotent_not_repeatable():
         _mark_paid("already@example.com")
         _retag_mainnet(client)
         _make_eligible("already@example.com")
-        client.post("/api/account/enable-live-trading", json={"accept": True})
-        again = client.post("/api/account/enable-live-trading", json={"accept": True})
+        client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
+        again = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert again.status_code == 409
 
 
@@ -175,7 +183,7 @@ def test_downgrading_credential_to_testnet_disables_live_trading():
         _mark_paid("downgrade@example.com")
         _retag_mainnet(client)
         _make_eligible("downgrade@example.com")
-        enabled = client.post("/api/account/enable-live-trading", json={"accept": True})
+        enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.json()["mode"] == "live"
 
         downgraded = client.put(
@@ -199,7 +207,15 @@ def test_unsupported_credential_environment_is_rejected():
 
 def test_account_creation_rejects_unsupported_environment():
     with TestClient(app, base_url="https://testserver") as client:
-        client.post("/api/auth/signup", json={"email": "badcreate@example.com", "password": "correct-horse-battery"})
+        client.post(
+            "/api/auth/signup",
+            json={
+                "email": "badcreate@example.com",
+                "password": "correct-horse-battery",
+                "accept_terms": True,
+                "acknowledge_privacy": True,
+            },
+        )
         response = client.post(
             "/api/account",
             json={
