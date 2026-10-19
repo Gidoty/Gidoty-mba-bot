@@ -7,6 +7,8 @@ const STATUS_STYLES = {
   paused: { label: "Paused", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
   attention: { label: "Attention required", dot: "bg-amber-500", text: "text-amber-900", bg: "bg-amber-50 border-amber-300" },
   error: { label: "Error", dot: "bg-red-500", text: "text-red-800", bg: "bg-red-50 border-red-200" },
+  // trader.py skips an account with no linked Telegram chat entirely.
+  needs_telegram: { label: "Waiting for Telegram link - not scanning yet", dot: "bg-amber-500", text: "text-amber-900", bg: "bg-amber-50 border-amber-300" },
 };
 
 const SIGNAL_LABELS = {
@@ -30,7 +32,8 @@ function formatRelativeTime(iso) {
 // fields mean the same thing in either mode, just against different
 // money.
 export default function BotStatusCard({ account }) {
-  const style = STATUS_STYLES[account.runtime_status] ?? STATUS_STYLES.active;
+  const needsTelegram = account.notification_channel === "telegram" && !account.notification_target;
+  const style = needsTelegram ? STATUS_STYLES.needs_telegram : STATUS_STYLES[account.runtime_status] ?? STATUS_STYLES.active;
   const lastScanned = formatRelativeTime(account.last_scanned_at);
   const signalLabel = account.last_signal ? SIGNAL_LABELS[account.last_signal] ?? account.last_signal : null;
   const lastSignalTime = formatRelativeTime(account.last_signal_at);

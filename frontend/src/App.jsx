@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { api } from "./api/client.js";
+import { ApiError, api } from "./api/client.js";
 import AppShell from "./components/AppShell.jsx";
 import Footer from "./components/Footer.jsx";
 import HowToUseGuide from "./components/HowToUseGuide.jsx";
 import LegalConsentGate from "./components/LegalConsentGate.jsx";
+import TelegramLinkBanner from "./components/TelegramLinkBanner.jsx";
 import { AccountProvider, useAccount } from "./context/AccountContext.jsx";
 import { PRIVACY_POLICY, RISK_DISCLOSURE, TERMS_OF_SERVICE } from "./legalContent.js";
 import Account from "./pages/Account.jsx";
@@ -115,31 +116,50 @@ export default function App() {
   );
 }
 
-// Decides Onboarding vs. the navigable app off whether an account
-// already exists and is linked, rather than off the URL - so a
-// logged-in customer lands in the right place on a fresh page load no
-// matter what's in the hash.
+// Every customer gets a trading account automatically (BTC/USDT, Spot, 1%
+// risk - all editable later from Bot Settings), so signup/login goes
+// straight to the Testnet dashboard. Telegram is still required before
+// the bot does anything (trader.py skips an account with no
+// notification_target): until it is linked a banner says so on every
+// page, instead of a full-screen gate in front of the dashboard. If the
+// automatic creation fails, the original setup form is shown as the
+// fallback.
 function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
   const { account, refreshAccount } = useAccount();
+  const [autoCreate, setAutoCreate] = useState("idle"); // idle | creating | done
+  const attempted = useRef(false);
 
-  if (account === undefined) {
+  useEffect(() => {
+    if (account !== null || attempted.current) return;
+    attempted.current = true;
+    setAutoCreate("creating");
+    api
+      .post("/account", { pair: "BTC/USDT", market_type: "spot", notification_channel: "telegram", risk_pct: 1 })
+      .catch((err) => {
+        // Already exists (e.g. the account lookup failed transiently): fine, just reload it.
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+      })
+      .then(() => refreshAccount())
+      .catch(() => {})
+      .finally(() => setAutoCreate("done"));
+  }, [account]);
+
+  if (account === undefined || (account === null && autoCreate !== "done")) {
     return <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
   }
 
-  // Onboarding isn't done until the notification channel is linked -
-  // trader.py itself refuses to trade an account with no
-  // notification_target, so there's no point handing the customer a
-  // dashboard for an account that can't trade yet.
-  const needsOnboarding = !account || (account.notification_channel === "telegram" && !account.notification_target);
-  if (needsOnboarding) {
+  if (!account) {
     return <Onboarding customer={customer} account={account} onLogout={onLogout} onProgress={refreshAccount} />;
   }
+
+  const needsTelegram = account.notification_channel === "telegram" && !account.notification_target;
 
   const Page = NAV_PAGES[route];
   const activeRoute = Page ? route : "dashboard";
 
   return (
     <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code}>
+      {needsTelegram && route !== "notifications" && <TelegramLinkBanner />}
       {Page ? (
         <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} />
       ) : (
