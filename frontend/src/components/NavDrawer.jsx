@@ -19,7 +19,7 @@ export default function NavDrawer({ route, onLogout, botCode }) {
     <>
       <header className="sticky top-0 z-30 flex items-center justify-between bg-ink px-4 py-3 shadow-sm">
         <button type="button" onClick={() => go("dashboard")} className="text-left">
-          <BrandLogo subtitle={botCode || "Trading Bot"} />
+          <BrandLogo subtitle={botCode || null} />
         </button>
         <button
           type="button"
