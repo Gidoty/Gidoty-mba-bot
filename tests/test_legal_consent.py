@@ -255,7 +255,10 @@ def test_enable_live_trading_records_risk_disclosure_acceptance_only_on_success(
 
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 200
-        assert response.json()["mode"] == "live"
+        # Enabling live trading authorizes going live; it never starts
+        # anything by itself (see onboarding.resolve_trading_mode's fifth
+        # gate) - this test is only about the acceptance row below.
+        assert response.json()["mode"] == "paper"
 
     with session_scope() as session:
         customer = session.query(Customer).filter(Customer.email == "riskok@example.com").one()
@@ -306,7 +309,10 @@ def test_payment_alone_still_cannot_activate_live_trading_with_consent_wired_in(
 
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
-        assert enabled.json()["mode"] == "live"
+        # Enabling live trading authorizes going live; it never starts
+        # anything by itself - see onboarding.resolve_trading_mode's
+        # fifth gate and test_api_e2e.py for the full Start Bot path.
+        assert enabled.json()["mode"] == "paper"
 
 
 # --- Testnet/Mainnet safety gates: unaffected by any of the above ---
@@ -330,7 +336,10 @@ def test_downgrading_to_testnet_still_disables_live_trading_with_consent_wired_i
         _retag_mainnet(client)
         _make_eligible("downgradeconsent@example.com")
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
-        assert enabled.json()["mode"] == "live"
+        assert enabled.status_code == 200
+        client.patch("/api/account", json={"allocated_capital": 500})
+        started = client.post("/api/account/start-bot", json={"confirm": True})
+        assert started.json()["mode"] == "live"
 
         downgraded = client.put(
             "/api/account/credentials",

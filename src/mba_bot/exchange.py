@@ -82,6 +82,42 @@ def safe_error_message(exc: Exception) -> str:
     return "An unexpected error occurred while checking the market for this account."
 
 
+async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
+    """Read-only. Returns the account's currently configured leverage for
+    `pair`/`side` ("long" or "short"), or None if it can't be determined.
+
+    This module never calls `set_leverage` - reading ccxt's own source
+    for `binanceusdm.set_leverage` shows it is a mutating call with real,
+    account-wide, cross-position side effects (it can change margin mode
+    and liquidation prices for existing positions), which a trading bot
+    must never do silently on a customer's behalf. `fetch_leverage`/
+    `fetch_leverages`, by contrast, are plain read-only GETs (they back
+    onto Binance's symbol-config/account-info endpoints) - safe to call
+    every cycle purely to learn what leverage is already configured.
+
+    A None return means the caller's margin ceiling (risk.
+    apply_margin_ceiling) is simply skipped for this entry - never
+    treated as "assume some leverage" or "assume no leverage". The
+    independent notional ceiling (risk.apply_exposure_ceiling) still
+    applies regardless of this result, so this is never the only safety
+    net standing between a tight stop and an oversized position.
+    """
+    try:
+        leverage = await client.fetch_leverage(pair)
+    except Exception:
+        return None
+    if not isinstance(leverage, dict):
+        return None
+    value = leverage.get("longLeverage") if side == "long" else leverage.get("shortLeverage")
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) -> float:
     balance = await client.fetch_balance()
     quote = quote_currency(pair)

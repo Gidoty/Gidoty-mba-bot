@@ -64,6 +64,21 @@ class Settings:
     risk_pct_default: float
     risk_pct_max: float
 
+    # Caps notional exposure (quantity * entry_price) at
+    # `effective_capital * max_notional_multiplier` for every live entry
+    # - see risk.apply_exposure_ceiling for the exact formula and why it
+    # exists (a tight ATR stop alone has no limit on how large the
+    # risk-% formula can size a position). 1.0 is the natural, no-op
+    # value for Spot (you can never spend more than you have there).
+    # Deliberately independent of whatever leverage is actually
+    # configured on the exchange account - see risk.apply_margin_ceiling
+    # for the separate check that does use the real, read-only leverage
+    # value. Conservative default: well under what even 1x-leveraged
+    # Spot would ever hit, but gives Futures some genuine room before
+    # the ceiling binds - an operator decision, not a mathematical one,
+    # so it is intentionally configurable rather than hardcoded.
+    max_notional_multiplier: float
+
     # Shared platform-level Binance testnet keys used for every account's
     # paper-trading trial - never exposed to customers. Split by market
     # type because Binance's spot testnet (testnet.binance.vision) and
@@ -116,6 +131,7 @@ def load_settings() -> Settings:
         atr_rolling_window=_env_int("ATR_ROLLING_WINDOW", 50),
         risk_pct_default=_env_float("RISK_PCT_DEFAULT", 1.0),
         risk_pct_max=_env_float("RISK_PCT_MAX", 2.0),
+        max_notional_multiplier=_env_float("MAX_NOTIONAL_MULTIPLIER", 3.0),
         # TESTNET_API_KEY/SECRET are the legacy, pre-split var names -
         # kept as a fallback for the spot pair only, so an existing
         # deployment's working spot paper trading doesn't go dark the

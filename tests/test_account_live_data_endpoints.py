@@ -102,7 +102,14 @@ def _go_live(client: TestClient, email: str) -> None:
     _make_eligible(email)
     enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
     assert enabled.status_code == 200
-    assert enabled.json()["mode"] == "live"
+    # Enabling live trading authorizes going live; it never starts
+    # anything by itself - the account only reaches mode="live" once
+    # Trading Capital is configured and Start Bot is explicitly pressed.
+    capital = client.patch("/api/account", json={"allocated_capital": 500})
+    assert capital.status_code == 200
+    started = client.post("/api/account/start-bot", json={"confirm": True})
+    assert started.status_code == 200
+    assert started.json()["mode"] == "live"
 
 
 # --- GET /api/account/balance ---

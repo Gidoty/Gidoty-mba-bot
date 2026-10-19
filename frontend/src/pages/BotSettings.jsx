@@ -11,18 +11,30 @@ export default function BotSettings() {
   const [pair, setPair] = useState(account.pair);
   const [marketType, setMarketType] = useState(account.market_type);
   const [riskPct, setRiskPct] = useState(String(account.risk_pct));
+  const [pairSelectionMode, setPairSelectionMode] = useState(account.pair_selection_mode);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [togglingPause, setTogglingPause] = useState(false);
+  const [capitalInput, setCapitalInput] = useState(account.allocated_capital != null ? String(account.allocated_capital) : "");
+  const [savingCapital, setSavingCapital] = useState(false);
+  const [capitalError, setCapitalError] = useState(null);
 
-  const dirty = pair !== account.pair || marketType !== account.market_type || riskPct !== String(account.risk_pct);
+  const dirty =
+    pair !== account.pair ||
+    marketType !== account.market_type ||
+    riskPct !== String(account.risk_pct) ||
+    pairSelectionMode !== account.pair_selection_mode;
 
   async function save(e) {
     e.preventDefault();
     setError(null);
     setSaving(true);
     try {
-      await api.patch("/account", { pair, market_type: marketType, risk_pct: riskPct ? Number(riskPct) : undefined });
+      await api.patch("/account", {
+        pair,
+        market_type: marketType,
+        risk_pct: riskPct ? Number(riskPct) : undefined,
+        pair_selection_mode: pairSelectionMode,
+      });
       await refreshAccount();
     } catch (err) {
       setError(err.message);
@@ -31,16 +43,22 @@ export default function BotSettings() {
     }
   }
 
-  async function togglePause() {
-    setError(null);
-    setTogglingPause(true);
+  async function saveCapital(e) {
+    e.preventDefault();
+    setCapitalError(null);
+    const value = Number(capitalInput);
+    if (!capitalInput || !(value > 0)) {
+      setCapitalError("Enter a trading capital amount greater than 0.");
+      return;
+    }
+    setSavingCapital(true);
     try {
-      await api.patch("/account", { is_active: !account.is_active });
+      await api.patch("/account", { allocated_capital: value });
       await refreshAccount();
     } catch (err) {
-      setError(err.message);
+      setCapitalError(err.message);
     } finally {
-      setTogglingPause(false);
+      setSavingCapital(false);
     }
   }
 
@@ -49,33 +67,65 @@ export default function BotSettings() {
       <PageHeader title="Bot Settings" subtitle="How your bot is configured." />
       <ErrorBanner message={error} />
 
-      <Card className="mb-4 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-ink">Trading</p>
-          <p className="text-xs text-slate-500">{account.is_active ? "The bot can open new trades." : "Paused - no new trades will open."}</p>
+      <Card className="mb-4">
+        <div className="flex items-center gap-1">
+          <p className="text-sm font-medium text-ink">Trading Capital</p>
+          <HelpTip text="The maximum amount of your Binance balance the bot may use as its sizing base. Your funds stay in your own Binance account at all times - this is a ceiling, not a transfer. The bot will never use more than what Binance actually shows as available, even if this is set higher." />
         </div>
-        <button
-          onClick={togglePause}
-          disabled={togglingPause}
-          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50 disabled:opacity-60"
-        >
-          {account.is_active ? "Pause" : "Resume"}
-        </button>
+        <p className="mt-1 text-xs text-slate-500">
+          {account.allocated_capital != null
+            ? `Currently set to ${account.allocated_capital}. You can raise or lower it at any time, even with a trade open - it only affects your bot's next new trade.`
+            : "Not configured yet. Required before you can start the bot on a live account."}
+        </p>
+        <ErrorBanner message={capitalError} />
+        <form onSubmit={saveCapital} className="mt-3 flex items-end gap-2">
+          <label className="block">
+            <span className="text-xs font-medium text-slate-600">Amount</span>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={capitalInput}
+              onChange={(e) => setCapitalInput(e.target.value)}
+              className="mt-1 w-40 rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={savingCapital}
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {savingCapital ? "Saving..." : "Save"}
+          </button>
+        </form>
       </Card>
 
       <form onSubmit={save} className="rounded-lg border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-1">
           <h2 className="text-sm font-medium text-ink">Trading settings</h2>
-          <HelpTip text="You can change your pair, market, or risk at any time. Switching pair or market is blocked while a trade is open, so nothing gets left unmanaged." />
+          <HelpTip text="You can change your pair, market, risk, or pair selection mode at any time. Switching any of them is blocked while a trade is open, so nothing gets left unmanaged." />
         </div>
 
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
           <label className="block">
-            <span className="text-xs font-medium text-slate-600">Pair</span>
+            <span className="text-xs font-medium text-slate-600">Pair selection</span>
+            <select
+              value={pairSelectionMode}
+              onChange={(e) => setPairSelectionMode(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="manual">Manual</option>
+              <option value="auto">Auto Select</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-medium text-slate-600">Pair{pairSelectionMode === "auto" ? " (Auto Select active)" : ""}</span>
             <select
               value={pair}
               onChange={(e) => setPair(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              disabled={pairSelectionMode === "auto"}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
             >
               {PAIRS.map((p) => (
                 <option key={p}>{p}</option>

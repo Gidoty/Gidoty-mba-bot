@@ -29,7 +29,7 @@ from mba_bot.db import init_db, list_active_accounts, session_scope
 from mba_bot.indicators import ema
 from mba_bot.models import ApiCredential, Customer, TradingAccount
 from mba_bot.notifications import Notifier
-from mba_bot.onboarding import TradingMode, enable_live_trading, resolve_trading_mode, start_trial
+from mba_bot.onboarding import TradingMode, enable_live_trading, resolve_trading_mode, start_bot, start_trial
 from mba_bot.trader import process_account
 
 STRATEGY_KWARGS = dict(ema_fast_period=2, ema_slow_period=3, atr_period=2, atr_flat_threshold=0.75, atr_rolling_window=3)
@@ -114,6 +114,7 @@ def _settings(**overrides) -> Settings:
         atr_rolling_window=STRATEGY_KWARGS["atr_rolling_window"],
         risk_pct_default=1.0,
         risk_pct_max=2.0,
+        max_notional_multiplier=3.0,
         testnet_spot_api_key="PLATFORM-TESTNET-SPOT-KEY",
         testnet_spot_api_secret="PLATFORM-TESTNET-SPOT-SECRET",
         testnet_futures_api_key="PLATFORM-TESTNET-FUTURES-KEY",
@@ -147,6 +148,8 @@ def _make_account(
     live_trading_enabled: bool = False,
     credential_environment: str | None = "mainnet",
     is_active: bool = True,
+    bot_started: bool = False,
+    allocated_capital: float | None = None,
 ) -> str:
     """credential_environment=None means no stored credential at all;
     any other value stores one with a SYNTHETIC key/secret the test
@@ -167,6 +170,8 @@ def _make_account(
         live_bypass_accepted_at=now if live_bypass_accepted else None,
         live_trading_enabled_at=enable_live_trading(now=now) if live_trading_enabled else None,
         is_active=is_active,
+        bot_started_at=start_bot(now=now) if bot_started else None,
+        allocated_capital=allocated_capital,
     )
     session.add(account)
     session.flush()
@@ -247,29 +252,32 @@ def test_legacy_unpaid_account_with_stored_mainnet_credential_places_no_order_on
 def test_resolve_trading_mode_never_resolves_live_when_unpaid_under_any_other_combination():
     now = datetime.now(timezone.utc)
     trial_ends_at = now - timedelta(days=1)  # expired, i.e. eligible by time
-    for bypass_accepted, live_enabled, mainnet_cred in itertools.product([False, True], repeat=3):
+    for bypass_accepted, live_enabled, mainnet_cred, bot_started in itertools.product([False, True], repeat=4):
         state = resolve_trading_mode(
             trial_ends_at=trial_ends_at,
             live_bypass_accepted_at=now if bypass_accepted else None,
             has_paid=False,
             live_trading_enabled_at=now if live_enabled else None,
             has_mainnet_credential=mainnet_cred,
+            bot_started_at=now if bot_started else None,
             now=now,
         )
         assert state.mode == TradingMode.PAPER, (
             f"unpaid account resolved to {state.mode} with bypass_accepted={bypass_accepted}, "
-            f"live_enabled={live_enabled}, mainnet_cred={mainnet_cred}"
+            f"live_enabled={live_enabled}, mainnet_cred={mainnet_cred}, bot_started={bot_started}"
         )
 
-    # Control: the same eligibility/enabled/credential combination, paid,
-    # genuinely resolves LIVE - proving the test above isn't vacuous
-    # (resolve_trading_mode isn't just broken/always-paper).
+    # Control: the same eligibility/enabled/credential/started
+    # combination, paid, genuinely resolves LIVE - proving the test
+    # above isn't vacuous (resolve_trading_mode isn't just
+    # broken/always-paper).
     live_state = resolve_trading_mode(
         trial_ends_at=trial_ends_at,
         live_bypass_accepted_at=now,
         has_paid=True,
         live_trading_enabled_at=now,
         has_mainnet_credential=True,
+        bot_started_at=now,
         now=now,
     )
     assert live_state.mode == TradingMode.LIVE
@@ -416,10 +424,11 @@ def test_fully_authorized_and_active_account_can_reach_live_order_placement(tmp_
     """The positive control for the whole file: proves the gates above
     aren't accidentally blocking legitimate live trading too. Every
     condition satisfied (paid, eligible, mainnet credential, live
-    trading enabled) AND the account is active ("Start Bot" equivalent)
-    - only then does a real buy signal result in create_market_order
-    actually being called, using the account's own credential path
-    (sandbox=False), not the platform testnet one."""
+    trading enabled, bot explicitly started, trading capital
+    configured) AND the account is active - only then does a real buy
+    signal result in create_market_order actually being called, using
+    the account's own credential path (sandbox=False), not the
+    platform testnet one."""
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings()
     captured = {}
@@ -443,6 +452,8 @@ def test_fully_authorized_and_active_account_can_reach_live_order_placement(tmp_
             trial_expired=True,
             live_trading_enabled=True,
             is_active=True,
+            bot_started=True,
+            allocated_capital=10_000.0,
         )
 
     asyncio.run(scheduler._run_one(account_id, settings))

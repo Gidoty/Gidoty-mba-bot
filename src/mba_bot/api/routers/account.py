@@ -22,6 +22,7 @@ from ...onboarding import (
     enable_live_trading,
     is_live_eligible,
     resolve_trading_mode,
+    start_bot,
     start_trial,
 )
 from ...risk import InvalidRiskParameters, clamp_risk_pct
@@ -36,6 +37,7 @@ from ..schemas import (
     EnableLiveTradingRequest,
     LiveBypassRequest,
     PositionOut,
+    StartBotRequest,
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -54,16 +56,27 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         has_paid=has_paid,
         live_trading_enabled_at=account.live_trading_enabled_at,
         has_mainnet_credential=account.has_mainnet_credential,
+        bot_started_at=account.bot_started_at,
     )
 
-    # Priority order: a customer's own pause always wins (nothing else
-    # matters if they turned it off themselves); an error is the most
-    # actionable thing to surface next, even if a trade happens to be
-    # open; otherwise an open trade is worth calling out over the
-    # default "scanning" state. "error" is never sticky past the
-    # problem - trader.py clears last_error on the next healthy cycle.
+    # Priority order: `is_active` has no customer-facing control anymore
+    # (Pause was removed - see api/routers/account.py's update_account),
+    # but the column and this check stay as the internal/admin-only
+    # kill switch the scheduler has always honored (db.list_active_accounts,
+    # scheduler.py's _run_one) - "paused" here would only ever be seen if
+    # something sets it directly, not through any customer action.
+    # "not_started" is specific to the live track: every other gate met
+    # (paid, mainnet credential, live trading enabled) except the
+    # customer hasn't pressed Start Bot yet - doesn't apply to Testnet,
+    # where scanning has always been automatic and unlimited. An error
+    # is the next most actionable thing to surface, even if a trade
+    # happens to be open; otherwise an open trade is worth calling out
+    # over the default "scanning" state. "error" is never sticky past
+    # the problem - trader.py clears last_error on the next healthy cycle.
     if not account.is_active:
         runtime_status = "paused"
+    elif has_paid and account.has_mainnet_credential and account.live_trading_enabled_at is not None and account.bot_started_at is None:
+        runtime_status = "not_started"
     elif account.last_error is not None:
         runtime_status = "error"
     elif get_open_trade(db, account.id) is not None:
@@ -87,6 +100,9 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         credential_environment=account.credential.environment if account.credential else None,
         has_mainnet_credential=account.has_mainnet_credential,
         live_trading_enabled_at=account.live_trading_enabled_at,
+        bot_started_at=account.bot_started_at,
+        allocated_capital=account.allocated_capital,
+        pair_selection_mode=account.pair_selection_mode,
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -192,15 +208,20 @@ def update_account(
 
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
-    if changing_pair or changing_market:
+    changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
+    if changing_pair or changing_market or changing_selection_mode:
         # Payment unlocks the account, not a pair - a paid customer can
         # switch pairs freely. What they can't do is switch out from
-        # under a position the bot is still managing.
-        _require_no_open_trade(db, account, action="switching pair or market type")
+        # under a position the bot is still managing - and that applies
+        # equally to handing pair selection over to/back from Auto Mode,
+        # not just to the pair itself.
+        _require_no_open_trade(db, account, action="changing pair, market type, or pair selection mode")
         if changing_pair:
             account.pair = body.pair
         if changing_market:
             account.market_type = body.market_type
+        if changing_selection_mode:
+            account.pair_selection_mode = body.pair_selection_mode
         # Stale readings from the old configuration shouldn't be shown
         # against the new one.
         account.last_signal = None
@@ -214,8 +235,12 @@ def update_account(
             account.risk_pct = clamp_risk_pct(body.risk_pct, max_risk_pct=settings.risk_pct_max)
         except InvalidRiskParameters as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    if body.is_active is not None:
-        account.is_active = body.is_active
+    if body.allocated_capital is not None:
+        # Safe to change freely, even mid-trade - unlike pair/market/
+        # credential, it only affects sizing at the *next* entry, never
+        # how an already-open position is managed (same reasoning
+        # risk_pct above has always been editable under).
+        account.allocated_capital = body.allocated_capital
     return _to_account_out(account, has_paid=customer.has_paid, db=db)
 
 
@@ -264,6 +289,13 @@ def update_credentials(
     if body.environment != "mainnet" and account.live_trading_enabled_at is not None:
         account.live_trading_enabled_at = None
         account.live_trading_disclosure_text = None
+        # A "started" bot with no valid authorization backing it is a
+        # stale, confusing state to leave lying around - clear it too,
+        # same reasoning as live_trading_enabled_at above. The mode gate
+        # (resolve_trading_mode) already fails closed regardless of
+        # whether this cleanup happens; this is just hygiene, not a
+        # second safety net this specific line is load-bearing for.
+        account.bot_started_at = None
 
     return _to_account_out(account, has_paid=customer.has_paid, db=db)
 
@@ -321,6 +353,44 @@ def enable_live_trading_route(
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
+    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+
+
+@router.post("/start-bot", response_model=AccountOut)
+def start_bot_route(
+    body: StartBotRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)
+) -> AccountOut:
+    """The final, separate action - enabling live trading never starts
+    anything by itself (see enable_live_trading_route above); this is
+    the one and only thing that can set bot_started_at, which
+    resolve_trading_mode's fifth gate requires before it will ever
+    return LIVE. Every prerequisite is re-checked here independently of
+    whatever already got this account to live_trading_enabled_at, same
+    "check everything before any write" discipline as that endpoint."""
+    account = _require_account(customer)
+
+    if not customer.has_paid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock before starting the bot")
+
+    eligible = is_live_eligible(trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at)
+    if not eligible:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this account is not yet eligible for live trading")
+
+    if not account.has_mainnet_credential:
+        raise HTTPException(status.HTTP_409_CONFLICT, "connect a mainnet Binance account before starting the bot")
+
+    if account.live_trading_enabled_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "enable live trading and accept the risk disclosure before starting the bot")
+
+    if account.allocated_capital is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "configure your trading capital before starting the bot")
+
+    if account.bot_started_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the bot is already started for this account")
+
+    _require_no_open_trade(db, account, action="starting the bot")
+
+    account.bot_started_at = start_bot()
     return _to_account_out(account, has_paid=customer.has_paid, db=db)
 
 

@@ -191,10 +191,32 @@ def test_runtime_status_defaults_to_active_with_no_error_or_open_trade():
 
 
 def test_runtime_status_reflects_paused():
+    # There is no customer-facing Pause any more - `is_active` is an
+    # internal/admin-only kill switch now (see api/routers/account.py's
+    # update_account, which no longer accepts it), so this sets it
+    # directly in the DB, the same way an admin tool would, rather than
+    # through the public API.
     with TestClient(app, base_url="https://testserver") as client:
         _signup_with_account(client, "status2@example.com")
-        response = client.patch("/api/account", json={"is_active": False})
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.email == "status2@example.com").one()
+            customer.account.is_active = False
+        response = client.get("/api/account")
         assert response.json()["runtime_status"] == "paused"
+
+
+def test_is_active_is_not_a_customer_settable_field():
+    # `is_active` was removed from AccountUpdateRequest - Pydantic
+    # silently drops unknown fields by default, so this confirms the
+    # *effect* instead: sending it changes nothing, there is no way for
+    # a customer to pause their own account through this endpoint.
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "status2b@example.com")
+        response = client.patch("/api/account", json={"is_active": False})
+        assert response.status_code == 200
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.email == "status2b@example.com").one()
+            assert customer.account.is_active is True
 
 
 def test_runtime_status_reflects_trade_open():

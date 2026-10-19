@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -51,16 +51,36 @@ def session_scope() -> Iterator[Session]:
 
 
 def list_active_accounts(session: Session) -> list[TradingAccount]:
-    """Accounts the scheduler should actually trade this tick: anything
-    the customer hasn't paused (`is_active`). Payment is deliberately NOT
-    a filter here any more - an unpaid account still runs, it just never
-    gets past PAPER, because `resolve_trading_mode` (onboarding.py) is
-    where `Customer.has_paid` is actually enforced, keyed off this same
+    """Accounts the scheduler should actually process this tick: anything
+    not switched off internally (`is_active` - there is no customer-facing
+    Pause any more, this is an admin/internal kill switch only, see
+    api/routers/account.py), OR, regardless of that flag, any account with
+    a currently open trade. That second half is load-bearing, not
+    defensive: `is_active=False` stops `_run_one` from calling
+    `process_account` at all, and an open position with nobody calling
+    `process_account` gets zero stop-loss/crossover-exit monitoring and
+    zero chance to close - exactly the "orphaned real position" failure
+    mode this project treats as unacceptable. So a position being open
+    always wins over the kill switch; the switch still fully prevents
+    *new* entries on an inactive account, since `_maybe_enter` is only
+    ever reached when there is no open trade.
+
+    Payment is deliberately NOT a filter here either - an unpaid account
+    still runs, it just never gets past PAPER, because `resolve_trading_mode`
+    (onboarding.py) is where `Customer.has_paid` (and, since the Start Bot
+    gate, `bot_started_at`) is actually enforced, keyed off this same
     account's `customer` relationship. Keeping that check in exactly one
     place means a free, unlimited paper trial for anyone and a hard
-    payment wall in front of LIVE can't drift out of sync with each
+    payment/start wall in front of LIVE can't drift out of sync with each
     other. See ARCHITECTURE.md."""
-    return list(session.scalars(select(TradingAccount).where(TradingAccount.is_active.is_(True))))
+    open_trade_account_ids = select(Trade.account_id).where(Trade.status == "open")
+    return list(
+        session.scalars(
+            select(TradingAccount).where(
+                or_(TradingAccount.is_active.is_(True), TradingAccount.id.in_(open_trade_account_ids))
+            )
+        )
+    )
 
 
 def get_open_trade(session: Session, account_id: str) -> Trade | None:

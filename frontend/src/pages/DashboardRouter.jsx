@@ -6,6 +6,7 @@ import ActivationFlow from "./dashboard/ActivationFlow.jsx";
 import ConnectBinance from "./dashboard/ConnectBinance.jsx";
 import LiveDashboard from "./dashboard/LiveDashboard.jsx";
 import ReadyForLive from "./dashboard/ReadyForLive.jsx";
+import StartBot from "./dashboard/StartBot.jsx";
 import TestnetDashboard from "./dashboard/TestnetDashboard.jsx";
 
 function hasPaystackReturnParams() {
@@ -23,10 +24,12 @@ function clearPaystackReturnParams() {
 // The single state machine that decides what "Dashboard" actually shows:
 // Testnet (unpaid) -> Activation (just returned from Paystack) ->
 // Connect Binance (paid, no mainnet credential) -> Ready for Live (paid,
-// mainnet credential, not yet enabled) -> Live Dashboard. Every branch
-// here reads fields the backend already computes (has_paid,
-// has_mainnet_credential, live_trading_enabled_at, mode) - nothing here
-// decides trading permissions, it only decides which screen to show.
+// mainnet credential, not yet enabled) -> Start Bot (enabled, not yet
+// started - see onboarding.resolve_trading_mode's fifth gate) -> Live
+// Dashboard. Every branch here reads fields the backend already computes
+// (has_paid, has_mainnet_credential, live_trading_enabled_at,
+// bot_started_at, mode) - nothing here decides trading permissions, it
+// only decides which screen to show.
 export default function DashboardRouter({ customer, onCustomerChanged }) {
   const { account, refreshAccount } = useAccount();
   const [activating, setActivating] = useState(hasPaystackReturnParams());
@@ -65,5 +68,9 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
     return <ConnectBinance onAccountChanged={refreshAccount} />;
   }
 
-  return <ReadyForLive account={account} onAccountChanged={refreshAccount} />;
+  if (account.live_trading_enabled_at == null) {
+    return <ReadyForLive account={account} onAccountChanged={refreshAccount} />;
+  }
+
+  return <StartBot account={account} onAccountChanged={refreshAccount} />;
 }

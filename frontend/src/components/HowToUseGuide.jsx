@@ -19,11 +19,11 @@ const STEPS = [
   },
   {
     title: "5. Connect Binance and go live",
-    body: "Once activated, connect a Binance account with a trade-only key, then explicitly enable live trading - two separate, deliberate steps, each with its own confirmation.",
+    body: "Once activated, connect a Binance account with a trade-only key, then explicitly enable live trading, set your Trading Capital, and press Start Bot - each a separate, deliberate step with its own confirmation.",
   },
   {
     title: "6. Manage your bot",
-    body: "Pause or resume trading anytime from Bot Settings. Your bot code in the menu is your reference number - have it ready if you ever contact support.",
+    body: "Once started, the bot runs continuously on our servers - there is no Pause. Adjust your pair, risk, capital, or pair selection mode anytime from Bot Settings. Your bot code in the menu is your reference number - have it ready if you ever contact support.",
   },
 ];
 

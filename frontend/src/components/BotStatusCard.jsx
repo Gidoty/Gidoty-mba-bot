@@ -2,7 +2,8 @@ import HelpTip from "./HelpTip.jsx";
 
 const STATUS_STYLES = {
   active: { label: "Active - scanning market", dot: "bg-accent", text: "text-accent-dark", bg: "bg-accent/5 border-accent/30" },
-  trade_open: { label: "Position open", dot: "bg-sky-500", text: "text-sky-800", bg: "bg-sky-50 border-sky-200" },
+  trade_open: { label: "Position open - monitoring", dot: "bg-sky-500", text: "text-sky-800", bg: "bg-sky-50 border-sky-200" },
+  not_started: { label: "Not started", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
   paused: { label: "Paused", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
   error: { label: "Needs attention", dot: "bg-red-500", text: "text-red-800", bg: "bg-red-50 border-red-200" },
 };
@@ -41,8 +42,9 @@ export default function BotStatusCard({ account }) {
         <HelpTip
           text={
             "Active: the bot is checking the market on schedule - this does not always mean a trade is coming. " +
-            "Position open: it's currently holding a trade. Paused: you turned trading off yourself. Needs " +
-            "attention: the last check hit a problem - see the message below."
+            "Position open: it's currently holding and monitoring a trade. Not started: live trading is " +
+            "authorized but you haven't pressed Start Bot yet. Needs attention: the last check hit a problem - " +
+            "see the message below."
           }
         />
       </div>

@@ -141,11 +141,23 @@ class CredentialUpdateRequest(BaseModel):
         return _validate_choice(v, CREDENTIAL_ENVIRONMENTS, "environment")
 
 
+PAIR_SELECTION_MODES = ("manual", "auto")
+
+
 class AccountUpdateRequest(BaseModel):
     risk_pct: float | None = Field(default=None, gt=0, le=100)
-    is_active: bool | None = None
     pair: str | None = None
     market_type: str | None = None
+    # How much of the customer's available Binance balance the bot may
+    # use - see models.py's TradingAccount.allocated_capital. Omitting
+    # this field means "don't change it", same convention every other
+    # optional field on this request already uses; there is no way to
+    # explicitly clear it back to "not configured" through this
+    # endpoint, by design - decision #10 of the capital-allocation spec
+    # treats "not configured" as a safety-relevant state, not something
+    # to toggle back into casually.
+    allocated_capital: float | None = Field(default=None, gt=0)
+    pair_selection_mode: str | None = None
 
     @field_validator("pair")
     @classmethod
@@ -156,6 +168,11 @@ class AccountUpdateRequest(BaseModel):
     @classmethod
     def _valid_market_type(cls, v: str | None) -> str | None:
         return v if v is None else _validate_choice(v, SUPPORTED_MARKET_TYPES, "market_type")
+
+    @field_validator("pair_selection_mode")
+    @classmethod
+    def _valid_pair_selection_mode(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_choice(v, PAIR_SELECTION_MODES, "pair_selection_mode")
 
 
 class LiveBypassRequest(BaseModel):
@@ -188,6 +205,23 @@ class EnableLiveTradingRequest(BaseModel):
         return v
 
 
+class StartBotRequest(BaseModel):
+    """The final, separate explicit action - enabling live trading
+    authorizes going live, it does not start anything by itself. See
+    onboarding.resolve_trading_mode's fifth gate and
+    api/routers/account.py's start_bot_route for the full prerequisite
+    chain this is checked against server-side."""
+
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def _must_confirm(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("confirm must be true - this endpoint only does something when you're confirming")
+        return v
+
+
 class AccountOut(BaseModel):
     id: str
     bot_code: str | None
@@ -200,6 +234,10 @@ class AccountOut(BaseModel):
     trial_ends_at: datetime
     paper_balance: float
     live_bypass_accepted_at: datetime | None
+    # No customer-facing control sets this anymore (Pause was removed -
+    # see api/routers/account.py); kept read-only here purely so the
+    # frontend can still see the internal/admin kill switch if it's ever
+    # used, same as `runtime_status`'s "paused" value.
     is_active: bool
 
     # Environment/live-activation state, kept separate from `mode` and
@@ -209,12 +247,18 @@ class AccountOut(BaseModel):
     credential_environment: str | None  # "testnet" | "mainnet" | "unknown" | None (no credential on file yet)
     has_mainnet_credential: bool
     live_trading_enabled_at: datetime | None
+    # The explicit "Start Bot" action - set only by POST
+    # /api/account/start-bot, never by enabling live trading itself.
+    # See onboarding.resolve_trading_mode's fifth gate.
+    bot_started_at: datetime | None
+    allocated_capital: float | None
+    pair_selection_mode: str  # "manual" | "auto"
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so
     # the frontend never has to re-derive "is this actually working" from
     # raw timestamps itself.
-    runtime_status: str  # "paused" | "error" | "trade_open" | "active"
+    runtime_status: str  # "paused" | "not_started" | "error" | "trade_open" | "active"
     last_scanned_at: datetime | None
     last_signal: str | None  # "none" | "bullish_crossover" | "bearish_crossover"
     last_signal_at: datetime | None

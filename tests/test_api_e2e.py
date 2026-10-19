@@ -142,11 +142,31 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
 
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
-        assert enabled.json()["mode"] == "live"
+        # Enabling live trading authorizes going live; it never starts
+        # anything by itself - the account stays in PAPER until Trading
+        # Capital is configured and Start Bot is explicitly pressed.
+        assert enabled.json()["mode"] == "paper"
         assert enabled.json()["live_trading_enabled_at"] is not None
+        assert enabled.json()["bot_started_at"] is None
 
         again_enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert again_enabled.status_code == 409
+
+        # Start Bot is refused until Trading Capital is configured.
+        premature_start = client.post("/api/account/start-bot", json={"confirm": True})
+        assert premature_start.status_code == 409
+
+        capital = client.patch("/api/account", json={"allocated_capital": 500})
+        assert capital.status_code == 200
+        assert capital.json()["mode"] == "paper"  # still not started
+
+        started = client.post("/api/account/start-bot", json={"confirm": True})
+        assert started.status_code == 200
+        assert started.json()["mode"] == "live"
+        assert started.json()["bot_started_at"] is not None
+
+        again_started = client.post("/api/account/start-bot", json={"confirm": True})
+        assert again_started.status_code == 409
 
         update = client.patch("/api/account", json={"risk_pct": 1.5})
         assert update.status_code == 200

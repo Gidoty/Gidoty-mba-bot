@@ -122,10 +122,15 @@ it just now also answers requests instead of only looping silently.
   free trial is unlimited; payment buys *entitlement* to live trading,
   never live trading itself - see the next bullet for why that's now a
   hard separation, not a one-flag gate. A new account's
-  `TradingAccount.is_active` defaults `True` (that field is the
-  customer's own pause/resume toggle, nothing more) and
+  `TradingAccount.is_active` defaults `True`. There is no customer-facing
+  Pause/Resume control any more (`AccountUpdateRequest` no longer accepts
+  `is_active` - `api/routers/account.py`'s `update_account` removed it
+  entirely); it is an internal/admin-only kill switch now.
   `db.list_active_accounts` - the only thing the scheduler calls to
-  decide what to run this tick - only checks that; it does not check
+  decide what to run this tick - checks that OR whether the account has
+  a currently open trade: an open position must never be orphaned by the
+  kill switch (no monitoring, no exit, no stop-loss, forever) just
+  because `is_active` was flipped off internally. It does not check
   `has_paid` at all, by design (see the next bullet for what does).
 
   `has_paid` flips exactly two ways, both ending in the same place:
@@ -147,14 +152,14 @@ it just now also answers requests instead of only looping silently.
   Lifetime access, not a subscription: once `has_paid` is set it never
   gets cleared by anything in this codebase.
 
-- **Live trading: four independent gates, not one** (`onboarding.resolve_trading_mode`):
+- **Live trading: five independent gates, not one** (`onboarding.resolve_trading_mode`):
   this exists because of a real incident - an account reached LIVE
   carrying a Binance *testnet* key, and production correctly rejected
   it, because back then `has_paid` plus trial expiry/bypass alone was
   sufficient to flip `is_paper` to `False`, and `_resolve_credentials`
   just handed over whatever credential was on file with no idea whether
   it was even valid for the environment it was about to hit.
-  `resolve_trading_mode` now checks four conditions, in order, and fails
+  `resolve_trading_mode` now checks five conditions, in order, and fails
   closed to PAPER the moment any one of them doesn't hold:
 
   1. `has_paid` - buys the *right* to use live trading, nothing more.
@@ -173,9 +178,34 @@ it just now also answers requests instead of only looping silently.
      was enabled. If the stored credential is later downgraded to
      testnet or replaced, this alone makes LIVE fail closed again on the
      account's very next cycle. `api/routers/account.py`'s credential
-     endpoint also explicitly clears `live_trading_enabled_at` on a
-     downgrade, as a second, independent safeguard - but even without
-     that bookkeeping, condition 4 alone is enough to stop it.
+     endpoint also explicitly clears `live_trading_enabled_at` (and
+     `bot_started_at`, condition 5 below) on a downgrade, as a second,
+     independent safeguard - but even without that bookkeeping,
+     condition 4 alone is enough to stop it.
+  5. `TradingAccount.bot_started_at` is set - the explicit, separate
+     "Start Bot" action (`POST /api/account/start-bot`), distinct from
+     enabling live trading. Accepting the risk disclosure authorizes
+     going live; it does not start anything. The endpoint re-checks 1-4
+     plus `allocated_capital is not None` and no open trade before
+     setting this. This column shipped after four-gate accounts were
+     already live in production, so it is `NULL` for every pre-existing
+     row - every one of them fails closed to PAPER the moment the
+     migration runs, until its owner explicitly presses Start Bot. No
+     Start consent is ever fabricated for an existing account.
+
+  A pre-existing account can have an already-open LIVE trade at the
+  moment this gate ships (its `bot_started_at` is `NULL`, so new-entry
+  mode now resolves to PAPER) - that must never mean the open position
+  stops being managed with real credentials. `trader.process_account`
+  resolves two different things, deliberately: `is_paper` (fresh every
+  cycle, from the five gates above, decides whether a *new* entry may go
+  live) and `effective_is_paper` (`open_trade.is_paper` when a trade is
+  already open, else `is_paper`) - credentials, the exchange client's
+  sandbox flag, and `_maybe_exit`'s real-vs-paper order decision all key
+  off `effective_is_paper`, never the freshly recomputed gate result. See
+  `tests/test_capital_lifecycle_and_auto_select_safety.py`'s
+  `test_open_live_trade_keeps_being_managed_with_real_credentials_even_if_the_account_is_newly_forced_to_paper`
+  for the regression this exists to prevent.
 
   `ApiCredential.environment` ("testnet" | "mainnet" | "unknown") is set
   by explicit customer choice at signup and updatable afterward via
@@ -202,7 +232,7 @@ it just now also answers requests instead of only looping silently.
   requires `EnableLiveTradingRequest.accept_risk_disclosure = True`,
   recorded as its own `LegalAcceptance` row alongside
   `live_trading_enabled_at` in the same request/transaction as the
-  four-gate check above - a failed gate check never leaves a
+  gate check above - a failed gate check never leaves a
   risk-disclosure row behind, since every gate is checked before any
   write. `LegalAcceptance` stores only `(customer_id, document_type,
   version, accepted_at)` - no credentials, ever - and a unique
@@ -220,7 +250,57 @@ it just now also answers requests instead of only looping silently.
   per-trade records that), so a switch mid-trade would have the next
   cycle try to exit through the wrong symbol - `409` instead. A real
   switch also clears the runtime-status fields below, since a reading
-  from the old pair has nothing to say about the new one.
+  from the old pair has nothing to say about the new one. The same
+  open-trade guard now also covers `pair_selection_mode` (below).
+- **Trading Capital, and why it is a ceiling, never a transfer**
+  (`TradingAccount.allocated_capital`, `risk.py`, `trader.py`'s
+  `_maybe_enter`): the customer's funds never leave their own Binance
+  account - this column is the maximum the bot's position sizing may
+  treat as available. `None` means "not configured" and must never be
+  read as "use everything available" - a live entry with
+  `allocated_capital is None` is refused outright (defense in depth:
+  the Start Bot endpoint already can't be reached without it, but
+  `_maybe_enter` checks again independently). When it is set,
+  `effective_capital = min(allocated_capital, live Binance balance)` -
+  the real balance is still read fresh from Binance at order time, so a
+  customer who allocates more than they actually have is capped by
+  reality, never by a stale number. `risk.compute_position_size`'s
+  `risk_amount = effective_capital * risk_pct / 100` formula is
+  unchanged; only what "effective_capital" means changed. Two
+  independent ceilings trim the resulting quantity *down*, never up,
+  after that: `risk.apply_exposure_ceiling` caps notional
+  (`quantity * entry_price`) at `effective_capital * max_notional_multiplier`
+  (`Settings.max_notional_multiplier`, operator-configured, a no-op for
+  Spot at its natural 1.0x) because a tight ATR stop alone can size an
+  unbounded notional for the same dollar risk; `risk.apply_margin_ceiling`
+  (Futures only) additionally caps so `notional / leverage <= effective_capital`
+  using the account's real, currently-configured leverage, read via
+  `exchange.fetch_symbol_leverage` - a plain read-only GET
+  (`fetch_leverage`/`fetch_leverages` in ccxt). This module never calls
+  `set_leverage`: reading ccxt's own source shows it has real,
+  account-wide, cross-position side effects (margin mode, liquidation
+  price), which a trading bot must never trigger silently on a
+  customer's behalf. A leverage read that fails or returns nothing just
+  skips that one ceiling for that entry - the notional ceiling still
+  applies regardless, so it's never the only safety net.
+- **Auto Select pair ranking, and why pairs never move mid-trade**
+  (`pair_selection.py`, `trader.py`'s `_scan_auto_pair`):
+  `TradingAccount.pair_selection_mode` (`"manual"` default | `"auto"`)
+  lets the bot pick its own pair between trades, from the same fixed,
+  already-maintained `config.SUPPORTED_PAIRS` universe manual selection
+  uses - not a second, separately-curated list, and not "every Binance
+  asset". Ranking is deterministic and auditable, explicitly not AI and
+  not a "biggest gainer" screen: every candidate is scored with the
+  platform's own `strategy.generate_signal` (same EMA/ATR rules a
+  manually-chosen pair gets), keeping only candidates with an
+  actionable signal valid for the account's market type (long-only on
+  Spot, long or short on Futures), ranked by EMA separation measured in
+  units of that pair's own ATR. The scan only ever runs when
+  `get_open_trade` finds nothing open for that account - enforced in
+  `trader.py` itself, not only by `api/routers/account.py`'s open-trade
+  guard on `PATCH /api/account` - so "never switch pairs while a
+  position is open" holds in the backend trading logic regardless of
+  what the API layer does or doesn't check.
 - **Runtime status, persisted rather than assumed** (`trader.py`,
   `TradingAccount.last_scanned_at`/`last_signal`/`last_signal_at`/
   `last_error`/`last_error_at`): every scheduler cycle writes these,
@@ -231,13 +311,20 @@ it just now also answers requests instead of only looping silently.
   category from `exchange.safe_error_message`, never a raw exception or
   traceback (those still go to the server log via `scheduler.py`'s
   `logger.exception`, untouched). `api/routers/account.py` derives a
-  single `runtime_status` (`paused` > `error` > `trade_open` > `active`)
-  from these plus `is_active` and an open-trade check, so the frontend
-  never re-implements that priority logic itself. Telegram only gets a
-  new message when an error episode *starts* (`last_error` goes from
-  `None` to set) and once, lifetime, the first time an account's mode
-  resolves to LIVE (`live_notified_at`) - not every poll, which would
-  just be noise.
+  single `runtime_status` (`paused` > `not_started` > `error` >
+  `trade_open` > `active`) from these plus `is_active`, the Start Bot
+  gate, and an open-trade check, so the frontend never re-implements
+  that priority logic itself. `paused` is only ever seen if something
+  sets `is_active` directly (there is no customer control for it any
+  more); `not_started` means every other live gate is met except the
+  customer hasn't pressed Start Bot yet. Telegram only gets a new
+  message when an error episode *starts* (`last_error` goes from `None`
+  to set) and once, lifetime, the first time an account's mode resolves
+  to LIVE (`live_notified_at`, which - since the Start Bot gate is the
+  last condition checked - now doubles as the "bot started" message, no
+  separate notification needed) - not every poll, which would just be
+  noise. There is deliberately no "bot paused" notification, matching
+  there being no customer-facing Pause.
 - **Deploys separately from the trading engine's own host story:** the
   frontend is a static Vite build that goes to Vercel (or any static
   host) like any other SPA; the backend (API + scheduler, one process)
@@ -283,7 +370,7 @@ account without needing their UUID.
 | `api/app.py` | FastAPI app: CORS, router wiring, and the lifespan hook that starts `scheduler.run_forever` as a background task. |
 | `api/security.py` | Password hashing (bcrypt) and session JWT create/verify. |
 | `api/routers/auth.py` | Signup (requires Terms/Privacy consent) /login/logout/accept-legal; sets/clears the session cookie. |
-| `api/routers/account.py` | Onboarding (create account + credential), settings updates (pair/market/risk), pause/resume, trial-bypass, credential updates, and the separate enable-live-trading step (requires risk-disclosure consent) - as HTTP, all gated by `require_legal_acceptance`. |
+| `api/routers/account.py` | Onboarding (create account + credential), settings updates (pair/market/risk/trading-capital/pair-selection-mode), trial-bypass, credential updates, the separate enable-live-trading step (requires risk-disclosure consent), and the final explicit start-bot step (requires trading capital configured) - as HTTP, all gated by `require_legal_acceptance`. No customer-facing pause/resume any more. |
 | `api/routers/telegram.py` | Deep-link generation + webhook that resolves a link token to a chat id. |
 | `api/routers/billing.py` | Paystack one-time payment initialization and webhook. |
 | `frontend/` | React + Vite + Tailwind SPA: landing, signup/login, onboarding wizard, dashboard. Deploys to Vercel. |

@@ -66,6 +66,12 @@ class TradingAccount(Base):
 
     pair: Mapped[str] = mapped_column(String(20), nullable=False)
     market_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    # "manual" (default, preserves original single-configured-pair
+    # behavior exactly) | "auto" (trader.py may reassign `pair` itself,
+    # between trades only - see trader.py's open-trade guard around
+    # auto-selection, a scheduler-side check independent of the
+    # API-layer one in api/routers/account.py).
+    pair_selection_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="manual", server_default="manual")
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
@@ -101,6 +107,32 @@ class TradingAccount(Base):
     # against nothing valid.
     live_trading_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     live_trading_disclosure_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # The explicit "Start Bot" action - a SIXTH concept, separate from
+    # all of the above. live_trading_enabled_at means "I accept the
+    # risk and am authorized to go live"; bot_started_at means "I am
+    # explicitly telling the bot to begin operating now." Enabling live
+    # trading never sets this by itself. This is the fifth and final
+    # condition resolve_trading_mode (onboarding.py) requires before it
+    # will ever return LIVE - see that function for the full chain.
+    # Cleared alongside live_trading_enabled_at whenever the stored
+    # credential stops being mainnet-tagged (api/routers/account.py),
+    # same reasoning: a "started" flag with nothing valid backing it is
+    # a stale, confusing state, not a safety hole by itself (the mode
+    # gate still blocks LIVE regardless), but there is no reason to
+    # leave it lying around.
+    bot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # How much of the customer's available Binance balance the bot may
+    # use as its capital base for position sizing - NOT a transfer, the
+    # funds never leave the customer's Binance account. None means
+    # "not yet configured" and must NEVER be treated as "use everything
+    # available" (see trader.py's _maybe_enter, which fails closed - no
+    # entry, not "fall back to full balance" - when this is None for a
+    # live-mode account). Enforced as a ceiling, not a guarantee: the
+    # live balance is still read fresh from Binance at order time, and
+    # the smaller of the two actually bounds position sizing.
+    allocated_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_pnl_summary_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "YYYY-MM-DD", UTC

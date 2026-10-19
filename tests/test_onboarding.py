@@ -6,6 +6,7 @@ from mba_bot.onboarding import (
     enable_live_trading,
     is_live_eligible,
     resolve_trading_mode,
+    start_bot,
     start_trial,
 )
 
@@ -21,6 +22,7 @@ def _resolve(**overrides):
         has_paid=False,
         live_trading_enabled_at=None,
         has_mainnet_credential=False,
+        bot_started_at=None,
         now=NOW,
     )
     defaults.update(overrides)
@@ -120,8 +122,30 @@ def test_every_condition_satisfied_is_the_only_way_to_reach_live():
         trial_ends_at=EXPIRED_TRIAL,
         live_trading_enabled_at=NOW,
         has_mainnet_credential=True,
+        bot_started_at=NOW,
     )
     assert state.mode == TradingMode.LIVE
+
+
+def test_start_bot_returns_a_timestamp():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert start_bot(now=now) == now
+
+
+def test_bot_not_started_stays_paper_even_when_every_other_condition_is_satisfied():
+    # Everything the previous four-gate chain required is true - paid,
+    # eligible, enabled, mainnet credential - but Start Bot was never
+    # pressed. Must still be PAPER: this is the fifth gate, and it is
+    # what makes a pre-existing (pre-migration) account fail closed
+    # rather than silently staying live the moment this column ships.
+    state = _resolve(
+        has_paid=True,
+        trial_ends_at=EXPIRED_TRIAL,
+        live_trading_enabled_at=NOW,
+        has_mainnet_credential=True,
+        bot_started_at=None,
+    )
+    assert state.mode == TradingMode.PAPER
 
 
 def test_trial_expiry_alone_can_never_reach_live():

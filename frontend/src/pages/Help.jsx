@@ -40,7 +40,7 @@ const TOPICS = [
   },
   {
     title: "Common status messages",
-    body: "Active: the bot is checking the market on schedule. Position open: it's holding a trade. Paused: you turned trading off. Needs attention: the last check hit a problem, shown with a plain-language explanation.",
+    body: "Active: the bot is checking the market on schedule. Position open: it's holding and monitoring a trade. Not started: live trading is authorized but you haven't pressed Start Bot yet. Needs attention: the last check hit a problem, shown with a plain-language explanation.",
   },
 ];
 

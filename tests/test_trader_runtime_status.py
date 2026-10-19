@@ -16,6 +16,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from mba_bot import exchange
+from mba_bot.onboarding import start_bot
 from mba_bot.config import Settings
 from mba_bot.crypto_utils import encrypt
 from mba_bot.db import init_db, session_scope
@@ -71,6 +72,7 @@ def _settings(**overrides) -> Settings:
         atr_rolling_window=3,
         risk_pct_default=1.0,
         risk_pct_max=2.0,
+        max_notional_multiplier=3.0,
         testnet_spot_api_key="testnet-spot-key",
         testnet_spot_api_secret="testnet-spot-secret",
         testnet_futures_api_key="testnet-futures-key",
@@ -107,12 +109,14 @@ def _make_account(
     trial_expired: bool = False,
     live_trading_enabled: bool = False,
     credential_environment: str = "mainnet",
+    bot_started: bool = False,
+    allocated_capital: float | None = None,
 ) -> str:
     """By default builds a plain paper account (trial active, nothing
-    enabled). Pass trial_expired=True, live_trading_enabled=True, and
-    credential_environment="mainnet" together to actually reach LIVE -
-    none of them alone is enough, which is the entire point of this
-    change."""
+    enabled). Pass trial_expired=True, live_trading_enabled=True,
+    credential_environment="mainnet", bot_started=True, and a positive
+    allocated_capital together to actually reach LIVE - none of them
+    alone is enough, which is the entire point of this change."""
     customer = Customer(email=email, password_hash="x", has_paid=has_paid)
     session.add(customer)
     session.flush()
@@ -127,6 +131,8 @@ def _make_account(
         notification_target="555000111",
         trial_ends_at=(now - timedelta(days=1)) if trial_expired else (now + timedelta(days=7)),
         live_trading_enabled_at=now if live_trading_enabled else None,
+        bot_started_at=start_bot(now=now) if bot_started else None,
+        allocated_capital=allocated_capital,
     )
     session.add(account)
     session.flush()
@@ -281,6 +287,8 @@ def test_going_live_sends_a_one_time_activation_message(db, monkeypatch):
             live_trading_enabled=True,
             credential_environment="mainnet",
             encryption_key=settings.encryption_key,
+            bot_started=True,
+            allocated_capital=10_000.0,
         )
 
     notifier = FakeNotifier()

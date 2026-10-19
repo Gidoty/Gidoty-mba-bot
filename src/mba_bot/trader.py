@@ -13,14 +13,15 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from . import exchange
-from .config import Settings
+from .config import SUPPORTED_PAIRS, Settings
 from .crypto_utils import decrypt
 from .db import get_open_trade, get_trades_closed_on
 from .models import Trade, TradingAccount
 from .notifications import Notifier
 from .onboarding import TradingMode, resolve_trading_mode
-from .risk import compute_position_size, compute_stop_loss
-from .strategy import SignalType, candles_from_ohlcv, generate_signal
+from .pair_selection import PairCandidate, rank_candidates
+from .risk import apply_exposure_ceiling, apply_margin_ceiling, compute_position_size, compute_stop_loss
+from .strategy import SignalType, StrategySignal, candles_from_ohlcv, generate_signal
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         has_paid=account.customer.has_paid,
         live_trading_enabled_at=account.live_trading_enabled_at,
         has_mainnet_credential=account.has_mainnet_credential,
+        bot_started_at=account.bot_started_at,
         now=now,
     )
     is_paper = trial_state.mode == TradingMode.PAPER
@@ -55,9 +57,29 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             "signals, using your own Binance funds. You'll hear from this chat the moment it opens or closes a trade.",
         )
 
-    api_key, api_secret = _resolve_credentials(account, settings, is_paper=is_paper)
+    # An already-open trade's own `is_paper` - set once at entry and
+    # never touched again - governs how THIS cycle manages it:
+    # credentials, exchange environment, and whether its exit is a real
+    # order. `is_paper` above (freshly recomputed every cycle from
+    # resolve_trading_mode) only decides whether a NEW entry may go
+    # live; it must never retroactively change which exchange/credential
+    # an already-resting position is managed against. Without this
+    # distinction, any gate that can newly turn a previously-LIVE
+    # account to PAPER (the bot_started_at migration default being the
+    # immediate case, but also e.g. a credential downgrade mid-trade)
+    # would silently switch a real open position onto testnet
+    # credentials/market data and skip its real closing order - leaving
+    # it resting on Binance with zero stop-loss/exit monitoring.
+    open_trade = get_open_trade(session, account.id)
+    effective_is_paper = open_trade.is_paper if open_trade is not None else is_paper
+
+    api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper)
     if api_key is None:
-        logger.warning("account %s has no usable credentials for mode=%s, skipping", account.id, trial_state.mode.value)
+        logger.warning(
+            "account %s has no usable credentials for mode=%s, skipping",
+            account.id,
+            "paper" if effective_is_paper else "live",
+        )
         await _record_error(notifier, account, "No usable trading credentials are configured for this account.", now=now)
         return
 
@@ -66,28 +88,49 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         market_type=account.market_type,
         api_key=api_key,
         api_secret=api_secret,
-        sandbox=is_paper,
+        sandbox=effective_is_paper,
     )
     try:
-        if not is_paper:
+        if not effective_is_paper:
             await exchange.assert_trade_only(client)
 
-        ohlcv = await client.fetch_ohlcv(account.pair, timeframe=settings.timeframe, limit=settings.ohlcv_limit)
-        candles = candles_from_ohlcv(ohlcv)
-        if not candles:
-            logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
-            await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
-            return
-        current_price = candles[-1].close
+        # Auto Select only ever runs this scan when there is no open
+        # trade (the `open_trade is None` check right here) - that, not
+        # just the API-layer guard in api/routers/account.py, is what
+        # makes "never switch pairs while a position is open" true in
+        # the backend trading logic itself: there is no code path from
+        # this branch into an account that has one.
+        if open_trade is None and account.pair_selection_mode == "auto":
+            auto_result = await _scan_auto_pair(client, account, settings)
+            if auto_result is None:
+                # Nothing in the approved universe had an actionable
+                # signal this cycle - a normal, uneventful scan, not an
+                # error. Record it as such and stop; there is nothing to
+                # enter and no open trade to manage.
+                account.last_signal = SignalType.NONE.value
+                account.last_signal_at = now
+                account.last_error = None
+                account.last_error_at = None
+                return
+            scan_pair, candles, signal = auto_result
+        else:
+            scan_pair = account.pair
+            ohlcv = await client.fetch_ohlcv(account.pair, timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+            candles = candles_from_ohlcv(ohlcv)
+            if not candles:
+                logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
+                await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
+                return
+            signal = generate_signal(
+                candles,
+                ema_fast_period=settings.ema_fast_period,
+                ema_slow_period=settings.ema_slow_period,
+                atr_period=settings.atr_period,
+                atr_flat_threshold=settings.atr_flat_threshold,
+                atr_rolling_window=settings.atr_rolling_window,
+            )
 
-        signal = generate_signal(
-            candles,
-            ema_fast_period=settings.ema_fast_period,
-            ema_slow_period=settings.ema_slow_period,
-            atr_period=settings.atr_period,
-            atr_flat_threshold=settings.atr_flat_threshold,
-            atr_rolling_window=settings.atr_rolling_window,
-        )
+        current_price = candles[-1].close
         # A successful evaluation, whatever it concluded, is a healthy
         # cycle - record the signal and clear any previously-recorded
         # error so "Error" status doesn't linger past the problem itself.
@@ -96,11 +139,20 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         account.last_error = None
         account.last_error_at = None
 
-        open_trade = get_open_trade(session, account.id)
         if open_trade is None:
+            if scan_pair != account.pair:
+                # The only place `pair` is ever reassigned by the bot
+                # itself - and only reachable with no open trade (see
+                # above). Persisted atomically with the entry that
+                # follows, so the dashboard's "current pair" always
+                # reflects the pair actually just traded, never an
+                # intermediate scan result that didn't lead to a trade.
+                account.pair = scan_pair
             await _maybe_enter(session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now)
         else:
-            await _maybe_exit(session, account, client, open_trade, signal, current_price, notifier, is_paper=is_paper, now=now)
+            await _maybe_exit(
+                session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now
+            )
 
         await _maybe_send_daily_summary(session, account, notifier, now=now)
     except exchange.WithdrawalPermissionDetected as exc:
@@ -155,6 +207,61 @@ def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_pape
     )
 
 
+async def _scan_auto_pair(client, account: TradingAccount, settings: Settings) -> tuple[str, list, StrategySignal] | None:
+    """Auto Select's market scan. Reuses the SAME exchange client
+    already built for this account this cycle - same environment, same
+    credentials, same account - just queried against each pair in the
+    fixed, approved universe (`config.SUPPORTED_PAIRS`, the one list
+    this platform already maintains for which pairs it can trade at
+    all - not a second, separately-maintained "auto select universe"
+    that could silently drift out of sync with it) instead of only the
+    account's currently configured pair.
+
+    Ranking itself lives in `pair_selection.rank_candidates` - this
+    function's only job is the I/O (fetching candles) and turning the
+    winning candidate back into a full `StrategySignal` (needed for its
+    `.atr`/`.fast_ema` by the caller's stop-loss and notification code,
+    which `pair_selection.RankedPair` deliberately doesn't carry, to
+    keep that module's public shape minimal and side-effect free).
+
+    Returns None if nothing in the universe had an actionable signal
+    this cycle - never a forced/fallback pick."""
+    scanned: list[PairCandidate] = []
+    for pair in SUPPORTED_PAIRS:
+        try:
+            ohlcv = await client.fetch_ohlcv(pair, timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+        except Exception:
+            logger.warning("account %s: auto-select scan could not fetch %s this cycle, skipping it", account.id, pair)
+            continue
+        candles = candles_from_ohlcv(ohlcv)
+        if candles:
+            scanned.append(PairCandidate(pair=pair, candles=candles))
+
+    ranked = rank_candidates(
+        scanned,
+        market_type=account.market_type,
+        ema_fast_period=settings.ema_fast_period,
+        ema_slow_period=settings.ema_slow_period,
+        atr_period=settings.atr_period,
+        atr_flat_threshold=settings.atr_flat_threshold,
+        atr_rolling_window=settings.atr_rolling_window,
+    )
+    if not ranked:
+        return None
+
+    best_pair = ranked[0].pair
+    best_candles = next(c.candles for c in scanned if c.pair == best_pair)
+    signal = generate_signal(
+        best_candles,
+        ema_fast_period=settings.ema_fast_period,
+        ema_slow_period=settings.ema_slow_period,
+        atr_period=settings.atr_period,
+        atr_flat_threshold=settings.atr_flat_threshold,
+        atr_rolling_window=settings.atr_rolling_window,
+    )
+    return best_pair, best_candles, signal
+
+
 async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now):
     if signal.signal == SignalType.BULLISH_CROSSOVER:
         side = "long"
@@ -166,9 +273,36 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     stop_price = compute_stop_loss(
         entry_price=current_price, atr=signal.atr, side=side, atr_multiplier=settings.atr_stop_multiplier
     )
-    balance = account.paper_balance if is_paper else await exchange.fetch_available_quote_balance(client, account.pair)
+
+    if is_paper:
+        # Paper mode keeps its own pre-existing sizing base unchanged -
+        # the fixed, synthetic paper_balance IS the sandbox capital, and
+        # was never the subject of the "entire exchange balance" finding
+        # this allocation model fixes (that only ever applied to the
+        # live branch's fetch_available_quote_balance call below).
+        effective_capital = account.paper_balance
+    else:
+        if account.allocated_capital is None:
+            # Fail closed: Trading Capital must be an explicit customer
+            # choice before any live entry, never a silent "use whatever
+            # Binance shows" fallback (see models.py's allocated_capital
+            # docstring). resolve_trading_mode's Start Bot gate already
+            # keeps an account with no allocation out of LIVE entirely,
+            # so this should be unreachable in practice - this check is
+            # deliberate defense in depth, not redundancy to be trimmed.
+            logger.warning("account %s: live account has no allocated_capital configured, refusing to enter", account.id)
+            return
+        live_balance = await exchange.fetch_available_quote_balance(client, account.pair)
+        # The customer's configured ceiling, never more than what
+        # Binance actually shows as free right now - see models.py's
+        # allocated_capital docstring and the capital-allocation spec:
+        # effective_capital = min(configured_trading_capital, currently_available_balance).
+        effective_capital = min(account.allocated_capital, live_balance)
+        if effective_capital <= 0:
+            return
+
     size = compute_position_size(
-        account_balance=balance,
+        account_balance=effective_capital,
         risk_pct=account.risk_pct,
         entry_price=current_price,
         stop_price=stop_price,
@@ -178,6 +312,32 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         return
 
     if not is_paper:
+        # The risk-% formula alone has no opinion on notional - a tight
+        # ATR stop produces a larger quantity for the same dollar risk,
+        # unbounded unless something caps quantity directly. This is
+        # the conservative, operator-configured backstop (see
+        # risk.apply_exposure_ceiling); it's a no-op for Spot at the
+        # default multiplier in virtually every real case since Spot
+        # can't exceed effective_capital's own notional anyway.
+        size = apply_exposure_ceiling(
+            size,
+            entry_price=current_price,
+            effective_capital=effective_capital,
+            max_notional_multiplier=settings.max_notional_multiplier,
+        )
+        if account.market_type == "futures":
+            # Read-only - this module never calls set_leverage (see
+            # exchange.fetch_symbol_leverage). A None result (leverage
+            # couldn't be determined) means this specific ceiling is
+            # skipped for this entry, never guessed at; the notional
+            # ceiling above still applies regardless.
+            leverage = await exchange.fetch_symbol_leverage(client, account.pair, side=side)
+            if leverage is not None:
+                size = apply_margin_ceiling(
+                    size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
+                )
+        if size.quantity <= 0:
+            return
         order_side = "buy" if side == "long" else "sell"
         await client.create_market_order(account.pair, order_side, size.quantity)
 

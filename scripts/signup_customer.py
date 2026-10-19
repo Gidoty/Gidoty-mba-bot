@@ -28,6 +28,14 @@ Usage:
     python scripts/signup_customer.py ... \\
         --environment mainnet --mark-paid --skip-trial --accept-live-risk-disclosure \\
         --enable-live-trading --accept-live-activation-disclosure
+
+    # enabling live trading still does not start the bot - that is a
+    # separate, final, explicit action requiring an allocated trading
+    # capital on file:
+    python scripts/signup_customer.py ... \\
+        --environment mainnet --mark-paid --skip-trial --accept-live-risk-disclosure \\
+        --enable-live-trading --accept-live-activation-disclosure \\
+        --allocated-capital 200 --start-bot
 """
 from __future__ import annotations
 
@@ -50,6 +58,7 @@ from mba_bot.onboarding import (  # noqa: E402
     accept_live_bypass,
     enable_live_trading,
     resolve_trading_mode,
+    start_bot,
     start_trial,
 )
 
@@ -98,6 +107,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="also unlock lifetime access immediately (accounts are locked by default - see has_paid in models.py)",
     )
+    parser.add_argument(
+        "--allocated-capital",
+        type=float,
+        default=None,
+        help="trading capital the bot may use as its sizing base - required alongside --start-bot. None means "
+        "'not configured', never 'use everything available'",
+    )
+    parser.add_argument(
+        "--start-bot",
+        action="store_true",
+        help="the final, separate action that actually starts live execution - requires everything "
+        "--enable-live-trading requires, plus --allocated-capital",
+    )
     return parser.parse_args()
 
 
@@ -114,6 +136,13 @@ def main() -> None:
             raise SystemExit("--enable-live-trading requires --mark-paid")
         if not (args.skip_trial or args.accept_live_risk_disclosure):
             raise SystemExit("--enable-live-trading requires eligibility: pass --skip-trial --accept-live-risk-disclosure too")
+    if args.start_bot:
+        if not args.enable_live_trading:
+            raise SystemExit("--start-bot requires --enable-live-trading - enabling live trading never starts it by itself")
+        if args.allocated_capital is None:
+            raise SystemExit("--start-bot requires --allocated-capital - trading capital must be configured first")
+        if args.allocated_capital <= 0:
+            raise SystemExit("--allocated-capital must be positive")
 
     settings = load_settings()
     if not settings.encryption_key:
@@ -137,6 +166,7 @@ def main() -> None:
             risk_pct=risk_pct,
             trial_ends_at=start_trial(trial_days=settings.trial_days),
             paper_balance=settings.paper_starting_balance,
+            allocated_capital=args.allocated_capital,
         )
         if args.skip_trial:
             account.live_bypass_accepted_at = accept_live_bypass()
@@ -144,6 +174,8 @@ def main() -> None:
         if args.enable_live_trading:
             account.live_trading_enabled_at = enable_live_trading()
             account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
+        if args.start_bot:
+            account.bot_started_at = start_bot()
         session.add(account)
         session.flush()
 
@@ -162,6 +194,7 @@ def main() -> None:
             has_paid=customer.has_paid,
             live_trading_enabled_at=account.live_trading_enabled_at,
             has_mainnet_credential=account.has_mainnet_credential,
+            bot_started_at=account.bot_started_at,
         )
 
         print(f"created customer {customer.id} ({customer.email}), account {account.id}")

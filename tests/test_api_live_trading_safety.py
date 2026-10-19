@@ -155,8 +155,19 @@ def test_enable_live_trading_succeeds_when_every_condition_is_met():
 
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 200
-        assert response.json()["mode"] == "live"
+        # Enabling live trading authorizes going live; it never starts
+        # anything by itself - see onboarding.resolve_trading_mode's
+        # fifth gate. The account only reaches LIVE once Trading Capital
+        # is configured and Start Bot is explicitly pressed below.
+        assert response.json()["mode"] == "paper"
         assert response.json()["live_trading_enabled_at"] is not None
+        assert response.json()["bot_started_at"] is None
+
+        client.patch("/api/account", json={"allocated_capital": 500})
+        started = client.post("/api/account/start-bot", json={"confirm": True})
+        assert started.status_code == 200
+        assert started.json()["mode"] == "live"
+        assert started.json()["bot_started_at"] is not None
 
 
 def test_enable_live_trading_is_idempotent_not_repeatable():
@@ -262,7 +273,11 @@ def test_downgrading_credential_to_testnet_disables_live_trading():
         _retag_mainnet(client)
         _make_eligible("downgrade@example.com")
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
-        assert enabled.json()["mode"] == "live"
+        assert enabled.status_code == 200
+        client.patch("/api/account", json={"allocated_capital": 500})
+        started = client.post("/api/account/start-bot", json={"confirm": True})
+        assert started.json()["mode"] == "live"
+        assert started.json()["bot_started_at"] is not None
 
         downgraded = client.put(
             "/api/account/credentials",
@@ -270,6 +285,10 @@ def test_downgrading_credential_to_testnet_disables_live_trading():
         )
         assert downgraded.status_code == 200
         assert downgraded.json()["live_trading_enabled_at"] is None
+        # A "started" bot with no valid authorization backing it is a
+        # stale state the downgrade also clears - see
+        # api/routers/account.py's update_credentials.
+        assert downgraded.json()["bot_started_at"] is None
         assert downgraded.json()["mode"] == "paper"
 
 

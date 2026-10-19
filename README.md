@@ -17,8 +17,8 @@ how well the code is written.
 - **Self-serve signup:** a React frontend (`frontend/`) talking to a
   FastAPI backend (`src/mba_bot/api/`) - email/password auth, an
   onboarding wizard (pair, market type, risk %, Binance key), a Telegram
-  linking flow, a dashboard (trial/live status, trade history, pause
-  toggle), and Paystack billing.
+  linking flow, a dashboard (trial/live status, trade history, Trading
+  Capital and Start Bot controls), and Paystack billing.
 - **Strategy:** EMA(20/50) crossover trend-following, with an ATR
   volatility filter that skips signals when the market is flat/range-bound
   (crossover strategies lose money chopping sideways).
@@ -231,13 +231,14 @@ only you can unlock an account, there's no code the customer enters.
 Every new account trades on Binance testnet with a simulated balance
 (`paper_balance`, tracked per-account in the database - see
 `ARCHITECTURE.md` for why this isn't a real testnet balance) for 7 days by
-default. An account moves to live trading either when the trial expires
-naturally, or when the customer explicitly accepts the bypass (a checkbox
-on the dashboard, or `--skip-trial` on the CLI); either way,
-`onboarding.resolve_trading_mode` is the single place that decides which
-mode an account is in, and it fails closed - any ambiguity resolves to
-paper, never live. `trader.py` additionally refuses to trade any account
-until its notification channel is actually linked.
+default. Reaching real live trading takes five separate, explicit things,
+not just the trial expiring: payment, eligibility (trial expiry or the
+bypass checkbox), a mainnet-tagged Binance credential, explicitly enabling
+live trading (accepting the risk disclosure), and finally pressing Start
+Bot once Trading Capital is configured - `onboarding.resolve_trading_mode`
+is the single place that checks all five, and it fails closed - any
+ambiguity resolves to paper, never live. `trader.py` additionally refuses
+to trade any account until its notification channel is actually linked.
 
 ## Tests
 
