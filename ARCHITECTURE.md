@@ -524,15 +524,37 @@ two distinct purposes, separated in code:
   ("Telegram send failed: HTTP 403"). It is raised outside the `except`
   handlers, so it has no `__cause__`/`__context__` for a traceback printer to
   reach the original error.
-- httpx logs every request URL at INFO (which would write the token on every
-  successful send): httpx/httpcore are pinned to WARNING, and
-  `log_safety.install_log_safety` adds a last-line redaction (configured
-  secrets and anything shaped like a bot-URL token) to the process's log
-  handlers (`main.py` and the API lifespan).
+- Credential-bearing third-party HTTP clients are pinned to WARNING
+  (`log_safety.quiet_http_client_logs`): `httpx`/`httpcore` (they log every
+  request URL at INFO - the Telegram token is in it) and `ccxt` plus every
+  existing `ccxt.*` child (ccxt logs each request and response at DEBUG,
+  including the `X-MBX-APIKEY` header = the Binance API key, the signed URL and
+  balances). The application's own loggers are untouched, so the root logger
+  can be set to DEBUG for troubleshooting. **Do not enable debug logging of
+  `ccxt`, `httpx` or `httpcore` in production**; changing those loggers after
+  start-up is outside the guarantee (redaction below still applies).
+- `log_safety.install_log_safety` (called from `main.py` and the API lifespan)
+  installs a log-record factory, so EVERY record is redacted at creation,
+  before any handler (including `logging.lastResort`, which a plain
+  `uvicorn mba_bot.api.app:app` deployment uses): the configured secrets
+  (Telegram, WhatsApp, Paystack, JWT, encryption, testnet keys), anything shaped
+  like a Telegram bot-URL token, an `X-MBX-APIKEY` header value, and the whole
+  query string of a signed Binance URL (host and path are kept for diagnosis).
+- Signed Binance URLs: for a signed GET, ccxt's exception text contains the
+  request parameters (symbol, order and client ids), a timestamp and a
+  signature that is replayable only inside the exchange's recvWindow (ccxt
+  default 10 s). It cannot reveal the API secret, but it is customer order data
+  and replayable authenticated material, so it is removed from logs by the
+  redaction above. Order placement is a signed POST whose parameters ccxt puts in
+  the body: its exception text is only `binance POST <url>`. Customer surfaces only
+  ever get `exchange.safe_error_message`.
 - `Settings` fields holding secrets are `repr=False`.
-- Binance: ccxt exception text and tracebacks were verified (against a local
-  server, with sentinel credentials) to contain no API key or secret; customer
-  surfaces only ever get `exchange.safe_error_message`. See
+- A Telegram `chat_id` is not a credential but is customer-associated operational
+  data. It is logged only by the webhook-reply failure line
+  (`api/routers/telegram.py`), where it identifies which reply failed; avoid adding
+  it to new log lines.
+- Binance API keys and secrets are verified (local server, sentinel credentials)
+  to be absent from ccxt exception text and tracebacks. See
   `tests/test_secret_logging.py`.
 
 ### What is deliberately not done

@@ -33,6 +33,15 @@ LEAKS = (TOKEN, "SECRET-TELEGRAM-TOKEN-DO-NOT-LOG", "/bot123456:")
 FORBIDDEN = (*LEAKS, "api.telegram.org/bot")  # a full token-bearing URL; redaction keeps "bot<redacted>"
 
 
+@pytest.fixture(autouse=True)
+def _restore_log_safety():
+    levels = {n: logging.getLogger(n).level for n in ("httpx", "httpcore", "ccxt", "ccxt.base.exchange")}
+    yield
+    log_safety.uninstall_log_safety()
+    for n, lvl in levels.items():
+        logging.getLogger(n).setLevel(lvl)
+
+
 def _assert_clean(text: str, extra=(), *, redacted_form_ok=False):
     for needle in (*(LEAKS if redacted_form_ok else FORBIDDEN), *extra):
         assert needle not in text, f"leaked {needle!r}"
@@ -376,3 +385,205 @@ def test_paystack_failure_logs_do_not_contain_the_secret_key(caplog, monkeypatch
     with pytest.raises(Exception):
         billing.initialize_payment(customer=customer, settings=settings)
     assert secret not in caplog.text
+
+
+# =========================== ccxt DEBUG logging, signed URLs, root-at-DEBUG ===========================
+
+SIGNATURE = "a308ee12ca403fb98ea3f56867648af396fc58057c1ce6ff15637d74568f66c0"
+JWT_SECRET = "JWT-SECRET-SENTINEL-abcdef123456"
+PAYSTACK_SECRET = "PAYSTACK-SECRET-SENTINEL-abcdef123456"
+ENCRYPTION_KEY = "ENCRYPTION-KEY-SENTINEL-abcdef123456"
+SENTINEL_SETTINGS = SimpleNamespace(
+    telegram_bot_token=TOKEN, whatsapp_provider_token=None, paystack_secret_key=PAYSTACK_SECRET, jwt_secret=JWT_SECRET,
+    encryption_key=ENCRYPTION_KEY, testnet_spot_api_key=None, testnet_spot_api_secret=None,
+    testnet_futures_api_key=None, testnet_futures_api_secret=None,
+)
+EVERYTHING = (API_KEY, API_SECRET, TOKEN, "SECRET-TELEGRAM-TOKEN-DO-NOT-LOG", PAYSTACK_SECRET, JWT_SECRET, ENCRYPTION_KEY)
+
+
+@pytest.fixture
+def safety():
+    """Install the process-level log safety, then restore everything it touches."""
+    names = ["httpx", "httpcore", "ccxt", "ccxt.base.exchange"]
+    levels = {n: logging.getLogger(n).level for n in names}
+    log_safety.install_log_safety(SENTINEL_SETTINGS)
+    yield
+    log_safety.uninstall_log_safety()
+    for n, lvl in levels.items():
+        logging.getLogger(n).setLevel(lvl)
+
+
+def _run_ccxt_against_local_401():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Binance401)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        return _fail_with_ccxt(f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+
+
+def test_ccxt_and_http_client_loggers_are_pinned_at_warning_or_stricter(safety):
+    import ccxt.base.exchange  # noqa: F401  (creates the ccxt.base.exchange logger)
+
+    for name in ("ccxt", "ccxt.base.exchange", "ccxt.async_support.base.exchange", "httpx", "httpcore"):
+        assert logging.getLogger(name).getEffectiveLevel() >= logging.WARNING, name
+    # useful application debug logging is NOT disabled
+    root_before = logging.getLogger().level
+    try:
+        logging.getLogger().setLevel(logging.DEBUG)
+        assert logging.getLogger("mba_bot.trader").isEnabledFor(logging.DEBUG)
+        assert not logging.getLogger("ccxt.base.exchange").isEnabledFor(logging.DEBUG)
+    finally:
+        logging.getLogger().setLevel(root_before)
+
+
+def test_a_child_ccxt_logger_that_opted_out_earlier_is_pinned_too():
+    child = logging.getLogger("ccxt.some.child")
+    child.setLevel(logging.DEBUG)
+    levels = {n: logging.getLogger(n).level for n in ("ccxt", "ccxt.some.child")}
+    try:
+        log_safety.quiet_http_client_logs()
+        assert child.level == logging.WARNING
+    finally:
+        log_safety.uninstall_log_safety()
+        for n, lvl in levels.items():
+            logging.getLogger(n).setLevel(lvl)
+
+
+def test_with_the_root_logger_at_debug_no_credential_of_any_kind_reaches_the_log(safety, monkeypatch, caplog):
+    """The whole point: troubleshooting at DEBUG must stay secret-safe. Exercises real
+    ccxt requests (auth failure and connection failure), a real Telegram send and a
+    Paystack failure, all with the root logger at DEBUG."""
+    caplog.set_level(logging.DEBUG)  # root -> DEBUG
+    logging.getLogger("mba_bot.diag").debug("application debug detail is still emitted")
+
+    exc1 = _run_ccxt_against_local_401()
+    exc2 = _fail_with_ccxt("http://127.0.0.1:9")
+    logging.getLogger("mba_bot.scheduler").error("cycle failed", exc_info=exc2)
+    _failing_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True}))
+    asyncio.run(TelegramNotifier(TOKEN).send("1", "x"))
+    request = httpx.Request("POST", "https://api.paystack.co/transaction/initialize")
+    monkeypatch.setattr(billing.httpx, "post", lambda *a, **k: httpx.Response(401, json={"status": False, "message": "Invalid key"}, request=request))
+    with pytest.raises(Exception):
+        billing.initialize_payment(
+            customer=SimpleNamespace(has_paid=False, email="a@example.com", id="c1"),
+            settings=SimpleNamespace(paystack_secret_key=PAYSTACK_SECRET, paystack_amount=1, paystack_currency="NGN", frontend_origin="http://x"),
+        )
+
+    assert "application debug detail is still emitted" in caplog.text
+    assert [r for r in caplog.records if r.name.startswith(("ccxt", "httpx", "httpcore"))] == [], "pinned loggers emit nothing below WARNING"
+    for needle in EVERYTHING:
+        assert needle not in caplog.text, f"leaked {needle!r}"
+    for exc in (exc1, exc2):
+        assert API_KEY not in _chain_text(exc) and API_SECRET not in _chain_text(exc)
+
+
+def test_even_if_a_developer_re_enables_ccxt_debug_the_api_key_header_and_signature_are_redacted(caplog):
+    """Control + third layer. WITHOUT the safety the key IS logged (this is the
+    original leak); with the record redaction installed it is not, even though
+    the ccxt logger was explicitly set back to DEBUG (outside the pinning guarantee
+    - never do this in production - but still redacted)."""
+    ccxt_logger = logging.getLogger("ccxt")
+    child = logging.getLogger("ccxt.base.exchange")
+    old, old_child = ccxt_logger.level, child.level
+    try:
+        ccxt_logger.setLevel(logging.DEBUG)
+        child.setLevel(logging.DEBUG)
+        caplog.set_level(logging.DEBUG)
+        _run_ccxt_against_local_401()
+        assert API_KEY in caplog.text, "precondition: unprotected ccxt DEBUG really logs the Binance API key"
+        caplog.clear()
+
+        log_safety.install_log_safety(SENTINEL_SETTINGS)
+        ccxt_logger.setLevel(logging.DEBUG)  # install pinned them; the developer overrides both again
+        child.setLevel(logging.DEBUG)
+        _run_ccxt_against_local_401()
+        assert "GET http://127.0.0.1" in caplog.text, "the request line is still logged (diagnosable)"
+        assert API_KEY not in caplog.text and API_SECRET not in caplog.text
+        assert "signature=<redacted>" in caplog.text or "?<redacted>" in caplog.text
+        import re
+
+        assert not re.search(r"signature=[0-9a-f]{16,}", caplog.text)
+    finally:
+        log_safety.uninstall_log_safety()
+        ccxt_logger.setLevel(old)
+        child.setLevel(old_child)
+
+
+# =========================== signed Binance URLs ===========================
+
+
+# Defined here so the literals do not appear in the traceback's source lines
+# (a traceback prints the CALLING line of this test file, which is not data).
+_GET_PARAMS = {"symbol": "BTCUSDT", "origClientOrderId": "mbaTRADE1e"}
+_POST_PARAMS = {"symbol": "BTCUSDT", "side": "BUY", "type": "MARKET", "quantity": "0.5"}
+
+
+def test_a_ccxt_network_error_on_a_signed_GET_carries_the_query_but_logs_keep_only_host_and_path(safety, caplog):
+    """Review result, executable: for a signed GET, ccxt's exception TEXT contains the full
+    URL - the request parameters (symbol, order/client ids), a timestamp and a signature
+    replayable inside recvWindow. Ordinary logs must not keep it."""
+    async def go():
+        client = _ccxt_client("http://127.0.0.1:9")
+        try:
+            await client.privateGetOrder(_GET_PARAMS)
+        finally:
+            await client.close()
+
+    with pytest.raises(ccxt.NetworkError) as info:
+        asyncio.run(go())
+    raw = str(info.value)
+    assert "signature=" in raw and "mbaTRADE1e" in raw and "BTCUSDT" in raw, "precondition: what ccxt puts in the exception"
+
+    caplog.set_level(logging.INFO)
+    logging.getLogger("mba_bot.scheduler").error("account X: error during processing cycle", exc_info=info.value)
+    text = caplog.text
+    for needle in ("signature=", "BTCUSDT", "origClientOrderId", "mbaTRADE1e", API_KEY, API_SECRET):
+        assert needle not in text, f"signed-URL material kept: {needle!r}"
+    assert "127.0.0.1:9/order" in text and "ExchangeNotAvailable" in text, "host/path/category remain for diagnosis"
+
+
+def test_a_failed_signed_POST_exception_text_does_not_contain_the_order_parameters():
+    """Order placement is a signed POST: ccxt sends the parameters in the body, and its
+    exception text is only 'binance POST <url>' - no quantity, side, symbol or signature."""
+    async def go():
+        client = _ccxt_client("http://127.0.0.1:9")
+        try:
+            await client.privatePostOrder(_POST_PARAMS)
+        finally:
+            await client.close()
+
+    with pytest.raises(ccxt.NetworkError) as info:
+        asyncio.run(go())
+    raw = _chain_text(info.value)
+    for needle in ("quantity", "BTCUSDT", "signature", API_KEY, API_SECRET):
+        assert needle not in raw
+
+
+def test_the_scheduler_cycle_log_for_a_signed_binance_failure_is_redacted(db, monkeypatch, safety, caplog):
+    settings = make_settings(max_notional_multiplier=100.0)
+    client = spot_client()
+    install(monkeypatch, client)
+    account_id = new_account(settings)
+    url = f"https://api.binance.com/api/v3/order?symbol=BTCUSDT&side=BUY&quantity=0.5&timestamp=1&recvWindow=10000&signature={SIGNATURE}"
+
+    async def down(*a, **k):
+        raise ccxt.ExchangeNotAvailable(f"binance POST {url}")
+
+    client.fetch_balance = down
+    caplog.set_level(logging.DEBUG)
+    asyncio.run(scheduler._run_one(account_id, settings))
+
+    assert "error during processing cycle" in caplog.text and "ExchangeNotAvailable" in caplog.text
+    for needle in (SIGNATURE, "quantity=0.5", "symbol=BTCUSDT", "signature="):
+        assert needle not in caplog.text
+    assert "https://api.binance.com/api/v3/order" in caplog.text
+
+
+def test_redact_handles_header_dict_repr_header_line_and_signed_urls():
+    text = log_safety.redact(
+        "headers {'X-MBX-APIKEY': 'ABCdef123456SENTINELKEY', 'Accept': 'x'} | X-MBX-APIKEY: ABCdef123456SENTINELKEY | "
+        f"GET https://api.binance.com/sapi/v1/x?a=1&timestamp=2&signature={SIGNATURE} | signature={SIGNATURE}"
+    )
+    assert "SENTINELKEY" not in text and SIGNATURE not in text and "a=1" not in text
+    assert "'Accept': 'x'" in text and "https://api.binance.com/sapi/v1/x" in text

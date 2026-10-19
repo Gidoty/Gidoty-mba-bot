@@ -16,8 +16,9 @@ def configure_logging(settings=None) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # Library request logs (httpx prints full URLs, and Telegram's contains the
-    # bot token) off, and a last-line redaction of every configured secret.
+    # Credential-bearing third-party HTTP loggers (httpx, httpcore, ccxt) pinned
+    # to WARNING and every log record redacted at creation - so the root logger
+    # can be set to DEBUG for troubleshooting without leaking secrets.
     install_log_safety(settings)
 
 
