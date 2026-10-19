@@ -83,6 +83,10 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         # unresolved entry, residual exposure, ...). Takes precedence over
         # "error": it is the more specific, more urgent condition.
         runtime_status = "attention"
+    elif account.withdrawal_blocked_at is not None and active_trade is None:
+        # No position, and the stored key can withdraw: trading is blocked
+        # until the credential is replaced.
+        runtime_status = "error"
     elif account.last_error is not None:
         runtime_status = "error"
     elif active_trade is not None:
@@ -113,8 +117,11 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
         last_signal_at=account.last_signal_at,
-        last_error=account.last_error,
+        last_error=account.last_error
+        or (exchange.WITHDRAWAL_BLOCK_MESSAGE if account.withdrawal_blocked_at is not None else None),
         last_error_at=account.last_error_at,
+        credential_blocked=account.withdrawal_blocked_at is not None,
+        credential_block_message=exchange.WITHDRAWAL_BLOCK_MESSAGE if account.withdrawal_blocked_at is not None else None,
     )
 
 
@@ -287,6 +294,9 @@ def update_credentials(
     credential.environment = body.environment
     credential.encrypted_api_key = encrypt(body.api_key, key=settings.encryption_key)
     credential.encrypted_api_secret = encrypt(body.api_secret, key=settings.encryption_key)
+    # A replaced credential is the one thing that lifts the withdrawal-permission
+    # block (the new key is validated afresh on its first entry).
+    account.withdrawal_blocked_at = None
 
     # A credential that's no longer mainnet-tagged can't back live
     # trading - turn the switch back off explicitly rather than leaving
@@ -374,6 +384,12 @@ def start_bot_route(
     whatever already got this account to live_trading_enabled_at, same
     "check everything before any write" discipline as that endpoint."""
     account = _require_account(customer)
+
+    if account.withdrawal_blocked_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "your Binance API key has withdrawal permission enabled - replace it with a trade-only key before starting the bot",
+        )
 
     if not customer.has_paid:
         raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock before starting the bot")

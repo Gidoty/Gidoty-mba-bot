@@ -314,3 +314,69 @@ def test_void_trades_never_appear_in_history_or_counts():
         _add_live_trade("voidhist@example.com", status="void")
         assert client.get("/api/trades").json() == []
         assert client.get("/api/trades/summary").json()["total_trades"] == 0
+
+
+# --- withdrawal-permission policy: credential replacement and surfacing ---
+
+
+def _set_blocked(email: str, blocked: bool = True) -> None:
+    with session_scope() as session:
+        customer = session.query(Customer).filter(Customer.email == email).one()
+        customer.account.withdrawal_blocked_at = datetime.now(timezone.utc) if blocked else None
+
+
+def test_blocked_account_is_reported_as_error_with_the_policy_message_when_flat():
+    from mba_bot import exchange as ex
+
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "blockedflat@example.com")
+        _set_blocked("blockedflat@example.com")
+        body = client.get("/api/account").json()
+        assert body["credential_blocked"] is True and body["runtime_status"] == "error"
+        assert body["last_error"] == ex.WITHDRAWAL_BLOCK_MESSAGE == body["credential_block_message"]
+
+
+def test_blocked_account_with_an_open_position_keeps_showing_the_position_state_plus_the_message():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "blockedopen@example.com")
+        _set_blocked("blockedopen@example.com")
+        _add_live_trade("blockedopen@example.com", protection_status="protected")
+        body = client.get("/api/account").json()
+        assert body["runtime_status"] == "trade_open" and body["credential_blocked"] is True
+        assert "risk reduction only" in body["credential_block_message"]
+
+
+def test_credentials_cannot_be_replaced_while_a_trade_is_non_terminal_even_when_blocked():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "noreplace@example.com")
+        _set_blocked("noreplace@example.com")
+        _add_live_trade("noreplace@example.com", status="open", protection_status="protected")
+        response = client.put(
+            "/api/account/credentials",
+            json={"api_key": "new-key-1234567890", "api_secret": "new-secret-1234567890", "environment": "testnet"},
+        )
+        assert response.status_code == 409
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.email == "noreplace@example.com").one()
+            assert customer.account.withdrawal_blocked_at is not None, "a refused replacement must not lift the block"
+
+
+def test_replacing_the_credential_once_flat_lifts_the_block():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "replaceflat@example.com")
+        _set_blocked("replaceflat@example.com")
+        response = client.put(
+            "/api/account/credentials",
+            json={"api_key": "new-key-1234567890", "api_secret": "new-secret-1234567890", "environment": "testnet"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["credential_blocked"] is False and body["credential_block_message"] is None
+
+
+def test_start_bot_is_refused_while_blocked():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "blockedstart@example.com")
+        _set_blocked("blockedstart@example.com")
+        response = client.post("/api/account/start-bot", json={"confirm": True})
+        assert response.status_code == 409 and "withdrawal permission" in response.json()["detail"]

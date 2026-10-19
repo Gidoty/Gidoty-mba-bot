@@ -21,7 +21,8 @@ from mba_bot.models import Base, Trade, TradingAccount
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
 PREVIOUS_HEAD = "dc1a28b7a42e"
-NEW_HEAD = "b3f1c9a2d7e4"
+NEW_HEAD = "c7d2e5f8a1b3"  # head now includes the withdrawal-block column
+PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
     "protection_status", "protection_verified_at", "attention_reason", "entry_fee_base", "protection_attempt", "exit_attempt",
@@ -105,6 +106,9 @@ def test_fresh_database_migrates_to_the_model_schema(tmp_path, monkeypatch):
     cols = {c["name"] for c in inspect(engine).get_columns("trades")}
     assert NEW_COLUMNS <= cols
     assert cols == {c.name for c in Trade.__table__.columns}, "migration and models must agree"
+    account_cols = {c["name"] for c in inspect(engine).get_columns("trading_accounts")}
+    assert account_cols == {c.name for c in TradingAccount.__table__.columns}
+    assert "withdrawal_blocked_at" in account_cols
     indexes = {i["name"] for i in inspect(engine).get_indexes("trades")}
     assert "uq_trades_one_nonterminal_per_account" in indexes
     with engine.connect() as conn:
@@ -207,7 +211,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     assert script.get_heads() == [NEW_HEAD]
-    assert script.get_revision(NEW_HEAD).down_revision == PREVIOUS_HEAD
+    assert script.get_revision(PROTECTIVE_REVISION).down_revision == PREVIOUS_HEAD
+    assert script.get_revision(NEW_HEAD).down_revision == PROTECTIVE_REVISION
 
 
 # =========================== single-instance lock ===========================

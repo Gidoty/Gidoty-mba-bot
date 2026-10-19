@@ -219,7 +219,7 @@ def open_protected(monkeypatch, *, market="spot", settings=None, **client_kw):
     return client, settings, account_id
 
 
-def live_context(session, account_id, client, settings, notifier=None):
+def live_context(session, account_id, client, settings, notifier=None, *, entries_allowed=False):
     """A LiveContext + prepared venue over `client`, for driving lifecycle functions directly."""
     from datetime import datetime, timezone
 
@@ -227,7 +227,7 @@ def live_context(session, account_id, client, settings, notifier=None):
     from mba_bot.venue import build_venue
 
     account = session.get(TradingAccount, account_id)
-    v = build_venue(client, market_type=account.market_type, pair=account.pair)
+    v = build_venue(client, market_type=account.market_type, pair=account.pair, entries_allowed=entries_allowed)
     return lifecycle.LiveContext(
         session=session, account=account, venue=v, settings=settings, notifier=notifier or FakeNotifier(),
         now=datetime.now(timezone.utc),

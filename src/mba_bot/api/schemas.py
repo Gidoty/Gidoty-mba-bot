@@ -264,6 +264,10 @@ class AccountOut(BaseModel):
     last_signal_at: datetime | None
     last_error: str | None  # already a short, customer-safe message - see exchange.safe_error_message
     last_error_at: datetime | None
+    # True while the stored key is known to have withdrawal permission: no new
+    # trades; any open position is still managed for risk reduction only.
+    credential_blocked: bool = False
+    credential_block_message: str | None = None
 
     model_config = {"from_attributes": True}
 

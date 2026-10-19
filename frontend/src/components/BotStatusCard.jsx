@@ -57,6 +57,10 @@ export default function BotStatusCard({ account }) {
         Last signal: {signalLabel ? `${signalLabel}${lastSignalTime ? ` (${lastSignalTime})` : ""}` : "not yet evaluated"}
       </p>
 
+      {account.credential_blocked && account.runtime_status !== "error" && (
+        <p className="mt-2 rounded-md bg-amber-100 px-3 py-2 text-xs text-amber-900">{account.credential_block_message}</p>
+      )}
+
       {account.runtime_status === "attention" && (
         <p className="mt-2 rounded-md bg-amber-100 px-3 py-2 text-xs text-amber-900">
           Your open position needs a safety check. The bot is retrying automatically and new trades are on hold

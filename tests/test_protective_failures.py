@@ -485,7 +485,7 @@ def test_two_scheduler_instances_cannot_both_open_a_trade_for_one_account(db, mo
 
     async def attempt():
         with session_scope() as session:
-            ctx = live_context(session, account_id, client, settings)
+            ctx = live_context(session, account_id, client, settings, entries_allowed=True)
             await ctx.venue.prepare()
             return await lifecycle.open_live_trade(
                 ctx, side="long", quantity=0.2, signal_price=90.0, stop_price=43.0, risk_text=""
@@ -706,7 +706,7 @@ def test_placing_an_entry_twice_with_one_client_id_is_refused_by_the_exchange_mo
 
     async def dup():
         with session_scope() as session:
-            ctx = live_context(session, account_id, client, settings)
+            ctx = live_context(session, account_id, client, settings, entries_allowed=True)
             await ctx.venue.prepare()
             await ctx.venue.place_entry("long", 0.1, lifecycle.client_id(trade, "entry"))
 

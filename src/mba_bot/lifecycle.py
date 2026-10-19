@@ -240,6 +240,8 @@ async def open_live_trade(
     Returns the Trade (any state) or None if the write-ahead insert lost to
     another non-terminal trade (the database invariant)."""
     session, account, venue = ctx.session, ctx.account, ctx.venue
+    if not venue.entries_allowed:
+        raise venue_mod.EntryForbidden("open_live_trade requires an entry-capable venue")
     stop = venue.round_stop(stop_price, side=side)
     trade = Trade(
         account_id=account.id,
@@ -704,25 +706,20 @@ async def execute_exit(
         return "deferred"
 
     # -- 4. verify, then record
+    # What is still the bot's to close: the part of its own quantity not yet
+    # closed, but never more than the exchange still holds (Futures position /
+    # Spot free base). The exchange figure alone is NOT the test: it may
+    # include the customer's own units (Spot) or an enlarged position
+    # (Futures) that the bot must never touch, and on Spot the bot's stored
+    # quantity can be a gross figure when the commission was unconfirmed.
     try:
-        left = await venue.exposure() if venue.market_type == "futures" else 0.0
+        done = sum(q for q, _ in await _exit_fills(ctx, trade))
+        left = min(max(trade.quantity - done, 0.0), await venue.exposure())
     except Exception:
         return "deferred"
-    if venue.market_type == "futures" and left >= max(rules.market_min_qty, rules.min_qty):
-        return "deferred"  # partial exit: next reconcile exits the remainder (new attempt id)
-    if venue.market_type == "spot":
-        # What is still the bot's to sell: the part of its quantity not yet
-        # sold, but never more than the base actually free (its quantity may
-        # be a gross figure when the commission could not be confirmed) - and
-        # never the customer's own units.
-        try:
-            done = sum(q for q, _ in await _exit_fills(ctx, trade))
-            left = min(max(trade.quantity - done, 0.0), await venue.exposure())
-        except Exception:
-            return "deferred"
-        if venue_mod.floor_to_step(left, rules.market_step) >= max(rules.market_min_qty, rules.min_qty):
-            _set(session, trade, exit_attempt=trade.exit_attempt + 1)
-            return "deferred"
+    if venue_mod.floor_to_step(left, rules.market_step) >= max(rules.market_min_qty, rules.min_qty):
+        _set(session, trade, exit_attempt=trade.exit_attempt + 1)  # partial: next pass closes the remainder with a fresh id
+        return "deferred"
     return await _record_exit(
             ctx, trade, reason=reason, stop_executed=stop_executed, price_hint=price_hint, emergency=emergency, was_attention=was_attention
         )

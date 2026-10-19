@@ -147,7 +147,7 @@ def test_futures_entry_is_a_plain_market_order_with_the_deterministic_client_id(
     async def body(v):
         await v.place_entry("long", 0.212, "mbaZ")
 
-    _run(client, venue_mod.FuturesVenue, body)
+    _run(client, venue_mod.FuturesVenue, body, entries_allowed=True)  # acting as the entry path
     req = rec.last("fapiPrivatePostOrder")
     assert req["type"] == "MARKET" and req["side"] == "BUY" and req["newClientOrderId"] == "mbaZ"
     assert "reduceOnly" not in req and "stopPrice" not in req
@@ -231,7 +231,7 @@ def test_spot_entry_and_exit_are_plain_market_orders_by_base_quantity():
         await v.place_exit("long", 0.2119, "mbaX")
         return order, entry_req, v.net_from_fee(order.filled, order.fee_base)
 
-    order, entry_req, net = _run(client, venue_mod.SpotVenue, body)
+    order, entry_req, net = _run(client, venue_mod.SpotVenue, body, entries_allowed=True)  # acting as the entry path
     assert entry_req["type"] == "MARKET" and entry_req["quantity"] == "0.212" and "quoteOrderQty" not in entry_req
     assert order.fee_base == pytest.approx(0.000212) and order.filled == pytest.approx(0.212)
     assert net == pytest.approx(0.211)

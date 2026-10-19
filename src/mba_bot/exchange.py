@@ -41,16 +41,46 @@ def build_exchange_client(
     return client
 
 
-async def assert_trade_only(client: ccxt_async.Exchange) -> None:
-    """Best-effort defense in depth: confirm the key can't withdraw before
-    trading with it. Not every exchange/market exposes this the same way
-    in `fetch_balance()['info']`, so callers should log-and-continue on
-    unexpected shapes rather than treat that as fatal - only an explicit
-    `canWithdraw: true` blocks trading.
+# Shown to the customer (Telegram and dashboard) when a stored key can withdraw.
+# Deliberately says what still happens to an existing position: the bot keeps
+# managing it, for risk reduction only. No exchange text, no secrets.
+WITHDRAWAL_BLOCK_MESSAGE = (
+    "Your Binance API key currently has withdrawal permission enabled. No new trades will be opened. "
+    "Any existing position will continue to be managed for risk reduction only. Replace the API key with one "
+    "that has withdrawal permission disabled before new trading can resume."
+)
+
+
+async def has_withdrawal_permission(client: ccxt_async.Exchange) -> bool:
+    """Read-only. True only on an explicit `canWithdraw: true`. Not every
+    exchange/market exposes this the same way in `fetch_balance()['info']`,
+    so an unexpected shape is "not detected" (as it always was); a failed
+    read propagates.
+
+    Two DIFFERENT questions are asked of this answer, and they must never be
+    confused:
+
+    * ENTRY-CAPABLE validation (`assert_trade_only`, run by the new-entry
+      path on every entry): any withdrawal permission -> refuse. A key that
+      can withdraw must never open or increase exposure.
+    * RISK-REDUCING management of an ALREADY-OPEN position (reconcile,
+      verify/re-place the bot's own protective order, the exit lease,
+      emergency close): allowed with such a key, because those actions only
+      reduce exposure and refusing them would strand the customer's
+      position. That path runs on a Venue with `entries_allowed=False`,
+      which cannot place an entry at all (venue.EntryForbidden).
     """
     balance = await client.fetch_balance()
     info = balance.get("info", {}) if isinstance(balance, dict) else {}
-    if isinstance(info, dict) and info.get("canWithdraw") is True:
+    return isinstance(info, dict) and info.get("canWithdraw") is True
+
+
+async def assert_trade_only(client: ccxt_async.Exchange) -> None:
+    """ENTRY-CAPABLE credential validation: raises if the key can withdraw.
+    Called by the new-entry path every time, never skipped, never relaxed
+    for managing an existing position (that path doesn't need it - it can
+    only reduce exposure; see has_withdrawal_permission)."""
+    if await has_withdrawal_permission(client):
         raise WithdrawalPermissionDetected(
             "stored API key has withdrawal permission enabled - revoke it and issue a trade-only key"
         )

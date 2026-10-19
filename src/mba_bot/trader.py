@@ -92,8 +92,17 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         sandbox=effective_is_paper,
     )
     try:
+        # Withdrawal permission is checked every cycle for a live key, but it
+        # means two different things (see exchange.has_withdrawal_permission):
+        # it ends NEW entries for good (durable block until the credential is
+        # replaced), while an ALREADY-OPEN position keeps being managed, for
+        # risk reduction only - that path runs on a venue that cannot place
+        # an entry at all.
+        withdrawal_detected = False
         if not effective_is_paper:
-            await exchange.assert_trade_only(client)
+            withdrawal_detected = await exchange.has_withdrawal_permission(client)
+            if withdrawal_detected:
+                await _flag_withdrawal_block(session, account, notifier, now=now)
 
         if open_trade is not None and not open_trade.is_paper:
             # A live position is reconciled against Binance FIRST, before
@@ -134,6 +143,13 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             )
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
             await _maybe_send_daily_summary(session, account, notifier, now=now)
+            return
+
+        if open_trade is None and not is_paper and (withdrawal_detected or account.withdrawal_blocked_at is not None):
+            # No position and a withdrawal-capable (or still-blocked) credential:
+            # no scan, no entry. Nothing to manage; the customer was alerted once.
+            account.last_error = None
+            account.last_error_at = None
             return
 
         # Auto Select only ever runs this scan when there is no open
@@ -331,6 +347,18 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         # live branch's fetch_available_quote_balance call below).
         effective_capital = account.paper_balance
     else:
+        # ENTRY-CAPABLE credential validation, fresh on every entry and
+        # independent of anything checked earlier in the cycle: a key that can
+        # withdraw never reaches an order, and a durable block (set the first
+        # time one was seen) holds until the credential is replaced.
+        if account.withdrawal_blocked_at is not None:
+            return
+        try:
+            await exchange.assert_trade_only(client)
+        except exchange.WithdrawalPermissionDetected:
+            await _flag_withdrawal_block(session, account, notifier, now=now)
+            return
+
         if account.allocated_capital is None:
             # Fail closed: Trading Capital must be an explicit customer
             # choice before any live entry, never a silent "use whatever
@@ -375,7 +403,11 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             max_notional_multiplier=settings.max_notional_multiplier,
         )
         venue = build_venue(
-            client, market_type=account.market_type, pair=account.pair, spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct
+            client,
+            market_type=account.market_type,
+            pair=account.pair,
+            spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
+            entries_allowed=True,  # the ONLY place: assert_trade_only just passed above
         )
         ctx = lifecycle.LiveContext(
             session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now
@@ -503,6 +535,22 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     )
 
 
+async def _flag_withdrawal_block(session, account, notifier, *, now) -> None:
+    """Record, durably and once, that the stored key can withdraw, and alert
+    the customer once. Committed BEFORE the alert so a crash or restart never
+    repeats it (at-most-once; the dashboard shows the block regardless)."""
+    if account.withdrawal_blocked_at is not None:
+        return
+    account.withdrawal_blocked_at = now
+    session.commit()
+    logger.warning("account %s: stored key has withdrawal permission; new entries blocked", account.id)
+    if account.notification_target is not None:
+        try:
+            await notifier.send(account.notification_target, exchange.WITHDRAWAL_BLOCK_MESSAGE)
+        except Exception:
+            logger.exception("account %s: failed to send the withdrawal-permission alert", account.id)
+
+
 async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now):
     """Verify the exchange can be managed safely, then reconcile `trade`
     against Binance. Returns (trade, LiveContext)."""
@@ -551,7 +599,11 @@ async def reconcile_account(
         exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=False
     )
     try:
-        await exchange.assert_trade_only(client)
+        # Risk-reducing management of an existing position: allowed even with a
+        # withdrawal-capable key (it is flagged and the customer alerted once),
+        # because this path's venue cannot place an entry.
+        if await exchange.has_withdrawal_permission(client):
+            await _flag_withdrawal_block(session, account, notifier, now=now)
         trade, ctx = await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
         if current_price is not None:
             await lifecycle.monitor_trade(ctx, trade, crossover_exit=False, current_price=current_price)

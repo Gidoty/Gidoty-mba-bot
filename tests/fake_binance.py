@@ -64,6 +64,7 @@ class FakeBinance:
         trades_fee_info: bool = True,
         liquidation_price: float | None = None,
         reject_close_position: bool = False,
+        can_withdraw: bool = False,
         api_key: str | None = None,
         sandbox: bool = False,
     ):
@@ -89,6 +90,7 @@ class FakeBinance:
         self.before_hooks: dict = {}  # role -> callable(fake) run just before that order is processed
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
+        self.can_withdraw = can_withdraw  # the key has withdrawal permission
         if order_types is None:
             order_types = (
                 ["LIMIT", "MARKET", "STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET"]
@@ -180,7 +182,7 @@ class FakeBinance:
 
     async def fetch_balance(self):
         self._record("fetch_balance")
-        out: dict = {"free": dict(self.free), "info": {}}
+        out: dict = {"free": dict(self.free), "info": {"canWithdraw": self.can_withdraw}}
         for asset in set(self.free) | set(self.used):
             out[asset] = {"free": self.free.get(asset, 0.0), "used": self.used.get(asset, 0.0)}
         return out

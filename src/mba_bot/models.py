@@ -156,6 +156,14 @@ class TradingAccount(Base):
     # not cleared by pausing/resuming or by a later pair/market change.
     live_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Set (once, durably) the first time the stored Binance key is found to
+    # have withdrawal permission. While set: NO new live entry, ever, even if
+    # the permission is later removed on Binance - only replacing the
+    # credential (api/routers/account.py) clears it. An already-open position
+    # keeps being managed for risk reduction only. Being a column, it survives
+    # restarts and makes the customer alert fire once per episode.
+    withdrawal_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

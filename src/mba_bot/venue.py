@@ -69,6 +69,13 @@ class ProtectionUnavailable(RuntimeError):
     quantity or notional cannot satisfy them). No entry is placed."""
 
 
+class EntryForbidden(RuntimeError):
+    """An entry was attempted on a Venue that is not entry-capable. Venues
+    are built risk-reducing-only by default; only the new-entry path, after
+    its fresh credential validation (exchange.assert_trade_only), builds one
+    with entries_allowed=True."""
+
+
 class QuantityUnresolvable(RuntimeError):
     """The base quantity the bot actually holds from a Spot fill could not be
     established from exchange-confirmed commission data. The caller must not
@@ -287,9 +294,11 @@ class Venue:
 
     market_type: str = ""
 
-    def __init__(self, client: ccxt_async.Exchange, pair: str):
+    def __init__(self, client: ccxt_async.Exchange, pair: str, *, entries_allowed: bool = False):
         self.client = client
         self.pair = pair
+        # False = risk-reducing only (everything except place_entry works).
+        self.entries_allowed = entries_allowed
         self.symbol = exchange.exchange_symbol(pair, self.market_type)
         self.base = pair.split("/", 1)[0]
         self.market: dict | None = None
@@ -342,6 +351,8 @@ class Venue:
     # -- orders ---------------------------------------------------------------
 
     async def place_entry(self, side: str, quantity: float, client_id: str) -> OrderInfo:
+        if not self.entries_allowed:
+            raise EntryForbidden("this venue is risk-reducing only")
         order_side = "buy" if side == "long" else "sell"
         raw = await self.client.create_order(
             self.symbol, "market", order_side, quantity, None, {"clientOrderId": client_id}
@@ -438,8 +449,8 @@ class Venue:
 class SpotVenue(Venue):
     market_type = "spot"
 
-    def __init__(self, client, pair, *, stop_limit_buffer_pct: float = 0.5):
-        super().__init__(client, pair)
+    def __init__(self, client, pair, *, stop_limit_buffer_pct: float = 0.5, entries_allowed: bool = False):
+        super().__init__(client, pair, entries_allowed=entries_allowed)
         self.stop_limit_buffer_pct = stop_limit_buffer_pct
         self.kind: str | None = None
 
@@ -842,7 +853,11 @@ class FuturesVenue(Venue):
         return qty, notional / qty
 
 
-def build_venue(client, *, market_type: str, pair: str, spot_stop_limit_buffer_pct: float = 0.5) -> Venue:
+def build_venue(
+    client, *, market_type: str, pair: str, spot_stop_limit_buffer_pct: float = 0.5, entries_allowed: bool = False
+) -> Venue:
+    """Risk-reducing only unless `entries_allowed=True`, which only the
+    new-entry path passes, after exchange.assert_trade_only."""
     if market_type == "futures":
-        return FuturesVenue(client, pair)
-    return SpotVenue(client, pair, stop_limit_buffer_pct=spot_stop_limit_buffer_pct)
+        return FuturesVenue(client, pair, entries_allowed=entries_allowed)
+    return SpotVenue(client, pair, stop_limit_buffer_pct=spot_stop_limit_buffer_pct, entries_allowed=entries_allowed)

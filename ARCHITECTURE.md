@@ -490,6 +490,32 @@ existing position -> `attention`, no orders. Stale bot-prefixed orders are
 cancelled; the customer's own orders (no `mba` client id prefix) are never
 touched. Accounts in any non-terminal state cannot enter again.
 
+### Withdrawal-permission policy
+
+The runtime check (`exchange.has_withdrawal_permission`, an explicit
+`canWithdraw: true`) is asked every live cycle but answered differently for
+two distinct purposes, separated in code:
+
+- **Entry-capable validation** (`exchange.assert_trade_only`, run inside
+  `_maybe_enter` on every entry, independent of anything checked earlier):
+  a key that can withdraw never reaches an order, Spot or Futures. The
+  first detection sets `TradingAccount.withdrawal_blocked_at` (durable, so
+  it survives restarts and the customer is alerted once). While it is set
+  there are no entries, Start Bot is refused, and removing the permission
+  on the same key does not lift it: only replacing the credential does
+  (`PUT /api/account/credentials`), which stays impossible while any trade
+  is non-terminal. The dashboard shows the block.
+- **Risk-reducing management of an already-open position**: reconcile,
+  verify or re-place the bot's own protective order, cancel only that order
+  as part of the exit lease, the exit lease itself, emergency close and
+  stop-trigger reconciliation all continue. They run on a `Venue` built with
+  `entries_allowed=False` (the default), whose `place_entry` raises
+  `EntryForbidden`; `open_live_trade` refuses such a venue too. Only the
+  new-entry path builds an entry-capable venue, after `assert_trade_only`.
+  Spot sells stay bounded by the bot's verified remaining quantity; Futures
+  exits stay `reduceOnly`. A protected position is not liquidated merely
+  because the permission exists. Once flat the account stays blocked.
+
 ### What is deliberately not done
 
 No customer control over the protective order, no Pause/Stop, no manual
@@ -505,9 +531,6 @@ account.
 - Portfolio Margin has no dedicated "is this PM" read on the classic Futures
   API; it is refused because PM accounts are expected to fail the classic
   mode reads (to be confirmed by validation), plus a best-effort SAPI probe.
-- An API key that gains withdrawal permission is refused for *all* actions
-  including managing an open position (pre-existing policy); the resting
-  exchange-side stop still protects the position.
 - Spot stop-limit gap-through is caught by the 15 s watch, not instantly; a
   market-triggered stop (when listed) has no such window. Each position in
   danger costs roughly 50 request-weight per pass (markets, account, order,

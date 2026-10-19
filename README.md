@@ -173,9 +173,10 @@ funds:
 - `ccxt` is pinned to `==4.5.88` in `requirements.txt` (the exact version
   the order layer was built against). Do not upgrade it without re-running
   `tests/test_ccxt_contract.py` and the Testnet validation procedure.
-- Run `alembic upgrade head` (revision `b3f1c9a2d7e4`): additive columns on
-  `trades` plus a partial unique index. It refuses to run if an account
-  already has more than one open/unresolved trade.
+- Run `alembic upgrade head` (revisions `b3f1c9a2d7e4`, then `c7d2e5f8a1b3`):
+  additive columns on `trades` plus a partial unique index (it refuses to run
+  if an account already has more than one open/unresolved trade), and a
+  nullable `trading_accounts.withdrawal_blocked_at`.
 - The scheduler now takes an exclusive lock (`MBA_BOT_LOCK_FILE`, default
   `./mba_bot.lock`); a second instance exits immediately. Optional tuning
   variables are listed in `.env.example`.
