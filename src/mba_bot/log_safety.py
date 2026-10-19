@@ -21,7 +21,9 @@ and chain contain no URL). This module is the second and third layer:
 2. A log-record factory (`install_log_safety`) redacts every record at
    creation - before ANY handler, including logging.lastResort, which the
    API deployment relies on - so the message and the rendered traceback never
-   carry: configured secrets (Telegram, WhatsApp, Paystack, JWT, encryption
+   carry (record structure is preserved: `args` keeps its type and length so
+   structured formatters such as uvicorn's AccessFormatter keep working; see
+   `_redact_record`): configured secrets (Telegram, WhatsApp, Paystack, JWT, encryption
    and Binance testnet keys); anything shaped like a Telegram bot-URL token;
    an `X-MBX-APIKEY` header value; or a signed Binance URL (its whole query
    string is dropped - it holds the order parameters, the timestamp and a
@@ -73,13 +75,52 @@ def redact(text: str, secrets=()) -> str:
     return _TELEGRAM_BOT_TOKEN.sub("bot" + REDACTED, text)
 
 
+def _redact_args(args, secrets):
+    """Redact string arguments in place of a copy, keeping the container type,
+    the length and every non-string value (ints, floats, ...) exactly as they
+    were: structured formatters (uvicorn's AccessFormatter unpacks
+    `record.args` as five fields) depend on that shape."""
+    if isinstance(args, tuple):
+        return tuple(redact(a, secrets) if isinstance(a, str) else a for a in args)
+    if isinstance(args, dict):
+        return {k: (redact(v, secrets) if isinstance(v, str) else v) for k, v in args.items()}
+    return args
+
+
 def _redact_record(record: logging.LogRecord, secrets=()) -> None:
+    """Remove secrets from a record WITHOUT changing its structure unless that
+    is the only way to remove them.
+
+    1. Nothing to redact (the overwhelmingly common case): the record is left
+       exactly as the logger made it.
+    2. Something to redact: the message template and each string argument are
+       redacted individually, so `record.args` keeps its shape and the
+       record's own formatter still works (uvicorn access logs).
+    3. If the formatted message STILL differs from the fully-redacted one (a
+       secret that only appears once template and arguments are joined, or in
+       the str() of a non-string argument), fall back to a flattened record -
+       message redacted, args dropped. Secrecy outranks structure here; this
+       only happens for free-form messages, never for fixed-template
+       structured records such as access logs.
+    """
     try:
         message = record.getMessage()
     except Exception:
         message = str(record.msg)
-    record.msg = redact(message, secrets)
-    record.args = None
+    redacted = redact(message, secrets)
+    if redacted != message:
+        if record.args:
+            if isinstance(record.msg, str):
+                record.msg = redact(record.msg, secrets)
+            record.args = _redact_args(record.args, secrets)
+            try:
+                still = record.getMessage()
+            except Exception:
+                still = None
+            if still != redacted:
+                record.msg, record.args = redacted, None
+        else:
+            record.msg = redacted  # no args: msg already IS the whole message
     if record.exc_info and record.exc_info[1] is not None:
         # Pre-render and redact the traceback; Formatter reuses exc_text.
         record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)).rstrip("\n"), secrets)

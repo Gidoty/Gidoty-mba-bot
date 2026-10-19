@@ -579,6 +579,11 @@ two distinct purposes, separated in code:
   (Telegram, WhatsApp, Paystack, JWT, encryption, testnet keys), anything shaped
   like a Telegram bot-URL token, an `X-MBX-APIKEY` header value, and the whole
   query string of a signed Binance URL (host and path are kept for diagnosis).
+  Redaction keeps a record's structure: the template and each string argument are
+  redacted individually, so `record.args` keeps its type and length (uvicorn's
+  `AccessFormatter` unpacks it as five fields). Only a secret that exists solely
+  in the joined message falls back to a flattened, redacted record
+  (`tests/test_uvicorn_logging_safety.py`, which runs a real uvicorn server).
 - Signed Binance URLs: for a signed GET, ccxt's exception text contains the
   request parameters (symbol, order and client ids), a timestamp and a
   signature that is replayable only inside the exchange's recvWindow (ccxt
