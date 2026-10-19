@@ -252,3 +252,31 @@ def test_ccxt_itself_rejects_a_stop_type_the_symbol_does_not_list():
     with pytest.raises(cx.InvalidOrder):
         asyncio.run(go())
     assert rec.calls == []
+
+
+@pytest.mark.parametrize("cls", [cx.binance, cx.binanceusdm], ids=["spot-client", "usdm-client"])
+def test_key_level_withdrawal_flag_is_a_signed_get_of_the_apirestrictions_endpoint_on_both_clients(cls):
+    """The withdrawal gate reads the API KEY's own `enableWithdrawals` (F-02), through ccxt's own method, as a plain
+    signed read. Pins the request ccxt 4.5.88 builds; whether Binance returns the field is what the read-only Mainnet
+    check established (see ARCHITECTURE.md)."""
+    client = cls({"apiKey": "k", "secret": "s"})
+    sent = []
+
+    async def fake_fetch(url, method="GET", headers=None, body=None):
+        sent.append((method, url, dict(headers or {})))
+        return {"enableWithdrawals": False}
+
+    client.fetch = fake_fetch
+
+    async def go():
+        try:
+            return await client.sapiGetAccountApiRestrictions()
+        finally:
+            await client.close()
+
+    assert asyncio.run(go()) == {"enableWithdrawals": False}
+    (method, url, headers), = sent
+    assert method == "GET", "read-only"
+    assert url.startswith("https://api.binance.com/sapi/v1/account/apiRestrictions?"), url
+    assert "signature=" in url and "timestamp=" in url
+    assert "X-MBX-APIKEY" in headers

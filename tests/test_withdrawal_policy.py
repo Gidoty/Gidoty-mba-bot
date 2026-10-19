@@ -338,3 +338,125 @@ def test_restart_during_an_open_position_keeps_managing_it_and_keeps_the_block(d
 
     assert the_trade(account_id).status == "open" and the_trade(account_id).protection_status == "protected"
     assert len(_alerts(notifier)) == 1 and len(client.orders_by_role("entry")) == 1
+
+
+# =========================== F. F-02: the API KEY's withdrawal permission, not the account-level flag ===========================
+#
+# Measured on a real Mainnet account (read-only): `account.canWithdraw` was True on both Spot and Futures while the
+# key's own restriction `enableWithdrawals` was False. The gate must follow the KEY. FakeBinance now reports the
+# account-level flag as True whatever the key says, and drives `enableWithdrawals` from `can_withdraw`.
+
+UNVERIFIABLE = [
+    pytest.param({"fault": ccxt.RequestTimeout("synthetic timeout")}, id="timeout"),
+    pytest.param({"fault": ccxt.ExchangeNotAvailable("synthetic unavailable")}, id="exchange-unavailable"),
+    pytest.param({"fault": ccxt.AuthenticationError("synthetic rejected")}, id="key-rejected"),
+    pytest.param({"override": {}}, id="field-missing"),
+    pytest.param({"override": {"enableWithdrawals": None}}, id="field-null"),
+    pytest.param({"override": {"enableWithdrawals": "false"}}, id="field-not-a-boolean"),
+    pytest.param({"override": ["unexpected"]}, id="response-not-an-object"),
+]
+
+
+def _make(market, **kw):
+    return (spot_client if market == "spot" else futures_client)(**kw)
+
+
+@pytest.mark.parametrize("market", ["spot", "futures"])
+def test_f02_account_level_can_withdraw_true_but_key_enable_withdrawals_false_trades_normally(db, monkeypatch, market):
+    """THE real-world case: Binance says the account can withdraw, and the key cannot."""
+    settings = make_settings(max_notional_multiplier=100.0)
+    client = _make(market, can_withdraw=False)
+    assert asyncio.run(client.fetch_balance())["info"]["canWithdraw"] is True, "the account-level flag is True"
+    assert asyncio.run(client.sapiGetAccountApiRestrictions())["enableWithdrawals"] is False, "the key cannot withdraw"
+    install(monkeypatch, client)
+    account_id = new_account(settings, market_type=market)
+
+    notifier = run_cycle(account_id, settings)
+
+    trade = the_trade(account_id)
+    assert trade.status == "open" and trade.protection_status == "protected"
+    assert _blocked_at(account_id) is None and _alerts(notifier) == []
+
+
+@pytest.mark.parametrize("market", ["spot", "futures"])
+def test_f02_a_key_that_can_withdraw_stays_blocked_whatever_the_account_flag_says(db, monkeypatch, market):
+    settings = make_settings(max_notional_multiplier=100.0)
+    client = _make(market, can_withdraw=True)
+    assert asyncio.run(client.fetch_balance())["info"]["canWithdraw"] is True
+    install(monkeypatch, client)
+    account_id = new_account(settings, market_type=market)
+
+    notifier = run_cycle(account_id, settings)
+    run_cycle(account_id, settings, notifier)
+
+    assert client.orders == {} and all_trades(account_id) == []
+    assert _blocked_at(account_id) is not None
+    assert _alerts(notifier) == [MESSAGE]
+
+
+def test_f02_the_gate_reads_only_the_key_level_endpoint():
+    client = spot_client(can_withdraw=False)
+    assert asyncio.run(exchange.has_withdrawal_permission(client)) is False
+    asyncio.run(exchange.assert_trade_only(client))  # passes
+    client.can_withdraw = True
+    assert asyncio.run(exchange.has_withdrawal_permission(client)) is True
+    with pytest.raises(exchange.WithdrawalPermissionDetected):
+        asyncio.run(exchange.assert_trade_only(client))
+    assert {call[0] for call in client.calls} == {"api_restrictions"}, "no balance/account-level read is used"
+
+
+@pytest.mark.parametrize("market", ["spot", "futures"])
+@pytest.mark.parametrize("mode", UNVERIFIABLE)
+def test_f02_an_unverifiable_key_permission_opens_no_trade_and_never_sets_the_permanent_block(db, monkeypatch, market, mode):
+    settings = make_settings(max_notional_multiplier=100.0)
+    client = _make(market, can_withdraw=False)
+    if "fault" in mode:
+        client.fail("api_restrictions", exc=mode["fault"], times=99)
+    else:
+        client.restrictions_override = mode["override"]
+    install(monkeypatch, client)
+    account_id = new_account(settings, market_type=market)
+
+    notifier = run_cycle(account_id, settings, swallow=True)
+    run_cycle(account_id, settings, notifier, swallow=True)
+
+    assert client.orders == {} and all_trades(account_id) == [], "fail closed: no new trade"
+    assert _blocked_at(account_id) is None, "a failed READ is not a finding about the key: no permanent block"
+    assert _alerts(notifier) == [], "and no (false) withdrawal alert"
+    with session_scope() as session:
+        assert session.get(TradingAccount, account_id).last_error, "the customer sees a safe retry message"
+
+    client.faults.clear()  # Binance answers properly again
+    client.restrictions_override = None
+    run_cycle(account_id, settings, notifier)
+    assert the_trade(account_id).status == "open", "the very next healthy cycle trades: nothing was latched"
+
+
+@pytest.mark.parametrize("market", ["spot", "futures"])
+def test_f02_managing_an_open_position_continues_when_the_key_permission_cannot_be_read(db, monkeypatch, market):
+    client, settings, account_id = open_protected(monkeypatch, market=market)
+    first = _cancel_stop_like_binance(client)  # the customer removes the stop
+    client.fail("api_restrictions", exc=ccxt.RequestTimeout("synthetic"), times=99)
+
+    run_cycle(account_id, settings)
+
+    trade = the_trade(account_id)
+    assert trade.status == "open" and trade.protection_status == "protected"
+    live = [o for o in client.orders_by_role("stop") if o["status"] == "open"]
+    assert len(live) == 1 and live[0]["client_id"] != first["client_id"], "the stop was re-established"
+    assert len(client.orders_by_role("entry")) == 1 and _blocked_at(account_id) is None
+
+
+def test_f02_the_recovery_loop_also_keeps_managing_when_the_key_permission_cannot_be_read(db, monkeypatch):
+    client, settings, account_id = open_protected(monkeypatch, market="futures")
+    _cancel_stop_like_binance(client)
+    client.restrictions_override = {}  # malformed answer
+    run_reconcile(account_id, settings)
+    assert the_trade(account_id).protection_status == "protected" and _blocked_at(account_id) is None
+
+
+def test_f02_the_unverifiable_message_is_customer_safe():
+    message = exchange.safe_error_message(exchange.WithdrawalPermissionUnverifiable("internal detail enableWithdrawals"))
+    assert "retry automatically" in message
+    for needle in ("enableWithdrawals", "canWithdraw", "internal", "secret", "-2015"):
+        assert needle not in message

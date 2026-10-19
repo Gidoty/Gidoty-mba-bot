@@ -8,10 +8,13 @@ recommended deployment shape here.
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
+
+logger = logging.getLogger(__name__)
 
 _EXCHANGE_CLASSES = {
     ("binance", "spot"): ccxt_async.binance,
@@ -27,6 +30,14 @@ class WithdrawalPermissionDetected(RuntimeError):
     """Stored keys must be trade-only. Raised if a runtime check finds a
     key that can withdraw - trading is refused for that account until the
     key is replaced, even if trade-only was intended at signup."""
+
+
+class WithdrawalPermissionUnverifiable(RuntimeError):
+    """Binance's API-key permission response was unavailable, malformed, or did
+    not state whether withdrawals are enabled, so the key cannot be shown to be
+    trade-only. Raised only on the ENTRY path (fail closed for that cycle). It
+    is a verification failure, not a finding about the key: it never sets the
+    durable withdrawal block and the next cycle simply asks again."""
 
 
 class NonProductionRoutingError(RuntimeError):
@@ -144,36 +155,61 @@ WITHDRAWAL_BLOCK_MESSAGE = (
 )
 
 
+async def _key_enables_withdrawals(client: ccxt_async.Exchange) -> bool:
+    """STRICT, read-only. The API KEY's own "Enable Withdrawals" restriction,
+    from Binance's key-permission endpoint (GET /sapi/v1/account/apiRestrictions,
+    `enableWithdrawals`; weight 1, needs only Enable Reading). The account-level
+    `canWithdraw` in the balance payload is NOT this: Binance reports it True
+    for ordinary accounts whatever the key's restrictions are, so it is never
+    consulted. Anything other than an explicit boolean (a failed call, a
+    non-object response, a missing or non-boolean field) is "cannot verify":
+    the ccxt error propagates, or WithdrawalPermissionUnverifiable is raised."""
+    restrictions = await client.sapiGetAccountApiRestrictions()
+    flag = restrictions.get("enableWithdrawals") if isinstance(restrictions, dict) else None
+    if isinstance(flag, bool):
+        return flag
+    raise WithdrawalPermissionUnverifiable("Binance did not state whether withdrawals are enabled for this API key")
+
+
 async def has_withdrawal_permission(client: ccxt_async.Exchange) -> bool:
-    """Read-only. True only on an explicit `canWithdraw: true`. Not every
-    exchange/market exposes this the same way in `fetch_balance()['info']`,
-    so an unexpected shape is "not detected" (as it always was); a failed
-    read propagates.
+    """Read-only. True only when Binance says THIS API KEY has withdrawals
+    enabled (`enableWithdrawals: true`).
 
     Two DIFFERENT questions are asked of this answer, and they must never be
     confused:
 
     * ENTRY-CAPABLE validation (`assert_trade_only`, run by the new-entry
-      path on every entry): any withdrawal permission -> refuse. A key that
-      can withdraw must never open or increase exposure.
+      path on every entry): any withdrawal permission -> refuse, and a key
+      that cannot be verified -> refuse too (strict, see
+      `_key_enables_withdrawals`).
     * RISK-REDUCING management of an ALREADY-OPEN position (reconcile,
       verify/re-place the bot's own protective order, the exit lease,
       emergency close): allowed with such a key, because those actions only
       reduce exposure and refusing them would strand the customer's
       position. That path runs on a Venue with `entries_allowed=False`,
       which cannot place an entry at all (venue.EntryForbidden).
-    """
-    balance = await client.fetch_balance()
-    info = balance.get("info", {}) if isinstance(balance, dict) else {}
-    return isinstance(info, dict) and info.get("canWithdraw") is True
+
+    This function is the cycle-level / management-path read used for
+    flagging the key. It is deliberately LENIENT: if the permission cannot be
+    read it answers False ("not detected this cycle") and logs the failure
+    category, so a hiccup in this one endpoint can never stall the management
+    of an open position or set the durable block. That cannot let a trade
+    through: every new entry re-validates strictly in `assert_trade_only`."""
+    try:
+        return await _key_enables_withdrawals(client)
+    except Exception as exc:
+        logger.warning("withdrawal-permission check unavailable this cycle (%s)", type(exc).__name__)
+        return False
 
 
 async def assert_trade_only(client: ccxt_async.Exchange) -> None:
-    """ENTRY-CAPABLE credential validation: raises if the key can withdraw.
-    Called by the new-entry path every time, never skipped, never relaxed
-    for managing an existing position (that path doesn't need it - it can
-    only reduce exposure; see has_withdrawal_permission)."""
-    if await has_withdrawal_permission(client):
+    """ENTRY-CAPABLE credential validation: raises WithdrawalPermissionDetected
+    if the key can withdraw, and fails closed (WithdrawalPermissionUnverifiable
+    or the underlying Binance/network error) if that cannot be established.
+    Called by the new-entry path every time, never skipped, never relaxed for
+    managing an existing position (that path doesn't need it - it can only
+    reduce exposure; see has_withdrawal_permission)."""
+    if await _key_enables_withdrawals(client):
         raise WithdrawalPermissionDetected(
             "stored API key has withdrawal permission enabled - revoke it and issue a trade-only key"
         )
@@ -337,6 +373,11 @@ def safe_error_message(exc: Exception) -> str:
         return "Binance rejected this account's API key or secret. Please check it in your Binance account."
     if isinstance(exc, ccxt_async.InsufficientFunds):
         return "Your Binance balance is too low for the bot's current position size."
+    if isinstance(exc, WithdrawalPermissionUnverifiable):
+        return (
+            "Could not verify your Binance API key's permissions just now, so no new trade was opened. "
+            "This will retry automatically on the next check."
+        )
     if isinstance(exc, (ccxt_async.NetworkError, ccxt_async.ExchangeNotAvailable, ccxt_async.RequestTimeout)):
         return "Temporary connection issue reaching Binance. The bot will try again on its next check."
     if isinstance(exc, ccxt_async.ExchangeError):

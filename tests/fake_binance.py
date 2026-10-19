@@ -90,7 +90,10 @@ class FakeBinance:
         self.before_hooks: dict = {}  # role -> callable(fake) run just before that order is processed
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
-        self.can_withdraw = can_withdraw  # the key has withdrawal permission
+        self.can_withdraw = can_withdraw  # the API KEY has withdrawal permission (key-level `enableWithdrawals`)
+        # What GET /sapi/v1/account/apiRestrictions returns instead of the normal object, to model an
+        # unreadable / malformed answer (None = behave normally). Network-style failures use fail("api_restrictions", ...).
+        self.restrictions_override = None
         if order_types is None:
             order_types = (
                 ["LIMIT", "MARKET", "STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET"]
@@ -182,10 +185,28 @@ class FakeBinance:
 
     async def fetch_balance(self):
         self._record("fetch_balance")
-        out: dict = {"free": dict(self.free), "info": {"canWithdraw": self.can_withdraw}}
+        # `canWithdraw` here is Binance's ACCOUNT-level flag: observed True on a real account whose key has
+        # `enableWithdrawals=False`. It must never influence the bot, so the fake pins it True regardless of the key.
+        out: dict = {"free": dict(self.free), "info": {"canWithdraw": True, "canTrade": True}}
         for asset in set(self.free) | set(self.used):
             out[asset] = {"free": self.free.get(asset, 0.0), "used": self.used.get(asset, 0.0)}
         return out
+
+    async def sapiGetAccountApiRestrictions(self):
+        """GET /sapi/v1/account/apiRestrictions: the API KEY's own permissions."""
+        self._record("api_restrictions")
+        self._fault("api_restrictions", None, "before")
+        if self.restrictions_override is not None:
+            return self.restrictions_override
+        return {
+            "ipRestrict": True,
+            "enableReading": True,
+            "enableSpotAndMarginTrading": True,
+            "enableFutures": True,
+            "enableWithdrawals": self.can_withdraw,
+            "enableInternalTransfer": False,
+            "permitsUniversalTransfer": False,
+        }
 
     async def fetch_leverage(self, symbol):
         self._record("fetch_leverage", symbol)

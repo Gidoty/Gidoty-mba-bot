@@ -531,9 +531,17 @@ touched. Accounts in any non-terminal state cannot enter again.
 
 ### Withdrawal-permission policy
 
-The runtime check (`exchange.has_withdrawal_permission`, an explicit
-`canWithdraw: true`) is asked every live cycle but answered differently for
-two distinct purposes, separated in code:
+The runtime check (`exchange.has_withdrawal_permission`) reads the API
+**key's own** `enableWithdrawals` restriction from Binance's key-permission
+endpoint (`GET /sapi/v1/account/apiRestrictions`, Spot and Futures alike). It
+deliberately does NOT use the `canWithdraw` field of the balance payload: that
+is an account-level flag, observed `True` on a real Mainnet account whose key
+had `enableWithdrawals=False`. The answer is used every live cycle but means
+two distinct purposes, separated in code. An unreadable, malformed or missing
+answer is "cannot verify": the entry path fails closed for that cycle
+(`exchange.assert_trade_only` raises `WithdrawalPermissionUnverifiable`, no
+trade, a safe retry message, and NO durable block), while the management path
+treats it as "not detected" so an open position keeps being managed:
 
 - **Entry-capable validation** (`exchange.assert_trade_only`, run inside
   `_maybe_enter` on every entry, independent of anything checked earlier):
@@ -674,8 +682,11 @@ live prices (they decide whether paper results are representative).
    (`hedged` false), `GET multiAssetsMargin` (`false`), and what the Portfolio
    Margin probe returns on a classic account vs. a PM account if one is
    available. Confirm a PM account fails or is detected.
-3. Confirm the key's permissions allow order placement but the withdrawal
-   check (`canWithdraw`) behaves as `assert_trade_only` expects on Futures.
+3. Confirm the key's permissions allow order placement and that
+   `GET /sapi/v1/account/apiRestrictions` returns a boolean `enableWithdrawals`
+   (the field `assert_trade_only` relies on; verified read-only on a Mainnet
+   key for Spot and Futures: `enableWithdrawals=False` while the account-level
+   `canWithdraw` was `True`).
 
 **Spot (Testnet)**
 4. Market buy with `newClientOrderId`; confirm `fills[].commission/
