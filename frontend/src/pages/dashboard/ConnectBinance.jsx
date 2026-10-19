@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../../api/client.js";
+import BinanceGuide from "../../components/BinanceGuide.jsx";
 import { Card, ErrorBanner } from "../../components/ui.jsx";
 
 const STEPS = ["intro", "key", "secret", "verifying", "success"];
@@ -46,6 +47,7 @@ export default function ConnectBinance({ onAccountChanged }) {
         </p>
       </div>
 
+      <BinanceGuide className="mb-4" />
       <Steps current={stepIndex} />
       <ErrorBanner message={error} />
       {testResult && !testResult.ok && (
@@ -59,7 +61,6 @@ export default function ConnectBinance({ onAccountChanged }) {
             <strong>withdrawals switched off</strong>. The bot can never move your funds out of Binance - that's
             enforced by the permissions you grant it, not just by this app.
           </p>
-          <HowToGetKey />
           <button
             onClick={() => setStepIndex(1)}
             className="mt-4 w-full rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark"
@@ -158,30 +159,5 @@ function Steps({ current }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function HowToGetKey() {
-  return (
-    <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-      <summary className="cursor-pointer font-medium text-ink">Where do I find this on Binance?</summary>
-      <ol className="mt-3 list-decimal space-y-2 pl-5 text-slate-600">
-        <li>Log in at binance.com (or open the Binance app).</li>
-        <li>
-          Open your profile icon, then <strong>API Management</strong>.
-        </li>
-        <li>
-          Click <strong>Create API</strong> and give it a label, e.g. "Metabridge Bot". Verify with your password
-          and/or 2FA.
-        </li>
-        <li>
-          Click <strong>Edit restrictions</strong> on the new key. Turn on trading for the market you use.{" "}
-          <strong className="text-red-700">Leave withdrawals switched off.</strong>
-        </li>
-        <li>
-          Binance shows the API key and secret once - copy both immediately into the fields on the next steps.
-        </li>
-      </ol>
-    </details>
   );
 }

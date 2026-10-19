@@ -65,3 +65,15 @@ export const LEGAL_NAV_ITEMS = [
   { route: "privacy", label: "Privacy Policy" },
   { route: "risk-disclosure", label: "Trading Risk Disclosure" },
 ];
+
+// Binance connection guide (components/BinanceGuide.jsx). The production
+// server IP customers must add to their Binance API key's trusted-IP list
+// lives ONLY here - change it here if the infrastructure moves.
+export const METABRIDGE_SERVER_IP = "77.42.30.235";
+
+export const BINANCE_GUIDE_SUPPORT = {
+  whatsappNumber: "2348124228730", // wa.me format: international digits only (+234 812 422 8730)
+  whatsappDisplay: "0812 422 8730",
+  email: "info@metabridgeacademy.com",
+  whatsappMessage: "Hello Metabridge Bot Support, I need assistance connecting my Binance account to Metabridge Bot.",
+};

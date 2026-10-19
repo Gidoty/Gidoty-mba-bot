@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
+import BinanceGuide from "./BinanceGuide.jsx";
 import HelpTip from "./HelpTip.jsx";
 import { Badge, Card } from "./ui.jsx";
 
@@ -50,6 +51,8 @@ export default function BinanceConnectionPanel({ account, onAccountChanged }) {
 
       {managing && (
         <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+          <BinanceGuide />
+
           <div>
             <p className="text-sm font-medium text-ink">Connection status</p>
             <p className="mt-1 text-sm text-slate-600">
