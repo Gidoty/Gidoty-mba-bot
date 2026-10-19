@@ -229,7 +229,7 @@ def test_spot_entry_and_exit_are_plain_market_orders_by_base_quantity():
         order = await v.place_entry("long", 0.212, "mbaE")
         entry_req = rec.last("privatePostOrder")
         await v.place_exit("long", 0.2119, "mbaX")
-        return order, entry_req, v.net_quantity(order)
+        return order, entry_req, v.net_from_fee(order.filled, order.fee_base)
 
     order, entry_req, net = _run(client, venue_mod.SpotVenue, body)
     assert entry_req["type"] == "MARKET" and entry_req["quantity"] == "0.212" and "quoteOrderQty" not in entry_req

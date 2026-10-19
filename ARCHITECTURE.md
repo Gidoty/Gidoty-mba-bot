@@ -424,11 +424,39 @@ triggered, slippage accepted); otherwise `STOP_LOSS_LIMIT` (limit
 risk is handled explicitly: once the price is at or below the limit with
 the order still resting, the bot cancels it, confirms, and market-sells the
 remainder (`stop_limit_gap`). If neither is listed, no entry is placed. OCO
-is not used (the strategy has no take-profit leg). The stop quantity is the
-*net* base quantity (fill minus base commission, floored to the lot step)
-and must satisfy `LOT_SIZE` and the minimum notional at the stop price; the
-entry quantity is chosen so that quantity left after the worst-case
-commission is still protectable.
+is not used (the strategy has no take-profit leg).
+
+**Spot protectable quantity (no fee is ever assumed).**
+`protectable = floor_to_lot_step(min(bot_net_fill, free_base))`, where
+`bot_net_fill = filled - base_commission` and the commission comes only from
+exchange-confirmed data, in this order: (1) the entry order response (a
+response listing fees in another asset, e.g. quote or BNB, confirms a base
+commission of 0); (2) the account's own fill records for that order id
+(`fetch_my_trades(orderId=...)`), accepted only if every fill carries a fee
+and the fills account for the whole filled quantity. If neither establishes
+it (after bounded retries) the bot does **not** size a stop: it takes the
+emergency path (`quantity_unverifiable`) and sells at most the bot's own
+gross fill, bounded by the free balance. The wallet may hold the customer's
+own units of the same asset, so the free balance is only ever an upper
+bound, re-read immediately before the stop is placed (and again if Binance
+rejects it for insufficient funds). A pre-trade size filter keeps 0.2%
+headroom for a possible base commission so that a planned entry is not too
+small to protect; it is a filter, never a quantity. The stop must satisfy
+`LOT_SIZE` and the minimum notional at the stop price.
+
+**Stop-limit health watch.** A `STOP_LOSS_LIMIT` can be gapped through and
+rest unfilled while looking protected, so these positions (only) get a fast
+watch riding the 15 s recovery tick (`STOP_LIMIT_MONITOR_INTERVAL_SECONDS`,
+default 15): one public ticker call per distinct symbol per pass, shared by
+all customers, and nothing at all when no such position exists. Only a
+position whose price has reached its trigger gets authenticated calls
+(reconcile, then the gap check). If the price is at or below the executable
+limit while the order still rests: claim the exit lease, cancel the stop,
+confirm it terminal (a fill that won the race is recorded and no sell is
+sent), re-read the remaining bot-attributable quantity (a partial fill
+shrinks it), market-close only that remainder with the deterministic exit
+id, record the actual fills, notify once. The 5-minute strategy scan and the
+watch use the same lease, so they cannot both exit.
 
 ### Exit (one lease, one writer)
 
@@ -480,8 +508,10 @@ account.
 - An API key that gains withdrawal permission is refused for *all* actions
   including managing an open position (pre-existing policy); the resting
   exchange-side stop still protects the position.
-- Spot stop-limit can still leave a position exposed between the gap and the
-  next 5-minute poll; a market-triggered stop (when listed) avoids this.
+- Spot stop-limit gap-through is caught by the 15 s watch, not instantly; a
+  market-triggered stop (when listed) has no such window. Each position in
+  danger costs roughly 50 request-weight per pass (markets, account, order,
+  open orders) until it is resolved.
 - Binance behaviours the design relies on are listed in the next section.
 
 ### Testnet validation procedure

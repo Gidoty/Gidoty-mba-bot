@@ -310,9 +310,17 @@ async def _after_entry(ctx: LiveContext, trade: Trade, order: venue_mod.OrderInf
         _cas(session, trade, (TRADE_PENDING, TRADE_ATTENTION), TRADE_VOID, closed_at=ctx.now, close_reason="entry_not_filled", entry_order_id=order.order_id)
         return trade
 
+    # Quantity the bot holds from this fill. Futures: the filled size. Spot:
+    # filled minus the base-asset commission, but ONLY from exchange-confirmed
+    # data. If the order response carried no commission information the net
+    # quantity is not yet known: record the gross fill with entry_fee_base
+    # unset, and _protect_or_emergency resolves it from the fill records (or
+    # takes the emergency path) before any stop is sized. Nothing is assumed.
     held = order.filled
-    if venue.market_type == "spot":
-        held = venue.net_quantity(order)  # type: ignore[attr-defined]
+    fee_base: float | None = None
+    if venue.market_type == "spot" and order.fee_known:
+        fee_base = order.fee_base
+        held = venue.net_from_fee(order.filled, fee_base)  # type: ignore[attr-defined]
     entry_price = order.average or trade.entry_price
     moved = _cas(
         session,
@@ -322,7 +330,7 @@ async def _after_entry(ctx: LiveContext, trade: Trade, order: venue_mod.OrderInf
         entry_order_id=order.order_id,
         entry_price=entry_price,
         quantity=held,
-        entry_fee_base=order.fee_base if venue.market_type == "spot" else None,
+        entry_fee_base=fee_base,
         attention_reason=None,
     )
     if not moved and trade.status not in (TRADE_PROTECTING, TRADE_OPEN):
@@ -357,6 +365,14 @@ async def _place_and_verify(ctx: LiveContext, trade: Trade) -> str:
         _set(session, trade, protection_attempt=trade.protection_attempt + 1)
         cid = client_id(trade, "stop", trade.protection_attempt)
 
+    # Bound the quantity by what the exchange confirms is available: never
+    # more than the bot-attributable quantity, never more than the free
+    # balance (the wallet may hold the customer's own units too, so free is
+    # only an upper bound, never the amount to protect).
+    protectable = await venue.protectable_quantity(trade.quantity)
+    if protectable < trade.quantity:
+        logger.warning("account %s: available balance below the expected quantity, protecting what is there", ctx.account.id)
+        _set(session, trade, quantity=protectable)
     await venue.protection_precheck(side=trade.side, stop_price=trade.stop_loss_price)
     try:
         placed = await venue.place_protection(
@@ -408,7 +424,11 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
             logger.warning(
                 "account %s: protective stop attempt %d/%d failed (%s)", ctx.account.id, i + 1, attempts, type(exc).__name__
             )
-            if not _is_transient(exc) or isinstance(exc, ProtectionUnavailable):
+            # An InsufficientFunds from the exchange means the free balance moved
+            # between our read and the order: retrying re-reads it and re-bounds
+            # the quantity (the attempt id was already advanced).
+            retryable = _is_transient(exc) or isinstance(exc, ccxt_async.InsufficientFunds)
+            if not retryable or isinstance(exc, ProtectionUnavailable):
                 break
             if i + 1 < attempts:
                 await _sleep(ctx.settings.protection_retry_delay_seconds)
@@ -418,6 +438,14 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
 async def _protect_or_emergency(
     ctx: LiveContext, trade: Trade, *, risk_text: str = "", announce_entry: bool = False, was_attention: bool = False
 ) -> Trade:
+    if ctx.venue.market_type == "spot" and trade.entry_order_id and trade.entry_fee_base is None:
+        if not await _resolve_spot_quantity(ctx, trade):
+            return await emergency_close(
+                ctx, trade, reason="quantity_unverifiable",
+                why="Binance's fill details for this trade could not be confirmed, so no protective stop could be "
+                "sized safely",
+            )
+
     # Spot dust: a fill too small to place ANY stop on is also too small to
     # sell; there is nothing the exchange would let us do about it.
     if (
@@ -451,16 +479,46 @@ async def _protect_or_emergency(
     return await emergency_close(ctx, trade)
 
 
-async def emergency_close(ctx: LiveContext, trade: Trade) -> Trade:
+async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
+    """Establish the bot-attributable base quantity of a Spot fill from
+    exchange-confirmed commission data (see SpotVenue.resolve_entry_fee_base)
+    and persist it. Bounded retries; returns False if it cannot be
+    established, which sends the caller to the emergency path."""
+    venue = ctx.venue
+    attempts = max(1, ctx.settings.protection_max_attempts)
+    for i in range(attempts):
+        try:
+            order = await venue.find_order(client_id(trade, "entry"))
+            if order is None or not order.is_terminal or order.filled <= 0:
+                raise venue_mod.QuantityUnresolvable("entry order state unavailable")
+            fee_base = await venue.resolve_entry_fee_base(order)  # type: ignore[attr-defined]
+        except (venue_mod.QuantityUnresolvable, ccxt_async.NetworkError, ccxt_async.ExchangeError) as exc:
+            logger.warning("account %s: spot quantity attempt %d/%d unresolved (%s)", ctx.account.id, i + 1, attempts, type(exc).__name__)
+            if i + 1 < attempts:
+                await _sleep(ctx.settings.protection_retry_delay_seconds)
+            continue
+        _set(
+            ctx.session, trade,
+            entry_fee_base=fee_base,
+            quantity=venue.net_from_fee(order.filled, fee_base),  # type: ignore[attr-defined]
+        )
+        return True
+    return False
+
+
+async def emergency_close(
+    ctx: LiveContext, trade: Trade, *, reason: str = "protection_failed_emergency_exit", why: str | None = None
+) -> Trade:
     """Protection could not be established. Close the exposure now rather
     than leave it unprotected; if even that cannot be verified, go to
     ATTENTION and keep working on it."""
-    result = await execute_exit(ctx, trade, reason="protection_failed_emergency_exit", emergency=True)
+    result = await execute_exit(ctx, trade, reason=reason, emergency=True)
     if result == "closed":
+        why = why or "Binance would not accept the protective stop for this trade"
         await _notify(
             ctx,
-            f"[LIVE] Safety exit on {_pair(ctx, trade)}: Binance would not accept the protective stop for this "
-            f"trade, so the bot closed the position immediately instead of leaving it unprotected.\n"
+            f"[LIVE] Safety exit on {_pair(ctx, trade)}: {why}, "
+            f"so the bot closed the position immediately instead of leaving it unprotected.\n"
             f"Entry: {trade.entry_price:.4f}  Exit: {trade.exit_price:.4f}  P&L: {trade.pnl:+.2f}",
         )
         return trade
@@ -653,8 +711,16 @@ async def execute_exit(
     if venue.market_type == "futures" and left >= max(rules.market_min_qty, rules.min_qty):
         return "deferred"  # partial exit: next reconcile exits the remainder (new attempt id)
     if venue.market_type == "spot":
-        done = sum(q for q, _ in await _exit_fills(ctx, trade))
-        if trade.quantity - done >= max(rules.market_min_qty, rules.min_qty):
+        # What is still the bot's to sell: the part of its quantity not yet
+        # sold, but never more than the base actually free (its quantity may
+        # be a gross figure when the commission could not be confirmed) - and
+        # never the customer's own units.
+        try:
+            done = sum(q for q, _ in await _exit_fills(ctx, trade))
+            left = min(max(trade.quantity - done, 0.0), await venue.exposure())
+        except Exception:
+            return "deferred"
+        if venue_mod.floor_to_step(left, rules.market_step) >= max(rules.market_min_qty, rules.min_qty):
             _set(session, trade, exit_attempt=trade.exit_attempt + 1)
             return "deferred"
     return await _record_exit(

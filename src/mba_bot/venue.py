@@ -51,11 +51,13 @@ KIND_SPOT_MARKET = "stop_loss"
 KIND_SPOT_LIMIT = "stop_loss_limit"
 CONDITIONAL_KINDS = (KIND_FUTURES_CLOSE, KIND_FUTURES_REDUCE)
 
-# A standard Spot taker/maker commission is at most 0.1% of the traded base
-# when paid in the base asset. Used ONLY when the fill response carries no
-# fee information at all, to err towards protecting/selling slightly less
-# than was bought (leaving dust) rather than more than is held.
-SPOT_DEFAULT_BASE_FEE_RATE = 0.001
+# PRE-TRADE FILTERING ONLY. Headroom applied when deciding whether a planned
+# Spot entry is big enough that what is left after commission could still be
+# protected (minimum quantity / notional). It is NOT a statement about
+# Binance fees and is never used to determine a quantity that is protected
+# or sold: that comes only from exchange-confirmed commission data
+# (SpotVenue.resolve_entry_fee_base) bounded by the available balance.
+SPOT_ENTRY_HEADROOM = 0.002
 
 # Used for bounded polling; patched out in tests.
 _sleep = asyncio.sleep
@@ -65,6 +67,12 @@ class ProtectionUnavailable(RuntimeError):
     """The exchange-side protective stop this venue needs is not available
     (order type not listed for the symbol, missing/ambiguous filters, the
     quantity or notional cannot satisfy them). No entry is placed."""
+
+
+class QuantityUnresolvable(RuntimeError):
+    """The base quantity the bot actually holds from a Spot fill could not be
+    established from exchange-confirmed commission data. The caller must not
+    guess: it takes the emergency safety path instead."""
 
 
 class ProtectionStillOpen(RuntimeError):
@@ -414,6 +422,9 @@ class Venue:
     async def place_exit(self, side: str, quantity: float, client_id: str) -> OrderInfo:
         raise NotImplementedError
 
+    async def protectable_quantity(self, quantity: float) -> float:
+        return quantity  # Futures: closePosition / exchange-read size; nothing to clamp
+
     async def exposure(self) -> float:
         """Exchange-confirmed quantity currently held in the trade's
         direction, >= 0. Futures: |position| if its sign matches `side` of
@@ -459,18 +470,62 @@ class SpotVenue(Venue):
         raw = stop_price * (1.0 - self.stop_limit_buffer_pct / 100.0)
         return floor_to_step(raw, rules.tick)
 
-    def net_quantity(self, order: OrderInfo) -> float:
-        """Base quantity actually held from the entry fill and therefore the
-        most the bot may protect/sell: filled minus the base-asset
-        commission, floored to the lot step. If the response carried no fee
-        information at all, assume the standard maximum 0.1% so that we
-        under-protect (dust) rather than over-sell."""
+    def net_from_fee(self, filled: float, fee_base: float) -> float:
+        """Base quantity the bot holds from a fill: filled minus the
+        base-asset commission, floored to the lot step. `fee_base` must be
+        an exchange-confirmed figure (0.0 when the commission was charged in
+        another asset); this method never invents one."""
         rules = self._require_ready()
+        return floor_to_step(max(filled - fee_base, 0.0), rules.step)
+
+    async def resolve_entry_fee_base(self, order: OrderInfo) -> float:
+        """Base-asset commission of the entry fill, from exchange-confirmed
+        data only, in this order:
+
+        1. the order response itself (`fees` / per-fill `fee`) - a response
+           that lists fees in another asset (quote, BNB) confirms a base
+           commission of 0.0;
+        2. otherwise the account's own trade records for that order id
+           (`fetch_my_trades(orderId=...)`), accepted only if they carry a
+           fee for every fill AND account for the whole filled quantity.
+
+        Anything else raises QuantityUnresolvable. A network error while
+        reading the trade records also raises it: after bounded retries by
+        the caller, not knowing the commission is treated as not being able
+        to establish a protectable quantity."""
         if order.fee_known:
-            net = order.filled - order.fee_base
-        else:
-            net = order.filled * (1.0 - SPOT_DEFAULT_BASE_FEE_RATE)
-        return floor_to_step(max(net, 0.0), rules.step)
+            return order.fee_base
+        if not order.order_id:
+            raise QuantityUnresolvable("no order id to look up the fills of")
+        try:
+            trades = await self.client.fetch_my_trades(self.symbol, None, None, {"orderId": order.order_id})
+        except Exception as exc:
+            raise QuantityUnresolvable(f"could not read the fills ({type(exc).__name__})") from exc
+        mine = [t for t in trades or [] if isinstance(t, dict) and str(t.get("order")) == str(order.order_id)]
+        if not mine:
+            raise QuantityUnresolvable("no fills found for the entry order")
+        covered = 0.0
+        fee_base = 0.0
+        for t in mine:
+            fee = t.get("fee")
+            if not isinstance(fee, dict) or fee.get("cost") is None or not fee.get("currency"):
+                raise QuantityUnresolvable("a fill carries no commission data")
+            covered += _f(t.get("amount")) or 0.0
+            if fee.get("currency") == self.base:
+                fee_base += _f(fee.get("cost")) or 0.0
+        if covered + self._require_ready().step < order.filled:
+            raise QuantityUnresolvable("fills do not account for the whole filled quantity")
+        return fee_base
+
+    async def protectable_quantity(self, quantity: float) -> float:
+        """The most of `quantity` (the bot-attributable base quantity) that
+        can be protected right now: never more than the base actually
+        FREE on the exchange. The wallet may hold the customer's own units
+        of the same asset, so the free balance is only ever an upper bound,
+        never the amount to protect."""
+        rules = self._require_ready()
+        free = await self.exposure()
+        return floor_to_step(min(quantity, free), rules.step)
 
     def can_protect(self, net_quantity: float, stop_price: float) -> bool:
         rules = self._require_ready()
@@ -504,9 +559,9 @@ class SpotVenue(Venue):
             return 0.0
         if rules.min_notional is not None and qty * entry_price < rules.min_notional:
             return 0.0
-        # The quantity left after the worst-case base commission must itself
-        # be protectable, otherwise we would hold an unprotectable position.
-        worst_net = floor_to_step(qty * (1.0 - SPOT_DEFAULT_BASE_FEE_RATE), rules.step)
+        # With headroom for a base-asset commission, what is left must itself
+        # be protectable (pre-trade filter only; see SPOT_ENTRY_HEADROOM).
+        worst_net = floor_to_step(qty * (1.0 - SPOT_ENTRY_HEADROOM), rules.step)
         if not self.can_protect(worst_net, stop_price):
             return 0.0
         return qty

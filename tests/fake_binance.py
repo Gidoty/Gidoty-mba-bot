@@ -60,6 +60,8 @@ class FakeBinance:
         min_notional: float | None = 0.1,
         fee_rate: float = 0.001,
         fee_info: bool = True,
+        fee_in: str = "base",
+        trades_fee_info: bool = True,
         liquidation_price: float | None = None,
         reject_close_position: bool = False,
         api_key: str | None = None,
@@ -82,6 +84,9 @@ class FakeBinance:
         self.position_mode_raises = position_mode_raises
         self.step, self.tick, self.min_qty, self.min_notional = step, tick, min_qty, min_notional
         self.fee_rate, self.fee_info = fee_rate, fee_info
+        self.fee_in = fee_in  # asset the BUY commission is charged in: base | quote | bnb
+        self.trades_fee_info = trades_fee_info  # whether the account's trade records carry fees
+        self.before_hooks: dict = {}  # role -> callable(fake) run just before that order is processed
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
         if order_types is None:
@@ -170,6 +175,7 @@ class FakeBinance:
         return self._ohlcv if self._ohlcv is not None else FLAT_OHLCV
 
     async def fetch_ticker(self, symbol):
+        self._record("fetch_ticker", symbol)
         return {"last": self.price}
 
     async def fetch_balance(self):
@@ -222,7 +228,11 @@ class FakeBinance:
 
     async def fetch_my_trades(self, symbol=None, since=None, limit=None, params=None):
         self._record("fetch_my_trades")
-        return [dict(f) for f in self.fills if since is None or f["timestamp"] >= since]
+        wanted = (params or {}).get("orderId")
+        return [
+            dict(f) for f in self.fills
+            if (since is None or f["timestamp"] >= since) and (wanted is None or str(f.get("order")) == str(wanted))
+        ]
 
     # ------------------------------------------------------------------ orders
 
@@ -245,9 +255,12 @@ class FakeBinance:
             "side": o["side"],
         }
 
-    def _add_fill(self, side: str, amount: float, price: float):
+    def _add_fill(self, side: str, amount: float, price: float, order_id: str | None = None, fee: dict | None = None):
         self._last_ts = max(int(time.time() * 1000), self._last_ts + 1)  # real, strictly increasing time
-        self.fills.append({"side": side, "amount": amount, "price": price, "timestamp": self._last_ts, "symbol": self.symbol})
+        record = {"side": side, "amount": amount, "price": price, "timestamp": self._last_ts, "symbol": self.symbol, "order": order_id}
+        if fee is not None and self.trades_fee_info:
+            record["fee"] = fee
+        self.fills.append(record)
 
     def _lock_base(self, qty: float):
         if self.free.get(self.base, 0.0) + 1e-12 < qty:
@@ -266,6 +279,9 @@ class FakeBinance:
         self._record("create_order", symbol, type, side, amount, price, tuple(sorted(params)))
         self._check_symbol(symbol)
         self._fault("create_order", role, "before")
+        hook = self.before_hooks.pop(role, None)
+        if hook is not None:
+            hook(self)
 
         conditional = any(k in params for k in ("stopLossPrice", "triggerPrice", "stopPrice"))
         if client_id in self.orders:
@@ -300,6 +316,7 @@ class FakeBinance:
 
     def _spot_market(self, side, qty, client_id):
         price = self.price
+        oid = str(next(self._ids))
         fraction = 1.0
         if side == "buy" and self.partial_entry_fill is not None:
             fraction, self.partial_entry_fill = self.partial_entry_fill, None
@@ -310,17 +327,28 @@ class FakeBinance:
                 raise ccxt.InsufficientFunds("not enough quote")
             self.free[self.quote] -= cost
             fee = filled * self.fee_rate
-            self.free[self.base] = self.free.get(self.base, 0.0) + filled - fee
-            fees = [{"currency": self.base, "cost": fee}] if self.fee_info else []
+            if self.fee_in == "base":
+                fee_asset, fee_cost = self.base, fee
+                self.free[self.base] = self.free.get(self.base, 0.0) + filled - fee
+            elif self.fee_in == "quote":
+                fee_asset, fee_cost = self.quote, fee * price
+                self.free[self.quote] -= fee_cost
+                self.free[self.base] = self.free.get(self.base, 0.0) + filled
+            else:  # paid in BNB: neither traded asset is touched
+                fee_asset, fee_cost = "BNB", fee * price / 600.0
+                self.free[self.base] = self.free.get(self.base, 0.0) + filled
+            fee_dict = {"currency": fee_asset, "cost": fee_cost}
+            fees = [fee_dict] if self.fee_info else []
         else:
             if self.free.get(self.base, 0.0) + 1e-9 < filled:
                 raise ccxt.InsufficientFunds("not enough base to sell (reserved by a resting order?)")
             self.free[self.base] -= filled
             self.free[self.quote] = self.free.get(self.quote, 0.0) + filled * price * (1 - self.fee_rate)
-            fees = [{"currency": self.quote, "cost": filled * price * self.fee_rate}] if self.fee_info else []
-        self._add_fill(side, filled, price)
+            fee_dict = {"currency": self.quote, "cost": filled * price * self.fee_rate}
+            fees = [fee_dict] if self.fee_info else []
+        self._add_fill(side, filled, price, oid, fee_dict)
         status = "closed" if fraction >= 1.0 else "expired"
-        return self._new(client_id=client_id, side=side, amount=qty, filled=filled, average=price, status=status, fees=fees)
+        return self._new(id=oid, client_id=client_id, side=side, amount=qty, filled=filled, average=price, status=status, fees=fees)
 
     def _futures_market(self, side, qty, reduce_only, client_id):
         signed = qty if side == "buy" else -qty
@@ -339,10 +367,11 @@ class FakeBinance:
         if pos != 0 and new_pos != 0 and (pos > 0) != (new_pos > 0):
             self.violations.append(f"order {client_id} reversed the position {pos} -> {new_pos}")
         self.position = new_pos
-        self._add_fill(side, filled, self.price)
+        oid = str(next(self._ids))
+        self._add_fill(side, filled, self.price, oid, {"currency": self.quote, "cost": filled * self.price * self.fee_rate})
         status = "closed" if fraction >= 1.0 else "expired"
         return self._new(
-            client_id=client_id, side=side, amount=qty, filled=filled, average=self.price,
+            id=oid, client_id=client_id, side=side, amount=qty, filled=filled, average=self.price,
             status=status, reduce_only=reduce_only,
         )
 
@@ -449,7 +478,7 @@ class FakeBinance:
             return
         qty = abs(pos) if order["close_position"] else min(order["amount"], abs(pos))
         self.position = pos - (qty if pos > 0 else -qty)
-        self._add_fill(order["side"], qty, self.price)
+        self._add_fill(order["side"], qty, self.price, order["id"], {"currency": self.quote, "cost": 0.0})
         order["status"] = "closed"  # ccxt: TRIGGERED/FINISHED -> "closed"
 
     def _fire_spot_stop(self, order, price):
@@ -460,8 +489,26 @@ class FakeBinance:
         fill_price = price
         self.used[self.base] = max(self.used.get(self.base, 0.0) - qty, 0.0)
         self.free[self.quote] = self.free.get(self.quote, 0.0) + qty * fill_price * (1 - self.fee_rate)
-        self._add_fill("sell", qty, fill_price)
+        self._add_fill("sell", qty, fill_price, order["id"], {"currency": self.quote, "cost": 0.0})
         order.update(status="closed", filled=qty, average=fill_price)
+
+    def partially_fill_stop(self, client_id: str, fraction: float, price: float):
+        """A triggered Spot stop-limit fills `fraction` of itself at `price` and keeps resting."""
+        order = self.orders[client_id]
+        qty = round(order["amount"] * fraction, 8)
+        self.used[self.base] = max(self.used.get(self.base, 0.0) - qty, 0.0)
+        self.free[self.quote] = self.free.get(self.quote, 0.0) + qty * price * (1 - self.fee_rate)
+        self._add_fill("sell", qty, price, order["id"], {"currency": self.quote, "cost": 0.0})
+        order.update(filled=order["filled"] + qty, average=price, triggered=True)
+
+    def fill_stop_fully(self, client_id: str, price: float):
+        """A resting Spot stop-limit fills completely at `price`."""
+        order = self.orders[client_id]
+        remaining = order["amount"] - order["filled"]
+        self.used[self.base] = max(self.used.get(self.base, 0.0) - remaining, 0.0)
+        self.free[self.quote] = self.free.get(self.quote, 0.0) + remaining * price * (1 - self.fee_rate)
+        self._add_fill("sell", remaining, price, order["id"], {"currency": self.quote, "cost": 0.0})
+        order.update(status="closed", filled=order["amount"], average=price)
 
     def externally_close_position(self, price: float | None = None):
         """The customer (or Binance) flattens the position outside the bot."""

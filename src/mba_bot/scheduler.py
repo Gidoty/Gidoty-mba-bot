@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
+from . import exchange
 from .config import Settings
-from .db import list_active_accounts, list_live_unsettled_trades, session_scope
+from .db import list_active_accounts, list_live_unsettled_trades, list_open_stop_limit_trades, session_scope
 from .models import PROTECTION_PROTECTED, TRADE_OPEN, TradingAccount
 from .notifications import build_notifier
 from .trader import process_account, reconcile_account
@@ -71,7 +73,7 @@ async def run_once(settings: Settings) -> None:
     await asyncio.gather(*(_run_one(account_id, settings) for account_id in account_ids), return_exceptions=True)
 
 
-async def _recover_one(account_id: str, settings: Settings) -> None:
+async def _recover_one(account_id: str, settings: Settings, *, current_price: float | None = None) -> None:
     async with _lock_for(account_id):
         with session_scope() as session:
             account = session.get(TradingAccount, account_id)
@@ -87,7 +89,7 @@ async def _recover_one(account_id: str, settings: Settings) -> None:
                 logger.exception("account %s: could not build notifier for channel=%s", account.id, account.notification_channel)
                 return
             try:
-                await reconcile_account(session, account, settings, notifier)
+                await reconcile_account(session, account, settings, notifier, current_price=current_price)
             except Exception:
                 logger.exception("account %s: error during reconciliation", account.id)
 
@@ -110,15 +112,68 @@ async def recover_once(settings: Settings, *, include_healthy: bool = False) -> 
         await asyncio.gather(*(_recover_one(a, settings) for a in account_ids), return_exceptions=True)
 
 
+async def monitor_stop_limits_once(settings: Settings) -> None:
+    """Fast protection-health watch for Spot positions guarded by a
+    STOP_LOSS_LIMIT, whose protection can silently stop working: if the
+    price gaps through the limit the order rests unfilled.
+
+    Traffic is bounded: with no such position nothing is called at all;
+    otherwise ONE public ticker call per distinct symbol per pass, shared by
+    every customer (no credentials, minimal weight). Only a position whose
+    price has actually reached its trigger gets authenticated calls, and
+    only until it is resolved. For those, trader.reconcile_account establishes
+    the order's true state; lifecycle.monitor_trade then closes it if the
+    price is through the executable limit (cancel -> confirm -> market-close
+    the remainder), through the same exit lease as every other exit."""
+    with session_scope() as session:
+        watched = [(t.account_id, t.pair or session.get(TradingAccount, t.account_id).pair, t.stop_loss_price)
+                   for t in list_open_stop_limit_trades(session)]
+    if not watched:
+        return
+
+    symbols = sorted({exchange.exchange_symbol(pair, "spot") for _, pair, _ in watched})
+    client = exchange.build_exchange_client(exchange="binance", market_type="spot", api_key="", api_secret="", sandbox=False)
+    prices: dict[str, float] = {}
+    try:
+        for symbol in symbols:
+            try:
+                ticker = await client.fetch_ticker(symbol)
+                last = ticker.get("last") or ticker.get("close")
+                if last:
+                    prices[symbol] = float(last)
+            except Exception as exc:
+                logger.warning("stop-limit watch: ticker for %s unavailable (%s)", symbol, type(exc).__name__)
+    finally:
+        await client.close()
+
+    due = []
+    for account_id, pair, trigger in watched:
+        price = prices.get(exchange.exchange_symbol(pair, "spot"))
+        if price is not None and price <= trigger:  # Spot is long-only: the stop is below the market
+            due.append((account_id, price))
+    if due:
+        logger.info("stop-limit watch: %d position(s) at or through their trigger", len(due))
+        await asyncio.gather(*(_recover_one(a, settings, current_price=p) for a, p in due), return_exceptions=True)
+
+
 async def run_recovery_forever(settings: Settings) -> None:
     """Fast loop (RECOVERY_INTERVAL_SECONDS, default 15s) so an unprotected
-    or unresolved live trade is not left waiting for the 5-minute poll."""
+    or unresolved live trade is not left waiting for the 5-minute poll. The
+    stop-limit price watch rides the same tick, at most once per
+    STOP_LIMIT_MONITOR_INTERVAL_SECONDS."""
+    last_watch = float("-inf")
     while True:
         await asyncio.sleep(settings.recovery_interval_seconds)
         try:
             await recover_once(settings)
         except Exception:
             logger.exception("unexpected error in recovery loop")
+        if time.monotonic() - last_watch >= settings.stop_limit_monitor_interval_seconds:
+            last_watch = time.monotonic()
+            try:
+                await monitor_stop_limits_once(settings)
+            except Exception:
+                logger.exception("unexpected error in stop-limit watch")
 
 
 async def run_poll_forever(settings: Settings) -> None:

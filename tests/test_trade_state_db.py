@@ -249,7 +249,7 @@ def test_recovery_loop_only_touches_trades_that_are_not_healthy_and_startup_touc
 
     seen: list[str] = []
 
-    async def fake_reconcile(session, account, settings_, notifier):
+    async def fake_reconcile(session, account, settings_, notifier, **kw):
         seen.append(account.id)
 
     monkeypatch.setattr(scheduler, "reconcile_account", fake_reconcile)

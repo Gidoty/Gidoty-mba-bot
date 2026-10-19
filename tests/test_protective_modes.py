@@ -197,21 +197,9 @@ def test_floor_to_step_never_rounds_up():
 
 def test_spot_net_quantity_subtracts_the_base_commission_and_floors_to_the_step():
     v = _spot_venue()
-    order = venue_mod.OrderInfo("1", "c", "closed", 0.212, 0.212, 90.0, fee_base=0.000212, fee_known=True)
-    assert v.net_quantity(order) == pytest.approx(0.211)
-    assert v.net_quantity(order) <= order.filled - order.fee_base
-
-
-def test_spot_net_quantity_assumes_the_standard_fee_when_the_response_has_no_fee_info():
-    v = _spot_venue()
-    order = venue_mod.OrderInfo("1", "c", "closed", 0.212, 0.212, 90.0, fee_base=0.0, fee_known=False)
-    assert v.net_quantity(order) <= 0.212 * 0.999
-
-
-def test_spot_fee_paid_in_another_asset_leaves_the_full_fill_exitable():
-    v = _spot_venue()
-    order = venue_mod.OrderInfo("1", "c", "closed", 0.212, 0.212, 90.0, fee_base=0.0, fee_known=True)  # paid in BNB
-    assert v.net_quantity(order) == pytest.approx(0.212)
+    assert v.net_from_fee(0.212, 0.000212) == pytest.approx(0.211)
+    assert v.net_from_fee(0.212, 0.000212) <= 0.212 - 0.000212
+    assert v.net_from_fee(0.212, 0.0) == pytest.approx(0.212)
 
 
 def test_entry_quantity_is_floored_and_rejected_below_the_minimums():
@@ -263,17 +251,6 @@ def test_spot_fee_in_base_means_stop_and_exit_quantities_never_exceed_what_is_he
     client._ohlcv, client.price = BEARISH_OHLCV, BEAR_PRICE
     run_cycle(account_id, settings)
     assert the_trade(account_id).status == "closed"  # a full-size sell would have raised InsufficientFunds
-
-
-def test_spot_entry_without_fee_info_still_protects_a_safe_quantity(db, monkeypatch):
-    settings = make_settings(max_notional_multiplier=100.0)
-    client = spot_client(fee_info=False)
-    install(monkeypatch, client)
-    account_id = new_account(settings)
-    run_cycle(account_id, settings)
-    trade = the_trade(account_id)
-    assert trade.status == "open"
-    assert trade.quantity <= client.orders_by_role("entry")[0]["filled"] * 0.999
 
 
 # =========================== account-mode verification cache ===========================

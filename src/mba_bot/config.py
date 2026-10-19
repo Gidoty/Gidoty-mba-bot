@@ -138,6 +138,12 @@ class Settings:
     # Fast reconciliation loop for trades in an unhealthy state
     # (scheduler.run_recovery_forever).
     recovery_interval_seconds: int = 15
+    # Spot STOP_LOSS_LIMIT only: how often the price of every open
+    # stop-limit-protected position is compared with its trigger (one cheap
+    # public ticker call per distinct symbol per pass, shared by all
+    # customers); only a position whose price has reached its trigger gets
+    # authenticated exchange calls. Floor is the recovery loop's own tick.
+    stop_limit_monitor_interval_seconds: int = 15
     # Single-instance guard (main.py); a second scheduler process refuses
     # to start while this file is locked.
     lock_file: str = "./mba_bot.lock"
@@ -192,5 +198,6 @@ def load_settings() -> Settings:
         spot_stop_limit_buffer_pct=_env_float("SPOT_STOP_LIMIT_BUFFER_PCT", 0.5),
         protection_software_grace_pct=_env_float("PROTECTION_SOFTWARE_GRACE_PCT", 0.5),
         recovery_interval_seconds=_env_int("RECOVERY_INTERVAL_SECONDS", 15),
+        stop_limit_monitor_interval_seconds=_env_int("STOP_LIMIT_MONITOR_INTERVAL_SECONDS", 15),
         lock_file=os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"),
     )

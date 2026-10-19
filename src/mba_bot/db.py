@@ -21,7 +21,16 @@ from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import NON_TERMINAL_TRADE_STATUSES, TRADE_CLOSED, TRADE_VOID, Base, Trade, TradingAccount
+from .models import (
+    NON_TERMINAL_TRADE_STATUSES,
+    PROTECTION_PROTECTED,
+    TRADE_CLOSED,
+    TRADE_OPEN,
+    TRADE_VOID,
+    Base,
+    Trade,
+    TradingAccount,
+)
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
@@ -102,6 +111,22 @@ def list_live_unsettled_trades(session: Session) -> list[Trade]:
     return list(
         session.scalars(
             select(Trade).where(Trade.status.in_(NON_TERMINAL_TRADE_STATUSES), Trade.is_paper.is_(False))
+        )
+    )
+
+
+def list_open_stop_limit_trades(session: Session) -> list[Trade]:
+    """Healthy LIVE Spot trades protected by a STOP_LOSS_LIMIT - the ones
+    whose protection can silently stop working (price gapping through the
+    limit) and so get the fast price watch (scheduler.monitor_stop_limits_once)."""
+    return list(
+        session.scalars(
+            select(Trade).where(
+                Trade.status == TRADE_OPEN,
+                Trade.is_paper.is_(False),
+                Trade.protection_status == PROTECTION_PROTECTED,
+                Trade.protective_kind == "stop_loss_limit",
+            )
         )
     )
 

@@ -524,11 +524,21 @@ async def _manage_live_trade(session, account, client, trade: Trade, settings, n
     return trade, ctx
 
 
-async def reconcile_account(session: Session, account: TradingAccount, settings: Settings, notifier: Notifier) -> None:
+async def reconcile_account(
+    session: Session,
+    account: TradingAccount,
+    settings: Settings,
+    notifier: Notifier,
+    *,
+    current_price: float | None = None,
+) -> None:
     """Reconcile this account's live trade (if any) against Binance and do
     nothing else - no scan, no entry. Used at startup and by the fast
     recovery loop (scheduler.py); the main loop does the same inside
-    process_account."""
+    process_account. With `current_price` (the fast stop-limit watch) the
+    protection-health check also runs: if the price has gone through a
+    resting stop-limit's executable limit, the lifecycle cancels it,
+    confirms, and market-closes the remainder."""
     trade = get_open_trade(session, account.id)
     if trade is None or trade.is_paper:
         return
@@ -542,7 +552,9 @@ async def reconcile_account(session: Session, account: TradingAccount, settings:
     )
     try:
         await exchange.assert_trade_only(client)
-        await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
+        trade, ctx = await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
+        if current_price is not None:
+            await lifecycle.monitor_trade(ctx, trade, crossover_exit=False, current_price=current_price)
     finally:
         await client.close()
 
