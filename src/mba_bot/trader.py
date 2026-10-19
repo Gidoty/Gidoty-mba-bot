@@ -327,15 +327,32 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         )
         if account.market_type == "futures":
             # Read-only - this module never calls set_leverage (see
-            # exchange.fetch_symbol_leverage). A None result (leverage
-            # couldn't be determined) means this specific ceiling is
-            # skipped for this entry, never guessed at; the notional
-            # ceiling above still applies regardless.
+            # exchange.fetch_symbol_leverage). Margin safety for a real
+            # Futures order depends on knowing the real leverage: if it
+            # can't be reliably read (an exchange error, a missing
+            # field, or a non-positive value - fetch_symbol_leverage
+            # collapses all three to None, never guessing a value), this
+            # is a Mainnet Futures entry whose margin exposure cannot be
+            # proven to satisfy the configured limits, so it must fail
+            # closed - no order, not "proceed using only the notional
+            # ceiling". This never affects Spot (no leverage concept
+            # here) and never affects managing an already-open position
+            # (see process_account's effective_is_paper/open_trade
+            # handling, which this function has no part in) - it is
+            # scoped to a brand new live Futures entry only.
             leverage = await exchange.fetch_symbol_leverage(client, account.pair, side=side)
-            if leverage is not None:
-                size = apply_margin_ceiling(
-                    size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
+            if leverage is None:
+                await _record_error(
+                    notifier,
+                    account,
+                    "Could not verify this account's Binance Futures leverage/margin just now, so no new live "
+                    "trade was opened. This will retry automatically on the next check.",
+                    now=now,
                 )
+                return
+            size = apply_margin_ceiling(
+                size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
+            )
         if size.quantity <= 0:
             return
         order_side = "buy" if side == "long" else "sell"

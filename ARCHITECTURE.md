@@ -280,9 +280,19 @@ it just now also answers requests instead of only looping silently.
   `set_leverage`: reading ccxt's own source shows it has real,
   account-wide, cross-position side effects (margin mode, liquidation
   price), which a trading bot must never trigger silently on a
-  customer's behalf. A leverage read that fails or returns nothing just
-  skips that one ceiling for that entry - the notional ceiling still
-  applies regardless, so it's never the only safety net.
+  customer's behalf. A leverage read that fails, returns nothing, or
+  returns a non-positive value (`fetch_symbol_leverage` collapses all
+  three to `None` - it never guesses a value) makes `_maybe_enter` fail
+  closed for that one Futures entry: no order is placed, and a short,
+  customer-safe operational error is recorded instead (same
+  `_record_error` path a data-fetch failure uses), because a margin
+  check that can't be proven to hold is treated the same as a margin
+  check that failed. This is scoped to a brand-new live Futures entry
+  only - it never affects Spot (no leverage concept there), and never
+  affects managing an already-open position (that's
+  `effective_is_paper`/`open_trade`'s domain in `process_account`, not
+  `_maybe_enter`'s). The independent notional ceiling above still
+  applies regardless of any of this.
 - **Auto Select pair ranking, and why pairs never move mid-trade**
   (`pair_selection.py`, `trader.py`'s `_scan_auto_pair`):
   `TradingAccount.pair_selection_mode` (`"manual"` default | `"auto"`)

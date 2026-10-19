@@ -72,10 +72,11 @@ class FakeClient:
     with each candidate behaving differently. Tracks every pair it was
     asked for and every order it was asked to place."""
 
-    def __init__(self, *, ohlcv_by_pair=None, free_balance=None, leverage_by_symbol=None):
+    def __init__(self, *, ohlcv_by_pair=None, free_balance=None, leverage_by_symbol=None, leverage_raises=False):
         self.ohlcv_by_pair = ohlcv_by_pair or {}
         self._free_balance = free_balance if free_balance is not None else {"USDT": 50_000.0}
         self._leverage_by_symbol = leverage_by_symbol or {}
+        self._leverage_raises = leverage_raises
         self.market_orders: list[tuple[str, str, float]] = []
         self.fetched_pairs: list[str] = []
         self.fetch_leverage_calls: list[str] = []
@@ -90,6 +91,8 @@ class FakeClient:
 
     async def fetch_leverage(self, pair):
         self.fetch_leverage_calls.append(pair)
+        if self._leverage_raises:
+            raise RuntimeError("simulated Binance/ccxt leverage read failure")
         leverage = self._leverage_by_symbol.get(pair)
         if leverage is None:
             return None
@@ -361,6 +364,191 @@ def test_spot_account_never_queries_leverage_at_all(tmp_path, monkeypatch):
     _run_cycle(account_id, settings)
 
     assert client.fetch_leverage_calls == []
+    assert len(client.market_orders) == 1, "Spot entries must be entirely unaffected by the Futures leverage fail-closed rule"
+
+
+# --- Futures fail-closed: an unverifiable leverage/margin check must never ---
+# --- be silently skipped for a new live Futures entry ---
+
+
+def test_futures_entry_proceeds_when_leverage_is_valid(tmp_path, monkeypatch):
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings(max_notional_multiplier=100.0)
+    client = FakeClient(
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 2.0}
+    )
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresvalidleverage@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert len(client.market_orders) == 1, "a valid, correctly-constrained Futures entry must proceed"
+    _, _, quantity = client.market_orders[0]
+    entry_price = BULLISH_OHLCV[-1][4]
+    assert (quantity * entry_price) / 2.0 <= 1_000.0 + 1e-6
+
+    with session_scope() as session:
+        account = session.get(TradingAccount, account_id)
+        assert account.last_error is None
+
+
+def test_futures_entry_fails_closed_when_leverage_read_raises(tmp_path, monkeypatch):
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings()
+    client = FakeClient(ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_raises=True)
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresleverageraises@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert client.market_orders == [], "a Mainnet Futures entry must never proceed when the leverage read itself fails"
+    with session_scope() as session:
+        account = session.get(TradingAccount, account_id)
+        assert account.last_error is not None
+        assert session.query(Trade).filter(Trade.account_id == account_id).count() == 0
+
+
+def test_futures_entry_fails_closed_when_leverage_is_missing(tmp_path, monkeypatch):
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings()
+    client = FakeClient(ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={})
+
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresleveragemissing@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert client.market_orders == [], "a Mainnet Futures entry must never proceed when leverage can't be found at all"
+    with session_scope() as session:
+        assert session.query(Trade).filter(Trade.account_id == account_id).count() == 0
+
+
+def test_futures_entry_fails_closed_when_leverage_is_zero(tmp_path, monkeypatch):
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings()
+    client = FakeClient(
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 0}
+    )
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresleveragezero@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert client.market_orders == [], "a Mainnet Futures entry must never proceed with a non-positive leverage value"
+    with session_scope() as session:
+        assert session.query(Trade).filter(Trade.account_id == account_id).count() == 0
+
+
+def test_futures_leverage_read_failure_never_blocks_managing_an_already_open_position(tmp_path, monkeypatch):
+    """The fail-closed rule is about NEW entries only - an already-open
+    Futures position must keep being monitored/exited for real even if
+    the leverage read is completely broken, since _maybe_exit never
+    reads or needs leverage at all."""
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings()
+    client = FakeClient(ohlcv_by_pair={"BTC/USDT": FLAT_OHLCV}, leverage_raises=True)
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresopenposition@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+        session.add(
+            Trade(
+                account_id=account_id,
+                side="long",
+                is_paper=False,
+                entry_price=90.0,
+                quantity=0.01,
+                stop_loss_price=999_999.0,  # trivially hit
+                status="open",
+                opened_at=datetime.now(timezone.utc),
+            )
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert client.fetch_leverage_calls == [], "exiting an open position never needs a leverage read in the first place"
+    assert len(client.market_orders) == 1, "the open Futures position's real closing order must still be placed"
+    with session_scope() as session:
+        trade = session.query(Trade).filter(Trade.account_id == account_id).one()
+        assert trade.status == "closed"
+
+
+def test_futures_notional_ceiling_still_enforced_independently_of_the_margin_ceiling(tmp_path, monkeypatch):
+    """Even with perfectly valid leverage, the separate notional ceiling
+    must still bind on its own - the margin fail-closed rule is an
+    ADDITIONAL check, never a replacement for it."""
+    init_db(f"sqlite:///{tmp_path}/test.db")
+    settings = _settings(max_notional_multiplier=0.01)  # deliberately tiny
+    client = FakeClient(
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 50.0}
+    )
+    monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
+
+    with session_scope() as session:
+        account_id = _make_account(
+            session,
+            email="futuresnotionalstillbinds@example.com",
+            encryption_key=settings.encryption_key,
+            market_type="futures",
+            live_trading_enabled=True,
+            bot_started=True,
+            allocated_capital=1_000.0,
+        )
+
+    _run_cycle(account_id, settings)
+
+    assert len(client.market_orders) == 1
+    _, _, quantity = client.market_orders[0]
+    entry_price = BULLISH_OHLCV[-1][4]
+    assert quantity * entry_price <= 1_000.0 * 0.01 + 1e-6
 
 
 # --- The critical migration-safety fix: an already-open LIVE trade must ---
