@@ -60,13 +60,17 @@ mainnet key can't be used against testnet endpoints, and asking every
 signup to also go generate a personal testnet key is friction a resale
 product shouldn't add.
 
-So: the platform holds **two** Binance testnet keys, one per market type
-(`TESTNET_SPOT_API_KEY`/`TESTNET_SPOT_API_SECRET`,
-`TESTNET_FUTURES_API_KEY`/`TESTNET_FUTURES_API_SECRET`) - not one shared
-pair. Binance's spot testnet (testnet.binance.vision) and futures
-testnet (testnet.binancefuture.com) are separate systems with separate
-key registrations; a key issued on one is not valid on the other, so
+So: the platform holds **two** non-production Binance keys, one per market
+type (`TESTNET_SPOT_API_KEY`/`TESTNET_SPOT_API_SECRET` for the Spot Testnet,
+`DEMO_FUTURES_API_KEY`/`DEMO_FUTURES_API_SECRET` for Binance Futures Demo
+Trading) - not one shared pair. They are separate Binance systems with
+separate key registrations; a key issued on one is not valid on the other, so
 `trader._resolve_credentials` picks the pair matching `account.market_type`.
+The old `TESTNET_FUTURES_*` variables belong to the legacy Futures Testnet
+(testnet.binancefuture.com), which ccxt 4.5.88 refuses to authenticate against
+("testnet/sandbox mode is not supported for futures anymore"); they are not read
+at all (a startup warning is logged if they are still set) and can never
+authenticate Demo.
 What's customer-specific isn't the exchange credential, it's the
 simulated ledger - `TradingAccount.paper_balance` tracks each account's
 own equity curve independently in our database, starting from
@@ -340,6 +344,41 @@ it just now also answers requests instead of only looping silently.
   host) like any other SPA; the backend (API + scheduler, one process)
   still needs the persistent VPS described above - Vercel cannot run it.
 
+## Environments and routing (production, Spot Testnet, Futures Demo)
+
+`exchange.build_exchange_client(sandbox=...)` is the single place any exchange
+client is built, and the single place that decides where it can send requests:
+
+| `sandbox` | market | ccxt mode | hosts the client can reach |
+|---|---|---|---|
+| False | spot / futures | none | Binance production only |
+| True | spot | `set_sandbox_mode` | Spot Testnet `testnet.binance.vision` (unchanged) |
+| True | futures | `enable_demo_trading` | Binance Demo Trading `demo-fapi/-api/-dapi.binance.com` only |
+
+Futures paper does **not** use ccxt's sandbox mode: that mode points at the
+legacy `testnet.binancefuture.com`, on which ccxt 4.5.88 raises `NotSupported` for
+every authenticated call. Demo mode replaces the client's whole URL table with
+demo hosts; endpoint groups Demo does not offer (`sapi`, `papi`, `eapi`) are absent
+from it, so a request to one raises `NotSupported` rather than reaching production.
+
+After building, `exchange.assert_routing` verifies the effective URL table (the
+table `sign()` reads for every request): a Futures paper client may contain only
+demo hosts, be in demo mode and not sandbox mode; a Spot paper client only the
+Spot Testnet (plus the unused legacy-host entries ccxt's Spot sandbox table
+carries for Futures groups a Spot client never uses); a production client no demo
+or testnet host. Any mismatch, or any failure to enable the mode, raises
+`NonProductionRoutingError`: no client is returned, nothing falls back to another
+environment (production, the legacy Futures Testnet, or the Spot Testnet) and the
+cycle records a generic customer-safe error. `tests/test_environment_routing.py`
+proves it against the real ccxt classes (every endpoint group of the library is
+signed and its host checked) without network or real credentials.
+
+Mainnet/live routing is unchanged (`sandbox=False`; live trades, recovery and
+reconciliation never use a non-production client, and a legacy open paper trade is
+managed in the environment it was opened in). Futures Demo compatibility with the
+protective-order layer is **not production-proven** until the validation procedure
+below has been run from the VPS.
+
 ## Exchange-side protective stops (live trades)
 
 A live position is never protected only by software. The stop-loss is a
@@ -581,13 +620,45 @@ account.
 ### Testnet validation procedure
 
 Run on the VPS (or any machine that reaches Binance) with operator-owned
-*testnet* keys, **never** a customer account, and only then repeat the
-read-only parts and a minimum-size canary on Mainnet. Record every result.
+*non-production* keys (Spot Testnet keys for Spot, **Binance Demo Trading** keys
+for Futures), **never** a customer account, and only then repeat the read-only
+parts and a minimum-size canary on Mainnet. Record every result.
 The automated tests use `tests/fake_binance.py`, whose behaviours below are
 *assumptions*, and `tests/test_ccxt_contract.py`, which pins what is sent
 through ccxt 4.5.88 (not what Binance accepts).
 
-**Read-only (Testnet, then Mainnet)**
+**Environment and credentials (do first; Futures Demo is not production-proven until this passes)**
+0a. Create a trade-only Futures key in the API management page of the demo
+    account at demo.binance.com (no withdrawal permission; IP-restrict it to the
+    VPS). Put it in `DEMO_FUTURES_API_KEY` / `DEMO_FUTURES_API_SECRET`; never in
+    `TESTNET_FUTURES_*`. Do not edit the production `.env` until 0f passes on a
+    staging copy.
+0b. Reachability from the VPS: `GET https://demo-fapi.binance.com/fapi/v1/time`
+    and `.../fapi/v1/exchangeInfo` answer 200.
+0c. Key compatibility, read-only: sign one account read against
+    `demo-fapi.binance.com` with the OLD `TESTNET_FUTURES_*` key (expected:
+    rejected, confirming it is a different registry and must be replaced), then
+    with the new Demo key (expected: accepted). Record the exact status codes.
+0d. Build the client through the application code only
+    (`exchange.build_exchange_client(..., market_type="futures", sandbox=True)`),
+    never hand-built ccxt: confirm it constructs without error and that
+    `exchange.assert_routing` passes. Run `load_markets()` and confirm
+    `BTC/USDT:USDT` is an active linear perpetual.
+0e. Authenticated reads through that client: `fetch_balance`, `fetch_positions`,
+    `fetch_position_mode`, `GET multiAssetsMargin`, `fetch_open_orders` with
+    `trigger=True`. Record anything Demo does not offer or answers differently
+    (an unsupported endpoint group raises `NotSupported` locally, by design).
+0f. Capture outbound request hosts (e.g. with the VPS firewall log or a proxy)
+    during 0d-0e and confirm every request went to `demo-*.binance.com`, none to
+    `fapi.binance.com`, `api.binance.com` or `testnet.binancefuture.com`.
+0g. Spot: repeat 0d-0e with `market_type="spot"`; hosts must be
+    `testnet.binance.vision` only.
+Then everything below, for Futures, against Demo: whether the Algo Order endpoint,
+`closePosition`, `positionSide/dual`, `multiAssetsMargin`, `reduceOnly`, filters and
+`liquidationPrice` behave as the lifecycle assumes, and how Demo prices relate to
+live prices (they decide whether paper results are representative).
+
+**Read-only (Testnet/Demo, then Mainnet)**
 1. `exchangeInfo`: for BTC/ETH/BNB/XRP USDT on Spot, record `orderTypes`
    (is `STOP_LOSS` listed? `STOP_LOSS_LIMIT`?), `LOT_SIZE`, `MARKET_LOT_SIZE`,
    `PRICE_FILTER`, `NOTIONAL`/`MIN_NOTIONAL` (and whether it applies to
@@ -619,7 +690,7 @@ through ccxt 4.5.88 (not what Binance accepts).
    gives the final state.
 8. `-2013 Order does not exist` vs. lookups right after a timeout.
 
-**Futures (Testnet; confirm the Algo Order path works there at all)**
+**Futures (Binance Demo Trading; confirm the Algo Order path works there at all)**
 9. Market entry, then `STOP_MARKET` + `closePosition=true` +
    `workingType=MARK_PRICE` through `/fapi/v1/algoOrder`. Confirm it rests,
    it is visible only with `trigger=True` (fetch, open orders, cancel by
@@ -691,7 +762,7 @@ account without needing their UUID.
 | `crypto_utils.py` | Fernet encryption for stored API credentials. |
 | `botcode.py` | Generates the support-facing "MBA-XXXXXX" account code. |
 | `models.py` / `db.py` | SQLAlchemy schema and session/query helpers. |
-| `exchange.py` | ccxt client construction (spot vs futures, sandbox vs live) and the trade-only permission check. |
+| `exchange.py` | ccxt client construction (production, Spot Testnet, Futures Demo) with verified routing, and the trade-only permission check. |
 | `notifications/` | `Notifier` interface; `TelegramNotifier` implemented, `WhatsAppNotifier` a stub per the "added later" spec. |
 | `trader.py` | One account's evaluation cycle: fetch data -> signal -> enter/exit/manage position -> notify. Paper trades are simulated here; live trades are opened and managed through `lifecycle.py`. |
 | `venue.py` / `lifecycle.py` / `instance_lock.py` | Exchange order layer, live-trade state machine, single-instance lock. See "Exchange-side protective stops". |

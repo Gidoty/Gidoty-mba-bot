@@ -260,7 +260,7 @@ def test_installed_filter_redacts_messages_and_tracebacks_even_if_something_logs
         settings = SimpleNamespace(
             telegram_bot_token=TOKEN, whatsapp_provider_token=None, paystack_secret_key="PAYSTACK-SECRET-SENTINEL-1234",
             jwt_secret="JWT-SECRET-SENTINEL-1234", encryption_key=None, testnet_spot_api_key=None, testnet_spot_api_secret=None,
-            testnet_futures_api_key=None, testnet_futures_api_secret=None,
+            demo_futures_api_key=None, demo_futures_api_secret=None,
         )
         log_safety.install_log_safety(settings)
         log = logging.getLogger("some.module")
@@ -396,7 +396,7 @@ ENCRYPTION_KEY = "ENCRYPTION-KEY-SENTINEL-abcdef123456"
 SENTINEL_SETTINGS = SimpleNamespace(
     telegram_bot_token=TOKEN, whatsapp_provider_token=None, paystack_secret_key=PAYSTACK_SECRET, jwt_secret=JWT_SECRET,
     encryption_key=ENCRYPTION_KEY, testnet_spot_api_key=None, testnet_spot_api_secret=None,
-    testnet_futures_api_key=None, testnet_futures_api_secret=None,
+    demo_futures_api_key=None, demo_futures_api_secret=None,
 )
 EVERYTHING = (API_KEY, API_SECRET, TOKEN, "SECRET-TELEGRAM-TOKEN-DO-NOT-LOG", PAYSTACK_SECRET, JWT_SECRET, ENCRYPTION_KEY)
 

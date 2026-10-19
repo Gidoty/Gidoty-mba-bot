@@ -81,15 +81,18 @@ Fill in `.env` (see `.env.example` for the full list and comments):
 - `TESTNET_SPOT_API_KEY` / `TESTNET_SPOT_API_SECRET` - a Binance **spot**
   testnet key ([testnet.binance.vision](https://testnet.binance.vision)),
   shared by every spot account's paper trial.
-- `TESTNET_FUTURES_API_KEY` / `TESTNET_FUTURES_API_SECRET` - a separate
-  Binance **futures** testnet key
-  ([testnet.binancefuture.com](https://testnet.binancefuture.com)), shared
-  by every futures account's paper trial. Spot and futures testnet are
-  separate Binance systems with separate key registrations - a key from
-  one does not work on the other, so both need setting if you have
-  customers on both market types. (`TESTNET_API_KEY`/`TESTNET_API_SECRET`
-  still work as a legacy fallback for the spot pair only, if you're
-  upgrading an existing deployment.)
+- `DEMO_FUTURES_API_KEY` / `DEMO_FUTURES_API_SECRET` - a trade-only key
+  from **Binance Futures Demo Trading** (create it in the API management
+  page of your account at [demo.binance.com](https://demo.binance.com)),
+  shared by every futures account's paper trial. Binance's Futures Testnet
+  (testnet.binancefuture.com) is no longer supported by the exchange
+  library, so the old `TESTNET_FUTURES_API_KEY` / `TESTNET_FUTURES_API_SECRET`
+  are **ignored** (a warning is logged if they are still set) and are never
+  used to authenticate Demo. Spot testnet and Futures Demo are separate
+  Binance systems with separate key registrations - a key from one does not
+  work on the other, so both need setting if you have customers on both
+  market types. (`TESTNET_API_KEY`/`TESTNET_API_SECRET` still work as a
+  legacy fallback for the spot pair only.)
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_USERNAME` - create a bot via
   [@BotFather](https://t.me/BotFather); needed before any account can
   link Telegram (and therefore before it can trade at all).

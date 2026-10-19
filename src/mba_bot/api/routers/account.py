@@ -423,7 +423,7 @@ def _paper_credentials(account: TradingAccount, settings: Settings) -> tuple[str
     trading cycle, and this read-only endpoint has no business pulling
     in trader.py's module surface for two lines of logic."""
     if account.market_type == "futures":
-        return settings.testnet_futures_api_key, settings.testnet_futures_api_secret
+        return settings.demo_futures_api_key, settings.demo_futures_api_secret
     return settings.testnet_spot_api_key, settings.testnet_spot_api_secret
 
 
@@ -544,9 +544,12 @@ async def test_credentials(
     api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
     api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
     sandbox = account.credential.environment != "mainnet"
-    client = exchange.build_exchange_client(
-        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=sandbox
-    )
+    try:
+        client = exchange.build_exchange_client(
+            exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=sandbox
+        )
+    except exchange.NonProductionRoutingError as exc:
+        return CredentialTestOut(ok=False, message=exchange.safe_error_message(exc))
     try:
         await client.fetch_balance()
     except Exception as exc:

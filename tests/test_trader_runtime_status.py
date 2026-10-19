@@ -75,8 +75,8 @@ def _settings(**overrides) -> Settings:
         max_notional_multiplier=3.0,
         testnet_spot_api_key="testnet-spot-key",
         testnet_spot_api_secret="testnet-spot-secret",
-        testnet_futures_api_key="testnet-futures-key",
-        testnet_futures_api_secret="testnet-futures-secret",
+        demo_futures_api_key="demo-futures-key",
+        demo_futures_api_secret="demo-futures-secret",
         paper_starting_balance=10_000.0,
         telegram_bot_token="test-bot-token",
         telegram_bot_username="mba_test_bot",
@@ -387,7 +387,7 @@ def test_futures_paper_account_uses_the_futures_testnet_credential_not_spots(db,
             await process_account(session, account, settings, FakeNotifier())
 
     asyncio.run(run())
-    assert captured["api_key"] == settings.testnet_futures_api_key
+    assert captured["api_key"] == settings.demo_futures_api_key
     assert captured["api_key"] != settings.testnet_spot_api_key
     assert captured["market_type"] == "futures"
 
@@ -397,7 +397,7 @@ def test_futures_paper_account_with_no_futures_testnet_key_fails_safe_not_wrong_
     # reuse the spot testnet key - this proves that can't happen anymore:
     # with no futures key configured, it's a clean "no credentials"
     # error, never a mismatched key reaching Binance.
-    settings = _settings(testnet_futures_api_key=None, testnet_futures_api_secret=None)
+    settings = _settings(demo_futures_api_key=None, demo_futures_api_secret=None)
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: FakeExchangeClient())
 
     with session_scope() as session:

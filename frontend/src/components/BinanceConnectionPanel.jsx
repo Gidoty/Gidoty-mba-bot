@@ -163,6 +163,9 @@ function ReplaceCredentialsForm({ onDone }) {
           <option value="mainnet">Mainnet (real Binance account)</option>
           <option value="testnet">Testnet (practice)</option>
         </select>
+        <span className="mt-1 block text-xs text-slate-500">
+          Practice keys: Spot uses the Binance Spot Testnet; Futures uses Binance Demo Trading (demo.binance.com).
+        </span>
       </label>
       <button
         type="submit"

@@ -254,12 +254,12 @@ async def _record_error(notifier: Notifier, account: TradingAccount, message: st
 
 def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool) -> tuple[str | None, str | None]:
     if is_paper:
-        # Spot and futures testnet are separate Binance systems with
-        # separate key registrations - a key from one is not valid on
+        # Spot Testnet and Futures Demo Trading are separate Binance systems
+        # with separate key registrations - a key from one is not valid on
         # the other, so which pair to use depends on market_type, not
-        # just "is this paper mode".
+        # just "is this paper mode". (The legacy TESTNET_FUTURES_* are never used.)
         if account.market_type == "futures":
-            return settings.testnet_futures_api_key, settings.testnet_futures_api_secret
+            return settings.demo_futures_api_key, settings.demo_futures_api_secret
         return settings.testnet_spot_api_key, settings.testnet_spot_api_secret
     credential = account.credential
     if credential is None:

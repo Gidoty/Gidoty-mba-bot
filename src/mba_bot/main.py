@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from .config import load_settings
+from .config import load_settings, warn_about_legacy_futures_testnet_env
 from .db import init_db
 from .log_safety import install_log_safety
 from .instance_lock import AlreadyRunning, acquire_single_instance_lock
@@ -25,6 +25,7 @@ def configure_logging(settings=None) -> None:
 def main() -> None:
     settings = load_settings()
     configure_logging(settings)
+    warn_about_legacy_futures_testnet_env(logging.getLogger(__name__))
     if not settings.encryption_key:
         raise SystemExit("ENCRYPTION_KEY is not set - generate one with `python -m mba_bot.crypto_utils`")
     try:

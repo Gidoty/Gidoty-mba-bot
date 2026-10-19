@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
 
@@ -28,6 +29,89 @@ class WithdrawalPermissionDetected(RuntimeError):
     key is replaced, even if trade-only was intended at signup."""
 
 
+class NonProductionRoutingError(RuntimeError):
+    """A non-production (paper) client could not be proven to route only to
+    its non-production Binance environment, or a production client was found
+    routing to one. No client is returned: this fails closed and never falls
+    back to another environment."""
+
+
+# --- Environments -------------------------------------------------------------------
+#
+# sandbox=False                 Binance production (Mainnet) - Spot and USD-M.
+# sandbox=True, market "spot"   Binance Spot Testnet (testnet.binance.vision)
+#                               via ccxt's sandbox mode. Unchanged.
+# sandbox=True, market "futures"
+#                               Binance Futures DEMO TRADING (demo-fapi.binance.com)
+#                               via ccxt's demo-trading mode. The legacy Futures
+#                               Testnet (testnet.binancefuture.com) is NOT used:
+#                               ccxt 4.5.88 refuses every authenticated call on it
+#                               (NotSupported) and Binance has deprecated it. The two
+#                               ccxt modes are mutually exclusive.
+#
+# Every client is verified after construction (assert_routing): the effective
+# ccxt URL table - the same table sign() reads for every request - must contain
+# only hosts of the intended environment. Demo and Spot-Testnet tables have
+# no entries for endpoint groups they don't offer (sapi, papi, eapi...), so a
+# request to one of those raises NotSupported instead of reaching Mainnet.
+SPOT_TESTNET_HOST = "testnet.binance.vision"
+# Present in ccxt's Spot sandbox table for the Futures endpoint groups a Spot
+# client never uses; it is the deprecated legacy host, accepted ONLY as an
+# unused entry of a Spot client's table, never for a Futures client.
+_LEGACY_FUTURES_TESTNET_HOST = "testnet.binancefuture.com"
+FUTURES_DEMO_HOSTS = frozenset({"demo-fapi.binance.com", "demo-api.binance.com", "demo-dapi.binance.com"})
+# Endpoint groups the Spot client actually uses ("public", "private", "v1").
+_SPOT_USED_API_GROUPS = ("public", "private", "v1")
+
+
+def _routing_hosts(client) -> dict[str, str]:
+    """api-group -> host for every entry of the client's effective URL table."""
+    table = client.urls.get("api") if isinstance(getattr(client, "urls", None), dict) else None
+    if not isinstance(table, dict) or not table:
+        raise NonProductionRoutingError("exchange client has no readable URL table")
+    hosts: dict[str, str] = {}
+    for group, url in table.items():
+        parsed = urlparse(url) if isinstance(url, str) else None
+        if parsed is None or parsed.scheme != "https" or not parsed.netloc:
+            raise NonProductionRoutingError(f"unreadable or non-https endpoint for group {group!r}")
+        hosts[str(group)] = parsed.netloc.lower()
+    return hosts
+
+
+def assert_routing(client, *, market_type: str, sandbox: bool) -> None:
+    """Prove, from the effective URL table, that this client routes only where
+    it should. Raises NonProductionRoutingError otherwise."""
+    hosts = _routing_hosts(client)
+    values = set(hosts.values())
+    options = getattr(client, "options", {}) or {}
+    demo_flag = bool(options.get("enableDemoTrading"))
+    sandbox_flag = bool(getattr(client, "isSandboxModeEnabled", False))
+
+    if not sandbox:
+        bad = sorted(h for h in values if "demo" in h or "testnet" in h)
+        if bad or demo_flag or sandbox_flag:
+            raise NonProductionRoutingError("a production client is routed to a non-production environment")
+        return
+
+    if market_type == "futures":
+        if not values <= FUTURES_DEMO_HOSTS:
+            raise NonProductionRoutingError("a Futures paper client has an endpoint outside Binance Demo Trading")
+        if not demo_flag or sandbox_flag:
+            raise NonProductionRoutingError("a Futures paper client is not in demo-trading mode")
+        if "fapiPrivate" not in hosts or hosts["fapiPrivate"] != "demo-fapi.binance.com":
+            raise NonProductionRoutingError("a Futures paper client has no demo Futures endpoint")
+        return
+
+    # Spot Testnet (unchanged behaviour): the groups a Spot client uses must be the Spot Testnet
+    # host; the table's remaining entries must be non-production hosts too, never a production one.
+    if not values <= {SPOT_TESTNET_HOST, _LEGACY_FUTURES_TESTNET_HOST}:
+        raise NonProductionRoutingError("a Spot paper client has an endpoint outside the Spot Testnet")
+    if any(hosts.get(group) != SPOT_TESTNET_HOST for group in _SPOT_USED_API_GROUPS):
+        raise NonProductionRoutingError("a Spot paper client is not routed to the Spot Testnet")
+    if not sandbox_flag or demo_flag:
+        raise NonProductionRoutingError("a Spot paper client is not in sandbox mode")
+
+
 def build_exchange_client(
     *, exchange: str, market_type: str, api_key: str, api_secret: str, sandbox: bool
 ) -> ccxt_async.Exchange:
@@ -37,7 +121,16 @@ def build_exchange_client(
 
     client = exchange_cls({"apiKey": api_key, "secret": api_secret, "enableRateLimit": True})
     if sandbox:
-        client.set_sandbox_mode(True)
+        try:
+            if market_type == "futures":
+                client.enable_demo_trading(True)  # Binance Futures Demo Trading; NOT set_sandbox_mode
+            else:
+                client.set_sandbox_mode(True)  # Binance Spot Testnet
+        except Exception as exc:
+            raise NonProductionRoutingError(
+                f"could not establish the non-production environment ({type(exc).__name__})"
+            ) from None
+    assert_routing(client, market_type=market_type, sandbox=sandbox)
     return client
 
 
@@ -225,6 +318,8 @@ def safe_error_message(exc: Exception) -> str:
     real exception and its traceback still go to the server log via
     `logger.exception` in scheduler.py, unaffected by this function.
     """
+    if isinstance(exc, NonProductionRoutingError):
+        return "The practice environment is not available right now. Nothing was traded."
     if isinstance(exc, UnsupportedAccountMode):
         return (
             "Your Binance Futures account is set to a mode this bot does not support (it needs standard "

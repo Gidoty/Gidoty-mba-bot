@@ -55,8 +55,8 @@ def secrets_from_settings(settings) -> list[str]:
         "encryption_key",
         "testnet_spot_api_key",
         "testnet_spot_api_secret",
-        "testnet_futures_api_key",
-        "testnet_futures_api_secret",
+        "demo_futures_api_key",
+        "demo_futures_api_secret",
     )
     values = [getattr(settings, name, None) for name in names]
     return [v for v in values if isinstance(v, str) and len(v) >= _MIN_SECRET_LENGTH]

@@ -79,17 +79,24 @@ class Settings:
     # so it is intentionally configurable rather than hardcoded.
     max_notional_multiplier: float
 
-    # Shared platform-level Binance testnet keys used for every account's
-    # paper-trading trial - never exposed to customers. Split by market
-    # type because Binance's spot testnet (testnet.binance.vision) and
-    # futures testnet (testnet.binancefuture.com) are separate systems
-    # with separate key registrations; a key issued on one is not valid
-    # on the other. A customer's own key (ApiCredential) is only ever
-    # used once an account reaches LIVE - see models.py/onboarding.py.
+    # Shared platform-level non-production Binance keys used for every
+    # account's paper-trading trial - never exposed to customers. Split by
+    # market type because they are separate Binance systems with separate
+    # key registrations; a key issued on one is not valid on the other:
+    #   Spot    -> Spot Testnet (testnet.binance.vision):
+    #              TESTNET_SPOT_API_KEY / TESTNET_SPOT_API_SECRET
+    #   Futures -> Binance Futures DEMO TRADING (demo-fapi.binance.com), keys
+    #              created in a Binance account's Demo Trading API management:
+    #              DEMO_FUTURES_API_KEY / DEMO_FUTURES_API_SECRET
+    # The legacy Futures Testnet (testnet.binancefuture.com) is no longer
+    # supported by ccxt; TESTNET_FUTURES_* are NOT read (see
+    # warn_about_legacy_futures_testnet_env). A customer's own key
+    # (ApiCredential) is only ever used once an account reaches LIVE - see
+    # models.py/onboarding.py.
     testnet_spot_api_key: str | None = field(repr=False)
     testnet_spot_api_secret: str | None = field(repr=False)
-    testnet_futures_api_key: str | None = field(repr=False)
-    testnet_futures_api_secret: str | None = field(repr=False)
+    demo_futures_api_key: str | None = field(repr=False)
+    demo_futures_api_secret: str | None = field(repr=False)
     paper_starting_balance: float
 
     telegram_bot_token: str | None = field(repr=False)
@@ -149,6 +156,23 @@ class Settings:
     lock_file: str = "./mba_bot.lock"
 
 
+LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
+
+
+def warn_about_legacy_futures_testnet_env(logger) -> bool:
+    """Log (never the values) that the legacy Futures Testnet variables are
+    set but ignored. They must never authenticate anything: that registry is
+    not Binance Demo Trading and ccxt no longer supports the old host."""
+    present = [name for name in LEGACY_FUTURES_TESTNET_VARS if os.environ.get(name)]
+    if present:
+        logger.warning(
+            "%s is set but IGNORED: the Binance Futures Testnet is no longer supported. Futures paper trading uses "
+            "Binance Demo Trading keys in DEMO_FUTURES_API_KEY / DEMO_FUTURES_API_SECRET.",
+            ", ".join(present),
+        )
+    return bool(present)
+
+
 def load_settings() -> Settings:
     return Settings(
         database_url=os.environ.get("DATABASE_URL", "sqlite:///./mba_bot.db"),
@@ -169,15 +193,14 @@ def load_settings() -> Settings:
         # TESTNET_API_KEY/SECRET are the legacy, pre-split var names -
         # kept as a fallback for the spot pair only, so an existing
         # deployment's working spot paper trading doesn't go dark the
-        # moment this ships. Futures has no such legacy name to fall
-        # back to: it was silently sharing the spot key before this
-        # change (the actual bug being fixed here), so it now fails
-        # safe (no usable credentials) until TESTNET_FUTURES_API_KEY/
-        # SECRET is set explicitly, rather than keep guessing.
+        # moment this ships. Futures has NO fallback of any kind: it uses
+        # only DEMO_FUTURES_API_KEY/SECRET, and fails safe (no usable
+        # credentials, no client built) until they are set. The old
+        # TESTNET_FUTURES_* variables are deliberately never read.
         testnet_spot_api_key=os.environ.get("TESTNET_SPOT_API_KEY") or os.environ.get("TESTNET_API_KEY"),
         testnet_spot_api_secret=os.environ.get("TESTNET_SPOT_API_SECRET") or os.environ.get("TESTNET_API_SECRET"),
-        testnet_futures_api_key=os.environ.get("TESTNET_FUTURES_API_KEY"),
-        testnet_futures_api_secret=os.environ.get("TESTNET_FUTURES_API_SECRET"),
+        demo_futures_api_key=os.environ.get("DEMO_FUTURES_API_KEY"),
+        demo_futures_api_secret=os.environ.get("DEMO_FUTURES_API_SECRET"),
         paper_starting_balance=_env_float("PAPER_STARTING_BALANCE", 10_000.0),
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN"),
         telegram_bot_username=os.environ.get("TELEGRAM_BOT_USERNAME"),
