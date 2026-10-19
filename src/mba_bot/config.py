@@ -8,7 +8,7 @@ this module only holds defaults and operational knobs.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -43,7 +43,7 @@ SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
 @dataclass(frozen=True)
 class Settings:
     database_url: str
-    encryption_key: str | None
+    encryption_key: str | None = field(repr=False)
 
     poll_interval_seconds: int
     timeframe: str
@@ -86,18 +86,18 @@ class Settings:
     # with separate key registrations; a key issued on one is not valid
     # on the other. A customer's own key (ApiCredential) is only ever
     # used once an account reaches LIVE - see models.py/onboarding.py.
-    testnet_spot_api_key: str | None
-    testnet_spot_api_secret: str | None
-    testnet_futures_api_key: str | None
-    testnet_futures_api_secret: str | None
+    testnet_spot_api_key: str | None = field(repr=False)
+    testnet_spot_api_secret: str | None = field(repr=False)
+    testnet_futures_api_key: str | None = field(repr=False)
+    testnet_futures_api_secret: str | None = field(repr=False)
     paper_starting_balance: float
 
-    telegram_bot_token: str | None
+    telegram_bot_token: str | None = field(repr=False)
     telegram_bot_username: str | None
-    whatsapp_provider_token: str | None
+    whatsapp_provider_token: str | None = field(repr=False)
 
     # --- web API (api/) ---
-    jwt_secret: str | None
+    jwt_secret: str | None = field(repr=False)
     jwt_algorithm: str
     jwt_expires_minutes: int
     frontend_origin: str
@@ -110,7 +110,7 @@ class Settings:
     # signatures (HMAC-SHA512 over the raw body) - no separate webhook
     # secret like Stripe has. `paystack_amount` is in the currency's
     # lowest unit (kobo for NGN), matching Paystack's own API.
-    paystack_secret_key: str | None
+    paystack_secret_key: str | None = field(repr=False)
     paystack_amount: int
     paystack_currency: str
 

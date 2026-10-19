@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import load_settings
 from ..db import init_db
+from ..log_safety import install_log_safety
 from ..scheduler import run_forever
 from .routers import account, auth, billing, telegram, trades
 
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
     if not settings.jwt_secret:
         raise RuntimeError("JWT_SECRET is not set")
 
+    install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
     init_db(settings.database_url)
     scheduler_task = asyncio.create_task(run_forever(settings))
     try:

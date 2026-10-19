@@ -516,6 +516,25 @@ two distinct purposes, separated in code:
   exits stay `reduceOnly`. A protected position is not liquidated merely
   because the permission exists. Once flat the account stays blocked.
 
+### Secrets and logging
+
+- `TelegramNotifier.send` never lets an httpx error escape: Telegram's Bot API
+  puts the bot token in the request URL, so every failure is converted to a
+  `NotificationError` carrying only a category and an HTTP status
+  ("Telegram send failed: HTTP 403"). It is raised outside the `except`
+  handlers, so it has no `__cause__`/`__context__` for a traceback printer to
+  reach the original error.
+- httpx logs every request URL at INFO (which would write the token on every
+  successful send): httpx/httpcore are pinned to WARNING, and
+  `log_safety.install_log_safety` adds a last-line redaction (configured
+  secrets and anything shaped like a bot-URL token) to the process's log
+  handlers (`main.py` and the API lifespan).
+- `Settings` fields holding secrets are `repr=False`.
+- Binance: ccxt exception text and tracebacks were verified (against a local
+  server, with sentinel credentials) to contain no API key or secret; customer
+  surfaces only ever get `exchange.safe_error_message`. See
+  `tests/test_secret_logging.py`.
+
 ### What is deliberately not done
 
 No customer control over the protective order, no Pause/Stop, no manual

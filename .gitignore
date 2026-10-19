@@ -15,3 +15,6 @@ venv/
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+
+# single-instance scheduler lock (runtime only)
+mba_bot.lock
