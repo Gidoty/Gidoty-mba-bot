@@ -340,6 +340,229 @@ it just now also answers requests instead of only looping silently.
   host) like any other SPA; the backend (API + scheduler, one process)
   still needs the persistent VPS described above - Vercel cannot run it.
 
+## Exchange-side protective stops (live trades)
+
+A live position is never protected only by software. The stop-loss is a
+real order resting at Binance from the moment the trade is considered
+open, so a dead VPS, scheduler, network or database cannot leave a real
+position without a stop. **None of this has been validated against real
+Binance yet** - see "Testnet validation procedure" below; passing the
+mocked test-suite is not evidence about Binance.
+
+### Modules
+
+| Module | Responsibility |
+|---|---|
+| `venue.py` | Everything ccxt about *orders*: entry/exit/protective-stop placement, lookup by client id, cancel, exchange-truth reads (Futures position, Spot free base), market rules (lot step, tick, min qty/notional, allowed order types). Normalizes results. Spot and USD-M Futures subclasses. |
+| `lifecycle.py` | The live-trade state machine: write-ahead entry, fill resolution, protect-then-open, emergency close, idempotent exit lease, reconciliation. The only place a live `Trade` changes state. |
+| `exchange.py` | Symbol normalization (`BTC/USDT` -> ccxt `BTC/USDT:USDT` on the Futures client) and the Futures account-mode gate (One-way only; Hedge, Multi-Assets and Portfolio Margin refused). |
+| `scheduler.py` | Startup reconciliation, the 5-minute poll, and the 15-second recovery loop for unhealthy trades, sharing one lock per account. |
+| `instance_lock.py` | `flock` so a second scheduler process refuses to start. |
+
+### Trade state machine
+
+```
+pending ──entry filled──▶ protecting ──stop verified──▶ open
+   │                          │                           │ exit / stop fired
+   │ no fill / old & absent   │ cannot protect            ▼
+   ▼                          ▼                        closing ──▶ closed
+ void                  emergency close ───────────────────▲
+                              │ cannot verify flat
+                              ▼
+                          attention ──(reconciled)──▶ open | closed
+```
+
+`pending`/`protecting`/`open`/`closing`/`attention` are *non-terminal*;
+`closed` (had exposure, now flat) and `void` (entry never happened) are
+terminal. A partial unique index on `trades` allows at most one
+non-terminal trade per account - the database-level form of the
+one-position rule, and what stops a second entry while one is unresolved.
+
+### Entry (write-ahead, idempotent)
+
+1. `preflight_entry`: Futures contract must be flat (a pre-existing position
+   is never stacked on nor covered by a `closePosition` stop); stale
+   bot-prefixed open orders are cancelled.
+2. A `pending` trade is **committed before any order is sent**.
+3. The entry is a market order with a deterministic client id
+   (`mba<24 hex of trade id>e`). On any error the bot looks the order up by
+   that id; it is **never re-sent**. If Binance has no record yet the trade
+   stays `pending` (blocking all other entries) and is voided only after
+   `ENTRY_UNKNOWN_VOID_AFTER_SECONDS`; a Futures position with no order
+   behind it goes to `attention`, never `void`.
+4. The actual fill (average price, filled qty, base-asset commission) is
+   persisted: `quantity` becomes what was really bought (Spot: net of the
+   base commission, floored to the lot step).
+5. The protective stop is placed with a deterministic id
+   (`...s<attempt>`), read back from Binance, and only then does the trade
+   become `open` and the customer is told. `protection_attempt` is
+   committed before each placement, so a lost response is adopted, never
+   duplicated.
+6. If protection cannot be established (deterministic rejection, or the
+   bounded retries run out) the bot closes the position immediately
+   (`protection_failed_emergency_exit`). If that close cannot be verified
+   the trade goes to `attention`, the customer is alerted once, and the
+   recovery loop keeps working on it.
+
+### Protective order mechanisms
+
+*Futures (USD-M, One-way mode only)*: a `STOP_MARKET` with `closePosition`
+(sized by Binance to the whole position at trigger time, so it can neither
+increase nor reverse it), `workingType=MARK_PRICE`, tick-aligned so the
+realized risk is never larger than planned. With ccxt 4.5.88 this is routed
+through Binance's Algo Order endpoint; fetching, cancelling and listing it
+**require `trigger=True`** (a reconciler that forgets it would see no stop).
+If `closePosition` is rejected the fallback is `reduceOnly` with the
+*exchange-confirmed* position size. A stop at or beyond the reported
+liquidation price is refused. Every Futures exit is `reduceOnly`.
+
+*Spot*: capability-aware. The order types and filters are read from the
+loaded market of the actual symbol/environment: a market-triggered
+`STOP_LOSS` is used only if the symbol lists it (no non-fill risk once
+triggered, slippage accepted); otherwise `STOP_LOSS_LIMIT` (limit
+`SPOT_STOP_LIMIT_BUFFER_PCT` below the trigger), whose gap-through/non-fill
+risk is handled explicitly: once the price is at or below the limit with
+the order still resting, the bot cancels it, confirms, and market-sells the
+remainder (`stop_limit_gap`). If neither is listed, no entry is placed. OCO
+is not used (the strategy has no take-profit leg). The stop quantity is the
+*net* base quantity (fill minus base commission, floored to the lot step)
+and must satisfy `LOT_SIZE` and the minimum notional at the stop price; the
+entry quantity is chosen so that quantity left after the worst-case
+commission is still protectable.
+
+### Exit (one lease, one writer)
+
+`lifecycle.execute_exit` is the only path that closes live exposure
+(strategy exit, software backstop, emergency, resumed exits):
+
+1. Atomic claim `open|protecting|attention -> closing` (compare-and-set).
+2. Cancel the protective stop and read its final state. If it already
+   executed, no exit order is sent for that part. Spot will not sell on top
+   of a stop it cannot confirm cancelled.
+3. Re-read exchange truth: Futures `|position|` (never more than the trade's
+   quantity; opposite sign -> `attention`); Spot `min(quantity not yet sold,
+   free base)`.
+4. Exit order with a deterministic id (`...x<attempt>`), found-or-placed,
+   Futures `reduceOnly`. Only the remainder is closed; residual exposure
+   keeps the trade `closing` for the next pass.
+5. P&L and exit price come from the exchange's own fills, not the stop price.
+
+### Reconciliation
+
+Runs at startup (every non-terminal live trade, SQLite is not trusted
+alone), every poll for the account's trade, and every
+`RECOVERY_INTERVAL_SECONDS` for trades that are not healthy-and-protected.
+Per state: position+stop -> healthy; position without stop -> re-protect
+(emergency close if it cannot); stop without position -> cancel the stale
+order and close the record; stop fired while offline -> record it from the
+fills, send no exit; closed outside the bot -> record, clean up; partial
+stop execution -> close only the remainder; pending/unknown entry -> adopt
+by client id or void/attention as above; unsupported account mode on an
+existing position -> `attention`, no orders. Stale bot-prefixed orders are
+cancelled; the customer's own orders (no `mba` client id prefix) are never
+touched. Accounts in any non-terminal state cannot enter again.
+
+### What is deliberately not done
+
+No customer control over the protective order, no Pause/Stop, no manual
+trading controls. Account modes (Hedge, Multi-Assets, Portfolio Margin) are
+refused rather than adapted to; nothing is ever switched on the customer's
+account.
+
+### Known residual risks
+
+- Futures exit cancels the `closePosition` stop before the reduce-only exit
+  (the specified order); for the milliseconds between them the position has
+  no resting stop.
+- Portfolio Margin has no dedicated "is this PM" read on the classic Futures
+  API; it is refused because PM accounts are expected to fail the classic
+  mode reads (to be confirmed by validation), plus a best-effort SAPI probe.
+- An API key that gains withdrawal permission is refused for *all* actions
+  including managing an open position (pre-existing policy); the resting
+  exchange-side stop still protects the position.
+- Spot stop-limit can still leave a position exposed between the gap and the
+  next 5-minute poll; a market-triggered stop (when listed) avoids this.
+- Binance behaviours the design relies on are listed in the next section.
+
+### Testnet validation procedure
+
+Run on the VPS (or any machine that reaches Binance) with operator-owned
+*testnet* keys, **never** a customer account, and only then repeat the
+read-only parts and a minimum-size canary on Mainnet. Record every result.
+The automated tests use `tests/fake_binance.py`, whose behaviours below are
+*assumptions*, and `tests/test_ccxt_contract.py`, which pins what is sent
+through ccxt 4.5.88 (not what Binance accepts).
+
+**Read-only (Testnet, then Mainnet)**
+1. `exchangeInfo`: for BTC/ETH/BNB/XRP USDT on Spot, record `orderTypes`
+   (is `STOP_LOSS` listed? `STOP_LOSS_LIMIT`?), `LOT_SIZE`, `MARKET_LOT_SIZE`,
+   `PRICE_FILTER`, `NOTIONAL`/`MIN_NOTIONAL` (and whether it applies to
+   market and stop orders). Same for the four USD-M perpetuals
+   (`STOP_MARKET` listed?). Confirm `BTC/USDT:USDT` is the ccxt symbol and
+   `load_markets` works with the production key.
+2. Futures account reads with the production key: `fetch_position_mode`
+   (`hedged` false), `GET multiAssetsMargin` (`false`), and what the Portfolio
+   Margin probe returns on a classic account vs. a PM account if one is
+   available. Confirm a PM account fails or is detected.
+3. Confirm the key's permissions allow order placement but the withdrawal
+   check (`canWithdraw`) behaves as `assert_trade_only` expects on Futures.
+
+**Spot (Testnet)**
+4. Market buy with `newClientOrderId`; confirm `fills[].commission/
+   commissionAsset` and that the base commission is deducted from the held
+   balance (net quantity matches `venue.net_quantity`).
+5. Place the chosen protective stop (`STOP_LOSS` and, separately,
+   `STOP_LOSS_LIMIT`) for the net quantity. Confirm: it rests (`NEW`), the
+   base asset becomes `locked`, a sell exit is impossible until it is
+   cancelled, a stop that would trigger immediately is rejected, and a
+   duplicate `newClientOrderId` is rejected while it is open (and whether
+   the id may be reused after cancel/fill).
+6. Trigger the stop (move the market or use a stop near price): confirm fill
+   price/fees; for `STOP_LOSS_LIMIT`, create a gap-through and confirm it
+   stays open and unfilled.
+7. Cancel-then-sell race: cancel while the price crosses; confirm the
+   "unknown order"/filled cancel error and that `fetch_order` by client id
+   gives the final state.
+8. `-2013 Order does not exist` vs. lookups right after a timeout.
+
+**Futures (Testnet; confirm the Algo Order path works there at all)**
+9. Market entry, then `STOP_MARKET` + `closePosition=true` +
+   `workingType=MARK_PRICE` through `/fapi/v1/algoOrder`. Confirm it rests,
+   it is visible only with `trigger=True` (fetch, open orders, cancel by
+   `clientAlgoId`), and what `algoStatus` transitions look like
+   (`NEW`, `TRIGGERING`, `TRIGGERED`, `FINISHED`, `CANCELED`) and how ccxt
+   maps them (the lifecycle treats ccxt "closed" as triggered).
+10. After a trigger: position is flat, the conditional does not remain, and
+    `fetch_my_trades` returns the fill (price/qty/side/time) used for P&L.
+11. `reduceOnly` market exit on a flat position is rejected (-2022) and never
+    opens a position; a duplicate `newClientOrderId` behaves as the fake
+    assumes; `reduceOnly` + `closePosition` together are rejected.
+12. A `closePosition` stop on a flat account, and on an account that was
+    already flat when the stop would trigger: confirm it cannot open a
+    position. Confirm what happens to a resting `closePosition` stop when the
+    position is closed by other means (the bot cancels it either way).
+13. Liquidation price field: how `liquidationPrice` is reported in cross vs
+    isolated margin, since the "stop beyond liquidation" check depends on it.
+14. Hedge Mode / Multi-Assets on a test account: confirm the gate refuses
+    and no order is placed; flip mode mid-trade and confirm `attention`.
+
+**Fault drills (Testnet, on the VPS)**
+15. `kill -9` the service (a) right after an entry fills, (b) right after the
+    stop is placed, (c) right after an exit fills. Restart; each must
+    converge to a protected open trade or a closed trade with exactly one
+    entry/stop/exit order.
+16. Block outbound traffic to Binance for >5 minutes with a stop resting;
+    let the price cross the stop; restore traffic. The position must have
+    closed at Binance and the bot must record it without sending an exit.
+17. Start two service instances; the second must exit immediately.
+18. Revoke the key's trading permission with an open position: the bot must
+    alert (error/attention) and send nothing.
+
+**Mainnet canary (operator account, minimum size)** one Spot and one Futures
+trade through entry, protection, a manual stop trigger and a strategy exit;
+then the read-only checks again. No customer funds until all of the above
+pass and are recorded.
+
 ## Data model
 
 ```
@@ -350,7 +573,8 @@ Customer 1---1 TradingAccount 1---1 ApiCredential
 ```
 
 One customer, one trading account (see `models.py` for why this isn't a
-harder constraint to relax later), one exchange credential, many trades.
+harder constraint to relax later), one exchange credential, many trades. At most one trade per account may
+be non-terminal (partial unique index; see "Exchange-side protective stops").
 `Trade.is_paper` distinguishes simulated fills from real ones so a
 customer's trial performance and live performance are never mixed in a
 P&L query. `Customer` additionally carries `password_hash` and the
@@ -375,8 +599,9 @@ account without needing their UUID.
 | `models.py` / `db.py` | SQLAlchemy schema and session/query helpers. |
 | `exchange.py` | ccxt client construction (spot vs futures, sandbox vs live) and the trade-only permission check. |
 | `notifications/` | `Notifier` interface; `TelegramNotifier` implemented, `WhatsAppNotifier` a stub per the "added later" spec. |
-| `trader.py` | One account's evaluation cycle: fetch data -> signal -> enter/exit/manage position -> notify. |
-| `scheduler.py` | The shared loop described above. |
+| `trader.py` | One account's evaluation cycle: fetch data -> signal -> enter/exit/manage position -> notify. Paper trades are simulated here; live trades are opened and managed through `lifecycle.py`. |
+| `venue.py` / `lifecycle.py` / `instance_lock.py` | Exchange order layer, live-trade state machine, single-instance lock. See "Exchange-side protective stops". |
+| `scheduler.py` | The shared loop described above, plus startup reconciliation and the fast recovery loop. |
 | `api/app.py` | FastAPI app: CORS, router wiring, and the lifespan hook that starts `scheduler.run_forever` as a background task. |
 | `api/security.py` | Password hashing (bcrypt) and session JWT create/verify. |
 | `api/routers/auth.py` | Signup (requires Terms/Privacy consent) /login/logout/accept-legal; sets/clears the session cookie. |

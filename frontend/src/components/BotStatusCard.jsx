@@ -5,7 +5,8 @@ const STATUS_STYLES = {
   trade_open: { label: "Position open - monitoring", dot: "bg-sky-500", text: "text-sky-800", bg: "bg-sky-50 border-sky-200" },
   not_started: { label: "Not started", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
   paused: { label: "Paused", dot: "bg-slate-400", text: "text-slate-600", bg: "bg-slate-50 border-slate-200" },
-  error: { label: "Needs attention", dot: "bg-red-500", text: "text-red-800", bg: "bg-red-50 border-red-200" },
+  attention: { label: "Attention required", dot: "bg-amber-500", text: "text-amber-900", bg: "bg-amber-50 border-amber-300" },
+  error: { label: "Error", dot: "bg-red-500", text: "text-red-800", bg: "bg-red-50 border-red-200" },
 };
 
 const SIGNAL_LABELS = {
@@ -43,8 +44,9 @@ export default function BotStatusCard({ account }) {
           text={
             "Active: the bot is checking the market on schedule - this does not always mean a trade is coming. " +
             "Position open: it's currently holding and monitoring a trade. Not started: live trading is " +
-            "authorized but you haven't pressed Start Bot yet. Needs attention: the last check hit a problem - " +
-            "see the message below."
+            "authorized but you haven't pressed Start Bot yet. Attention required: your open position needs a " +
+            "safety check - the bot is already working on it and new trades are on hold until it is resolved. " +
+            "Error: the last check hit a problem - see the message below."
           }
         />
       </div>
@@ -54,6 +56,13 @@ export default function BotStatusCard({ account }) {
         {" · "}
         Last signal: {signalLabel ? `${signalLabel}${lastSignalTime ? ` (${lastSignalTime})` : ""}` : "not yet evaluated"}
       </p>
+
+      {account.runtime_status === "attention" && (
+        <p className="mt-2 rounded-md bg-amber-100 px-3 py-2 text-xs text-amber-900">
+          Your open position needs a safety check. The bot is retrying automatically and new trades are on hold
+          until it is resolved. Please also check your Binance account.
+        </p>
+      )}
 
       {account.runtime_status === "error" && account.last_error && (
         <p className="mt-2 rounded-md bg-red-100 px-3 py-2 text-xs text-red-800">{account.last_error}</p>

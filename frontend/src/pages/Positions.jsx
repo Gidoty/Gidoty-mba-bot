@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 import { Card, EmptyState, LoadingBlock, PageHeader, PnlText } from "../components/ui.jsx";
+import { OPEN_TRADE_STATUSES } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
 
 export default function Positions() {
@@ -12,7 +13,7 @@ export default function Positions() {
   useEffect(() => {
     api
       .get(`/trades?is_paper=${isPaper}`)
-      .then((all) => setTrades(all.filter((t) => t.status === "open")))
+      .then((all) => setTrades(all.filter((t) => OPEN_TRADE_STATUSES.includes(t.status))))
       .catch(() => setTrades([]));
   }, [account.id, isPaper]);
 
@@ -42,6 +43,13 @@ export default function Positions() {
                 <Field label="Size" value={t.quantity} />
                 <Field label="Stop" value={t.stop_loss_price} />
               </dl>
+              {!t.is_paper && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {t.protection_status === "protected"
+                    ? "Stop-loss is resting at Binance."
+                    : "Stop-loss protection is being set up or checked."}
+                </p>
+              )}
               <p className="mt-1 text-xs text-slate-400">Opened {new Date(t.opened_at).toLocaleString()}</p>
             </Card>
           ))}

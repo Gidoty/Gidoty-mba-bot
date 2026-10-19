@@ -12,16 +12,17 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange
+from . import exchange, lifecycle
 from .config import SUPPORTED_PAIRS, Settings
 from .crypto_utils import decrypt
 from .db import get_open_trade, get_trades_closed_on
-from .models import Trade, TradingAccount
+from .models import PROTECTION_PROTECTED, TRADE_OPEN, Trade, TradingAccount
 from .notifications import Notifier
 from .onboarding import TradingMode, resolve_trading_mode
 from .pair_selection import PairCandidate, rank_candidates
 from .risk import apply_exposure_ceiling, apply_margin_ceiling, compute_position_size, compute_stop_loss
 from .strategy import SignalType, StrategySignal, candles_from_ohlcv, generate_signal
+from .venue import ProtectionUnavailable, build_venue
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,47 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         if not effective_is_paper:
             await exchange.assert_trade_only(client)
 
+        if open_trade is not None and not open_trade.is_paper:
+            # A live position is reconciled against Binance FIRST, before
+            # any market data is needed: restart recovery, a stop that
+            # fired while we were offline, an unprotected or unresolved
+            # state all get handled here, whatever the strategy says.
+            open_trade, ctx = await _manage_live_trade(session, account, client, open_trade, settings, notifier, now=now)
+            account.last_error = None
+            account.last_error_at = None
+            if open_trade.status != TRADE_OPEN or open_trade.protection_status != PROTECTION_PROTECTED:
+                # Closed this cycle (back to scanning next cycle), or not
+                # healthy and being worked by the reconciler: no strategy
+                # decisions on a trade whose protection is not verified.
+                await _maybe_send_daily_summary(session, account, notifier, now=now)
+                return
+            ohlcv = await client.fetch_ohlcv(
+                exchange.exchange_symbol(open_trade.pair or account.pair, account.market_type),
+                timeframe=settings.timeframe,
+                limit=settings.ohlcv_limit,
+            )
+            candles = candles_from_ohlcv(ohlcv)
+            if not candles:
+                logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
+                await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
+                return
+            signal = generate_signal(
+                candles,
+                ema_fast_period=settings.ema_fast_period,
+                ema_slow_period=settings.ema_slow_period,
+                atr_period=settings.atr_period,
+                atr_flat_threshold=settings.atr_flat_threshold,
+                atr_rolling_window=settings.atr_rolling_window,
+            )
+            account.last_signal = signal.signal.value
+            account.last_signal_at = now
+            opposite_cross = (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
+                open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
+            )
+            await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            await _maybe_send_daily_summary(session, account, notifier, now=now)
+            return
+
         # Auto Select only ever runs this scan when there is no open
         # trade (the `open_trade is None` check right here) - that, not
         # just the API-layer guard in api/routers/account.py, is what
@@ -115,7 +157,11 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             scan_pair, candles, signal = auto_result
         else:
             scan_pair = account.pair
-            ohlcv = await client.fetch_ohlcv(account.pair, timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+            ohlcv = await client.fetch_ohlcv(
+                exchange.exchange_symbol(account.pair, account.market_type),
+                timeframe=settings.timeframe,
+                limit=settings.ohlcv_limit,
+            )
             candles = candles_from_ohlcv(ohlcv)
             if not candles:
                 logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
@@ -150,6 +196,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 account.pair = scan_pair
             await _maybe_enter(session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now)
         else:
+            # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
                 session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now
             )
@@ -229,7 +276,9 @@ async def _scan_auto_pair(client, account: TradingAccount, settings: Settings) -
     scanned: list[PairCandidate] = []
     for pair in SUPPORTED_PAIRS:
         try:
-            ohlcv = await client.fetch_ohlcv(pair, timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+            ohlcv = await client.fetch_ohlcv(
+                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit
+            )
         except Exception:
             logger.warning("account %s: auto-select scan could not fetch %s this cycle, skipping it", account.id, pair)
             continue
@@ -325,6 +374,31 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             effective_capital=effective_capital,
             max_notional_multiplier=settings.max_notional_multiplier,
         )
+        venue = build_venue(
+            client, market_type=account.market_type, pair=account.pair, spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct
+        )
+        ctx = lifecycle.LiveContext(
+            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now
+        )
+        try:
+            await venue.prepare()
+            await lifecycle.preflight_entry(ctx)
+        except lifecycle.EntryRefused as exc:
+            await _record_error(notifier, account, exc.message, now=now)
+            return
+        except (exchange.UnsupportedAccountMode, exchange.UnsupportedSymbol) as exc:
+            await _record_error(notifier, account, exchange.safe_error_message(exc), now=now)
+            return
+        except ProtectionUnavailable:
+            await _record_error(
+                notifier,
+                account,
+                "An exchange-side protective stop cannot currently be placed for this pair on Binance, so no new "
+                "live trade was opened. This will retry automatically on the next check.",
+                now=now,
+            )
+            return
+
         if account.market_type == "futures":
             # Read-only - this module never calls set_leverage (see
             # exchange.fetch_symbol_leverage). Margin safety for a real
@@ -340,7 +414,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             # (see process_account's effective_is_paper/open_trade
             # handling, which this function has no part in) - it is
             # scoped to a brand new live Futures entry only.
-            leverage = await exchange.fetch_symbol_leverage(client, account.pair, side=side)
+            leverage = await exchange.fetch_symbol_leverage(client, venue.symbol, side=side)
             if leverage is None:
                 await _record_error(
                     notifier,
@@ -355,8 +429,20 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             )
         if size.quantity <= 0:
             return
-        order_side = "buy" if side == "long" else "sell"
-        await client.create_market_order(account.pair, order_side, size.quantity)
+        quantity = venue.plan_entry_quantity(size.quantity, entry_price=current_price, stop_price=stop_price, side=side)
+        if quantity <= 0:
+            logger.info("account %s: sized quantity cannot satisfy %s exchange filters/protection, no entry", account.id, venue.symbol)
+            return
+        risk_amount = quantity * size.stop_distance
+        await lifecycle.open_live_trade(
+            ctx,
+            side=side,
+            quantity=quantity,
+            signal_price=current_price,
+            stop_price=stop_price,
+            risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
+        )
+        return
 
     trade = Trade(
         account_id=account.id,
@@ -365,8 +451,9 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         entry_price=current_price,
         quantity=size.quantity,
         stop_loss_price=stop_price,
-        status="open",
+        status=TRADE_OPEN,
         opened_at=now,
+        pair=account.pair,
     )
     session.add(trade)
 
@@ -380,6 +467,10 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
 
 
 async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now):
+    """PAPER trades only. A live trade's exit is lifecycle.execute_exit /
+    lifecycle.monitor_trade - never a bare market order from here."""
+    if not is_paper:
+        raise RuntimeError("_maybe_exit is paper-only; live exits go through lifecycle.execute_exit")
     hit_stop = (open_trade.side == "long" and current_price <= open_trade.stop_loss_price) or (
         open_trade.side == "short" and current_price >= open_trade.stop_loss_price
     )
@@ -390,10 +481,6 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
         return
 
     exit_price = open_trade.stop_loss_price if hit_stop else current_price
-
-    if not is_paper:
-        order_side = "sell" if open_trade.side == "long" else "buy"
-        await client.create_market_order(account.pair, order_side, open_trade.quantity)
 
     if open_trade.side == "long":
         pnl = (exit_price - open_trade.entry_price) * open_trade.quantity
@@ -406,15 +493,58 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     open_trade.closed_at = now
     open_trade.close_reason = "stop_loss" if hit_stop else "crossover_exit"
 
-    if is_paper:
-        account.paper_balance += pnl
+    account.paper_balance += pnl
 
-    mode_label = "PAPER" if is_paper else "LIVE"
+    mode_label = "PAPER"
     await notifier.send(
         account.notification_target,
         f"[{mode_label}] Exited {open_trade.side.upper()} {account.pair} ({open_trade.close_reason})\n"
         f"Entry: {open_trade.entry_price:.4f}  Exit: {exit_price:.4f}  P&L: {pnl:+.2f}",
     )
+
+
+async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now):
+    """Verify the exchange can be managed safely, then reconcile `trade`
+    against Binance. Returns (trade, LiveContext)."""
+    venue = build_venue(
+        client,
+        market_type=account.market_type,
+        pair=trade.pair or account.pair,
+        spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
+    )
+    ctx = lifecycle.LiveContext(session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now)
+    try:
+        await venue.prepare(managing=True)
+    except (exchange.UnsupportedAccountMode, exchange.UnsupportedSymbol, ProtectionUnavailable):
+        # The position exists but the exchange configuration is one we
+        # cannot act on safely: stop, surface it, never guess.
+        await lifecycle.mark_attention(ctx, trade, lifecycle.ATTN_CANNOT_VERIFY)
+        return trade, ctx
+    trade = await lifecycle.reconcile_trade(ctx, trade)
+    return trade, ctx
+
+
+async def reconcile_account(session: Session, account: TradingAccount, settings: Settings, notifier: Notifier) -> None:
+    """Reconcile this account's live trade (if any) against Binance and do
+    nothing else - no scan, no entry. Used at startup and by the fast
+    recovery loop (scheduler.py); the main loop does the same inside
+    process_account."""
+    trade = get_open_trade(session, account.id)
+    if trade is None or trade.is_paper:
+        return
+    now = datetime.now(timezone.utc)
+    api_key, api_secret = _resolve_credentials(account, settings, is_paper=False)
+    if api_key is None:
+        logger.warning("account %s: live trade but no usable credentials, cannot reconcile", account.id)
+        return
+    client = exchange.build_exchange_client(
+        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=False
+    )
+    try:
+        await exchange.assert_trade_only(client)
+        await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
+    finally:
+        await client.close()
 
 
 async def _maybe_send_daily_summary(session, account, notifier, *, now) -> None:

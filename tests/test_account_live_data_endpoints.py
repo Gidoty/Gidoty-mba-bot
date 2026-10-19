@@ -169,6 +169,7 @@ def test_position_reports_no_position_when_nothing_open():
             "stop_loss_price": None,
             "unrealized_pnl": None,
             "opened_at": None,
+            "protected": None,
         }
 
 
@@ -256,3 +257,60 @@ def test_credentials_test_reports_failure_without_leaking_raw_exception(monkeypa
         body = response.json()
         assert body["ok"] is False
         assert "raw-secret-leak-67890" not in body["message"]
+
+
+# --- protective-stop states surfaced through the same simple lifecycle ---
+
+
+def _add_live_trade(email: str, **fields) -> None:
+    with session_scope() as session:
+        customer = session.query(Customer).filter(Customer.email == email).one()
+        defaults = dict(
+            account_id=customer.account.id, side="long", is_paper=False, entry_price=100.0, quantity=2.0,
+            stop_loss_price=95.0, status="open",
+        )
+        defaults.update(fields)
+        session.add(Trade(**defaults))
+
+
+def test_attention_trade_is_reported_as_attention_and_blocks_account_changes():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "attention@example.com")
+        _add_live_trade("attention@example.com", status="attention", attention_reason="unprotected_position")
+
+        body = client.get("/api/account").json()
+        assert body["runtime_status"] == "attention"
+        blocked = client.patch("/api/account", json={"pair": "ETH/USDT"})
+        assert blocked.status_code == 409, "an unresolved live position must still block changing the pair"
+
+
+def test_pending_and_protecting_trades_report_trade_open_and_also_block_changes():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "pending@example.com")
+        _add_live_trade("pending@example.com", status="pending")
+        assert client.get("/api/account").json()["runtime_status"] == "trade_open"
+        assert client.patch("/api/account", json={"pair": "ETH/USDT"}).status_code == 409
+
+
+def test_position_reports_whether_the_live_stop_is_protected(monkeypatch):
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "protectedpos@example.com")
+        _add_live_trade("protectedpos@example.com", protection_status="protected", pair="BTC/USDT")
+        _patch_exchange_client(monkeypatch, _FakeClient(ticker_last=110.0))
+        assert client.get("/api/account/position").json()["protected"] is True
+
+
+def test_paper_position_has_no_protected_flag(monkeypatch):
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "paperpos@example.com")
+        _open_a_trade("paperpos@example.com")
+        _patch_exchange_client(monkeypatch, _FakeClient(ticker_last=110.0))
+        assert client.get("/api/account/position").json()["protected"] is None
+
+
+def test_void_trades_never_appear_in_history_or_counts():
+    with TestClient(app, base_url="https://testserver") as client:
+        _signup_with_account(client, "voidhist@example.com")
+        _add_live_trade("voidhist@example.com", status="void")
+        assert client.get("/api/trades").json() == []
+        assert client.get("/api/trades/summary").json()["total_trades"] == 0

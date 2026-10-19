@@ -74,8 +74,16 @@ export default function LiveDashboard({ account }) {
             <Field label="Entry" value={position.entry_price} />
             <Field label="Current" value={position.current_price ?? "-"} />
             <Field label="Size" value={position.quantity} />
-            <Field label="Opened" value={new Date(position.opened_at).toLocaleString()} />
+            <Field label="Stop-loss" value={position.stop_loss_price ?? "-"} />
           </dl>
+          <p className="mt-2 text-xs text-slate-500">
+            {position.protected === true
+              ? "Protected: the stop-loss is resting at Binance."
+              : position.protected === false
+                ? "Setting up or checking the stop-loss at Binance."
+                : null}
+          </p>
+          <p className="mt-1 text-xs text-slate-400">Opened {new Date(position.opened_at).toLocaleString()}</p>
         </Card>
       )}
 

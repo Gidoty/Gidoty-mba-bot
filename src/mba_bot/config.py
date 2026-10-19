@@ -114,6 +114,34 @@ class Settings:
     paystack_amount: int
     paystack_currency: str
 
+    # --- exchange-side protective stop / lifecycle (venue.py, lifecycle.py) ---
+    # Attempts to place AND verify the resting protective stop after a
+    # confirmed entry fill, only for errors that are plausibly transient.
+    # A deterministic rejection (see lifecycle._is_transient) never retries.
+    protection_max_attempts: int = 3
+    protection_retry_delay_seconds: float = 2.0
+    # How long to poll an entry order whose response was lost/incomplete
+    # before leaving it for the reconciler (never re-sent either way).
+    entry_resolve_attempts: int = 5
+    entry_resolve_delay_seconds: float = 1.0
+    # An entry that has no exchange order at all (client id unknown to
+    # Binance) is only voided once it is at least this old - a request
+    # that timed out client-side may still be in flight at Binance.
+    entry_unknown_void_after_seconds: int = 180
+    # Spot STOP_LOSS_LIMIT only: the limit sits this % below the trigger
+    # so a fast move still has room to fill (see venue.SpotVenue).
+    spot_stop_limit_buffer_pct: float = 0.5
+    # Software backstop: a resting stop that the price has run past by
+    # more than this % without the exchange having fired it is treated as
+    # failed, and the trade is closed through the normal exit lease.
+    protection_software_grace_pct: float = 0.5
+    # Fast reconciliation loop for trades in an unhealthy state
+    # (scheduler.run_recovery_forever).
+    recovery_interval_seconds: int = 15
+    # Single-instance guard (main.py); a second scheduler process refuses
+    # to start while this file is locked.
+    lock_file: str = "./mba_bot.lock"
+
 
 def load_settings() -> Settings:
     return Settings(
@@ -156,4 +184,13 @@ def load_settings() -> Settings:
         paystack_secret_key=os.environ.get("PAYSTACK_SECRET_KEY"),
         paystack_amount=_env_int("PAYSTACK_AMOUNT", 0),
         paystack_currency=os.environ.get("PAYSTACK_CURRENCY", "NGN"),
+        protection_max_attempts=_env_int("PROTECTION_MAX_ATTEMPTS", 3),
+        protection_retry_delay_seconds=_env_float("PROTECTION_RETRY_DELAY_SECONDS", 2.0),
+        entry_resolve_attempts=_env_int("ENTRY_RESOLVE_ATTEMPTS", 5),
+        entry_resolve_delay_seconds=_env_float("ENTRY_RESOLVE_DELAY_SECONDS", 1.0),
+        entry_unknown_void_after_seconds=_env_int("ENTRY_UNKNOWN_VOID_AFTER_SECONDS", 180),
+        spot_stop_limit_buffer_pct=_env_float("SPOT_STOP_LIMIT_BUFFER_PCT", 0.5),
+        protection_software_grace_pct=_env_float("PROTECTION_SOFTWARE_GRACE_PCT", 0.5),
+        recovery_interval_seconds=_env_int("RECOVERY_INTERVAL_SECONDS", 15),
+        lock_file=os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"),
     )

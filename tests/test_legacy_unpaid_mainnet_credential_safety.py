@@ -32,6 +32,8 @@ from mba_bot.notifications import Notifier
 from mba_bot.onboarding import TradingMode, enable_live_trading, resolve_trading_mode, start_bot, start_trial
 from mba_bot.trader import process_account
 
+from fake_binance import FakeBinance
+
 STRATEGY_KWARGS = dict(ema_fast_period=2, ema_slow_period=3, atr_period=2, atr_flat_threshold=0.75, atr_rolling_window=3)
 
 
@@ -69,33 +71,21 @@ class FakeNotifier(Notifier):
         self.sent.append((target, message))
 
 
-class OrderTrackingExchangeClient:
-    """Records every exchange call it receives, most importantly
-    `create_market_order` - the one call that means a real order was
-    submitted. Also records the api_key it was constructed with (a
-    synthetic test value, never a real credential) and whether sandbox
-    mode was requested, so a test can assert the platform testnet
-    credential was used instead of the account's own stored one."""
+class OrderTrackingExchangeClient(FakeBinance):
+    """A stateful FakeBinance (tests/fake_binance.py) that also records
+    the api_key it was constructed with (a synthetic test value, never a
+    real credential) and whether sandbox mode was requested, so a test can
+    assert the platform testnet credential was used instead of the
+    account's own stored one. `market_orders` lists every non-conditional
+    order placed - the thing that means a real order was submitted."""
 
     def __init__(self, *, api_key, sandbox, ohlcv=None):
-        self.api_key = api_key
-        self.sandbox = sandbox
-        self._ohlcv = BULLISH_OHLCV if ohlcv is None else ohlcv
-        self.market_orders: list[tuple[str, str, float]] = []
-        self.closed = False
-
-    async def fetch_ohlcv(self, pair, timeframe, limit):
-        return self._ohlcv
-
-    async def fetch_balance(self):
-        return {"free": {"USDT": 50_000.0}, "info": {}}
-
-    async def create_market_order(self, pair, side, quantity):
-        self.market_orders.append((pair, side, quantity))
-        return {"id": "fake-order-id"}
-
-    async def close(self):
-        self.closed = True
+        super().__init__(
+            api_key=api_key,
+            sandbox=sandbox,
+            ohlcv=BULLISH_OHLCV if ohlcv is None else ohlcv,
+            free_balance={"USDT": 50_000.0},
+        )
 
 
 def _settings(**overrides) -> Settings:

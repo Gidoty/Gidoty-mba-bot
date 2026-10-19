@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -227,8 +227,53 @@ class LegalAcceptance(Base):
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+# --- Trade lifecycle -------------------------------------------------------
+#
+# pending     live only. The intent row, committed BEFORE any order is sent
+#             (write-ahead). The entry order may or may not exist at Binance;
+#             only the reconciler/lifecycle resolves it. Never re-sent blindly.
+# protecting  live only. Entry fill is known and persisted; the exchange-side
+#             protective stop is not yet verified to exist.
+# open        paper trade, or a live trade whose protective stop was verified.
+# closing     exit lease: exactly one worker owns closing this trade.
+# attention   needs the reconciler (and possibly the operator): unprotected,
+#             unresolved entry, residual exposure, etc. Blocks new entries.
+# closed      terminal, the trade had exposure and is now flat.
+# void        terminal, the entry never happened (no exposure ever existed).
+TRADE_PENDING = "pending"
+TRADE_PROTECTING = "protecting"
+TRADE_OPEN = "open"
+TRADE_CLOSING = "closing"
+TRADE_ATTENTION = "attention"
+TRADE_CLOSED = "closed"
+TRADE_VOID = "void"
+NON_TERMINAL_TRADE_STATUSES = (TRADE_PENDING, TRADE_PROTECTING, TRADE_OPEN, TRADE_CLOSING, TRADE_ATTENTION)
+TERMINAL_TRADE_STATUSES = (TRADE_CLOSED, TRADE_VOID)
+
+PROTECTION_PENDING = "pending"
+PROTECTION_PROTECTED = "protected"
+PROTECTION_MISSING = "missing"
+PROTECTION_TRIGGERED = "triggered"
+PROTECTION_CANCELLED = "cancelled"
+
+
 class Trade(Base):
     __tablename__ = "trades"
+    __table_args__ = (
+        # The database-level one-position rule: at most ONE non-terminal
+        # trade per account, regardless of what any code path believes.
+        # A second concurrent entry (double scheduler, retry after an
+        # uncertain order) fails at the write-ahead INSERT, before any
+        # order is sent. Partial unique index - supported by SQLite and
+        # PostgreSQL, the only two databases this project targets.
+        Index(
+            "uq_trades_one_nonterminal_per_account",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status NOT IN ('closed', 'void')"),
+            postgresql_where=text("status NOT IN ('closed', 'void')"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     account_id: Mapped[str] = mapped_column(ForeignKey("trading_accounts.id"), nullable=False)
@@ -244,7 +289,44 @@ class Trade(Base):
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)  # "stop_loss" | "crossover_exit"
 
-    status: Mapped[str] = mapped_column(String(10), default="open")  # "open" | "closed"
+    # See the TRADE_* constants above. Default "open" is the paper-trade
+    # path; live entries always start at "pending" (write-ahead).
+    status: Mapped[str] = mapped_column(String(10), default=TRADE_OPEN)
+
+    # Unified pair the trade was opened on (e.g. "BTC/USDT"), so managing
+    # it never depends on whatever account.pair says later. NULL on rows
+    # from before this column existed; callers fall back to account.pair.
+    pair: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Exchange identifiers. Client order ids are NOT stored: they are a pure
+    # function of trade.id (lifecycle.client_id), which is what makes every
+    # retry idempotent. These hold the exchange-assigned ids for reference.
+    entry_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    exit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    protective_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Which protective mechanism is resting: "stop_market_close" |
+    # "stop_market_reduce" (Futures), "stop_loss" | "stop_loss_limit" (Spot).
+    protective_kind: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # Spot STOP_LOSS_LIMIT only: the limit price below the trigger.
+    protective_limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # NULL for paper trades and rows from before protective stops existed.
+    protection_status: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    protection_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Short machine code for why a trade is in "attention" (never shown raw
+    # to customers, never contains exchange text).
+    attention_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Spot only: base-asset commission taken from the entry fill. The
+    # protected/exitable quantity is filled quantity minus this.
+    entry_fee_base: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Counters that make every retry idempotent without storing client ids:
+    # the client order id of the Nth protective stop / exit order is a pure
+    # function of (trade.id, role, N). The counter is committed BEFORE the
+    # order is sent, so after any crash or lost response the same N is
+    # looked up (and adopted or safely re-sent) rather than a fresh id
+    # being invented. N only advances when the previous attempt is known
+    # to be terminal. NULL (legacy rows) reads as 0.
+    protection_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0, server_default="0")
+    exit_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0, server_default="0")
 
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -19,6 +19,31 @@ export const CREDENTIAL_ENVIRONMENTS = [
   { value: "mainnet", label: "Mainnet (real Binance account)" },
 ];
 
+// Trade statuses that mean "exposure may exist / a trade is in progress",
+// matching models.NON_TERMINAL_TRADE_STATUSES on the backend. "void" (an
+// entry that never happened) is filtered out by the API and never shown.
+export const OPEN_TRADE_STATUSES = ["pending", "protecting", "open", "closing", "attention"];
+
+// Customer-facing wording for Trade.close_reason. Raw reason codes are
+// never shown as-is.
+export function closeReasonLabel(reason) {
+  switch (reason) {
+    case "stop_loss":
+    case "stop_limit_gap":
+      return "Stop-loss";
+    case "exchange_stop_triggered":
+      return "Stop-loss (at Binance)";
+    case "protection_failed_emergency_exit":
+      return "Safety exit";
+    case "externally_closed":
+      return "Closed on Binance";
+    case "dust_unprotectable":
+      return "Closed";
+    default:
+      return "Signal exit";
+  }
+}
+
 // The approved drawer navigation, used on both mobile and desktop (see
 // NavDrawer.jsx). No Admin Dashboard entry yet - deliberately left out
 // until that's built and real authorization exists for it.

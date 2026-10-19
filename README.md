@@ -164,6 +164,24 @@ and fail. Any database created via `alembic upgrade head` from the
 start (a fresh dev setup, a fresh install) never needs this - `stamp`
 is a one-time fix for this specific VPS's history, not a normal step.
 
+## Exchange-side protective stops: deploying and validating
+
+Live trades place a real stop-loss order at Binance (see ARCHITECTURE.md,
+"Exchange-side protective stops"). Before this is enabled for customer
+funds:
+
+- `ccxt` is pinned to `==4.5.88` in `requirements.txt` (the exact version
+  the order layer was built against). Do not upgrade it without re-running
+  `tests/test_ccxt_contract.py` and the Testnet validation procedure.
+- Run `alembic upgrade head` (revision `b3f1c9a2d7e4`): additive columns on
+  `trades` plus a partial unique index. It refuses to run if an account
+  already has more than one open/unresolved trade.
+- The scheduler now takes an exclusive lock (`MBA_BOT_LOCK_FILE`, default
+  `./mba_bot.lock`); a second instance exits immediately. Optional tuning
+  variables are listed in `.env.example`.
+- Work through the "Testnet validation procedure" in ARCHITECTURE.md and
+  record the results. Mocked tests passing is not validation.
+
 ## Frontend setup
 
 ```bash

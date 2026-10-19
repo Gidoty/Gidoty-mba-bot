@@ -32,6 +32,8 @@ from mba_bot.notifications import Notifier
 from mba_bot.onboarding import start_bot, start_trial
 from mba_bot.trader import process_account
 
+from fake_binance import FLAT_OHLCV as _FAKE_FLAT, FakeBinance
+
 STRATEGY_KWARGS = dict(ema_fast_period=2, ema_slow_period=3, atr_period=2, atr_flat_threshold=0.75, atr_rolling_window=3)
 
 
@@ -66,44 +68,21 @@ class FakeNotifier(Notifier):
         self.sent.append((target, message))
 
 
-class FakeClient:
-    """Stands in for a ccxt client against one or several pairs - fetch_ohlcv
-    is served per-pair so Auto Select's multi-pair scan can be tested
-    with each candidate behaving differently. Tracks every pair it was
-    asked for and every order it was asked to place."""
+class FakeClient(FakeBinance):
+    """Thin adapter keeping this module's call sites unchanged: a
+    stateful FakeBinance (tests/fake_binance.py) that serves OHLCV per
+    pair and tracks every pair asked for and every order placed."""
 
-    def __init__(self, *, ohlcv_by_pair=None, free_balance=None, leverage_by_symbol=None, leverage_raises=False):
-        self.ohlcv_by_pair = ohlcv_by_pair or {}
-        self._free_balance = free_balance if free_balance is not None else {"USDT": 50_000.0}
-        self._leverage_by_symbol = leverage_by_symbol or {}
-        self._leverage_raises = leverage_raises
-        self.market_orders: list[tuple[str, str, float]] = []
-        self.fetched_pairs: list[str] = []
-        self.fetch_leverage_calls: list[str] = []
-        self.closed = False
-
-    async def fetch_ohlcv(self, pair, timeframe, limit):
-        self.fetched_pairs.append(pair)
-        return self.ohlcv_by_pair.get(pair, FLAT_OHLCV)
-
-    async def fetch_balance(self):
-        return {"free": self._free_balance, "info": {}}
-
-    async def fetch_leverage(self, pair):
-        self.fetch_leverage_calls.append(pair)
-        if self._leverage_raises:
-            raise RuntimeError("simulated Binance/ccxt leverage read failure")
-        leverage = self._leverage_by_symbol.get(pair)
-        if leverage is None:
-            return None
-        return {"symbol": pair, "longLeverage": leverage, "shortLeverage": leverage}
-
-    async def create_market_order(self, pair, side, quantity):
-        self.market_orders.append((pair, side, quantity))
-        return {"id": "fake-order-id"}
-
-    async def close(self):
-        self.closed = True
+    def __init__(self, *, market_type="spot", ohlcv_by_pair=None, free_balance=None, leverage_by_symbol=None, leverage_raises=False, **kw):
+        super().__init__(
+            market_type=market_type,
+            ohlcv_by_pair=ohlcv_by_pair,
+            free_balance=free_balance,
+            leverage_by_symbol=leverage_by_symbol,
+            leverage_raises=leverage_raises,
+            price=next(iter((ohlcv_by_pair or {}).values()), FLAT_OHLCV)[-1][4],
+            **kw,
+        )
 
 
 def _settings(**overrides) -> Settings:
@@ -318,7 +297,7 @@ def test_exposure_ceiling_trims_an_oversized_live_order(tmp_path, monkeypatch):
 def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=100.0)  # isolate the margin ceiling from the notional one
-    client = FakeClient(
+    client = FakeClient(market_type="futures", 
         ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 2.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
@@ -336,7 +315,7 @@ def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, mo
 
     _run_cycle(account_id, settings)
 
-    assert client.fetch_leverage_calls == ["BTC/USDT"]  # read, never set_leverage (no such method exists on FakeClient)
+    assert client.fetch_leverage_calls == ["BTC/USDT:USDT"]  # the ccxt USD-M symbol; read, never set_leverage (no such method exists on FakeClient)
     assert len(client.market_orders) == 1
     _, _, quantity = client.market_orders[0]
     entry_price = BULLISH_OHLCV[-1][4]
@@ -374,7 +353,7 @@ def test_spot_account_never_queries_leverage_at_all(tmp_path, monkeypatch):
 def test_futures_entry_proceeds_when_leverage_is_valid(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=100.0)
-    client = FakeClient(
+    client = FakeClient(market_type="futures", 
         ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 2.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
@@ -405,7 +384,7 @@ def test_futures_entry_proceeds_when_leverage_is_valid(tmp_path, monkeypatch):
 def test_futures_entry_fails_closed_when_leverage_read_raises(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings()
-    client = FakeClient(ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_raises=True)
+    client = FakeClient(market_type="futures", ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_raises=True)
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
     with session_scope() as session:
@@ -431,7 +410,7 @@ def test_futures_entry_fails_closed_when_leverage_read_raises(tmp_path, monkeypa
 def test_futures_entry_fails_closed_when_leverage_is_missing(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings()
-    client = FakeClient(ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={})
+    client = FakeClient(market_type="futures", ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={})
 
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
@@ -456,7 +435,7 @@ def test_futures_entry_fails_closed_when_leverage_is_missing(tmp_path, monkeypat
 def test_futures_entry_fails_closed_when_leverage_is_zero(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings()
-    client = FakeClient(
+    client = FakeClient(market_type="futures", 
         ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
@@ -486,7 +465,8 @@ def test_futures_leverage_read_failure_never_blocks_managing_an_already_open_pos
     reads or needs leverage at all."""
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings()
-    client = FakeClient(ohlcv_by_pair={"BTC/USDT": FLAT_OHLCV}, leverage_raises=True)
+    client = FakeClient(market_type="futures", ohlcv_by_pair={"BTC/USDT": FLAT_OHLCV}, leverage_raises=True)
+    client.position = 0.01  # the real Binance position this legacy row describes
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
     with session_scope() as session:
@@ -527,7 +507,7 @@ def test_futures_notional_ceiling_still_enforced_independently_of_the_margin_cei
     ADDITIONAL check, never a replacement for it."""
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=0.01)  # deliberately tiny
-    client = FakeClient(
+    client = FakeClient(market_type="futures", 
         ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 50.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
@@ -573,6 +553,7 @@ def test_open_live_trade_keeps_being_managed_with_real_credentials_even_if_the_a
     settings = _settings()
     captured_kwargs = {}
     client = FakeClient(ohlcv_by_pair={"BTC/USDT": FLAT_OHLCV})
+    client.free["BTC"] = 0.01  # the real Binance holding this legacy row describes
 
     def fake_builder(**kwargs):
         captured_kwargs.update(kwargs)

@@ -21,7 +21,7 @@ from sqlalchemy import create_engine, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import Base, Trade, TradingAccount
+from .models import NON_TERMINAL_TRADE_STATUSES, TRADE_CLOSED, TRADE_VOID, Base, Trade, TradingAccount
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
@@ -73,7 +73,7 @@ def list_active_accounts(session: Session) -> list[TradingAccount]:
     place means a free, unlimited paper trial for anyone and a hard
     payment/start wall in front of LIVE can't drift out of sync with each
     other. See ARCHITECTURE.md."""
-    open_trade_account_ids = select(Trade.account_id).where(Trade.status == "open")
+    open_trade_account_ids = select(Trade.account_id).where(Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
     return list(
         session.scalars(
             select(TradingAccount).where(
@@ -84,15 +84,32 @@ def list_active_accounts(session: Session) -> list[TradingAccount]:
 
 
 def get_open_trade(session: Session, account_id: str) -> Trade | None:
+    """The account's one non-terminal trade, if any: ANY status other than
+    closed/void (pending entry, protecting, open, closing, attention). The
+    name is historical - every "is there a position I must not orphan, and
+    must not enter on top of" check in the codebase goes through this, so
+    it deliberately covers states where exposure may exist but is not yet
+    (or no longer) a healthy open trade. The partial unique index on
+    trades guarantees there is never more than one."""
     return session.scalars(
-        select(Trade).where(Trade.account_id == account_id, Trade.status == "open")
+        select(Trade).where(Trade.account_id == account_id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
     ).first()
+
+
+def list_live_unsettled_trades(session: Session) -> list[Trade]:
+    """Every non-terminal LIVE trade across all accounts - the set the
+    startup reconciliation and the fast recovery loop walk."""
+    return list(
+        session.scalars(
+            select(Trade).where(Trade.status.in_(NON_TERMINAL_TRADE_STATUSES), Trade.is_paper.is_(False))
+        )
+    )
 
 
 def get_trades_closed_on(session: Session, account_id: str, date_str: str) -> list[Trade]:
     """`date_str` is a UTC calendar date, e.g. '2026-09-14'."""
     trades = session.scalars(
-        select(Trade).where(Trade.account_id == account_id, Trade.status == "closed")
+        select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED)
     ).all()
     matches = []
     for t in trades:
@@ -110,7 +127,11 @@ def get_trades_closed_on(session: Session, account_id: str, date_str: str) -> li
 
 def list_trades_for_account(session: Session, account_id: str) -> list[Trade]:
     return list(
-        session.scalars(select(Trade).where(Trade.account_id == account_id).order_by(Trade.opened_at.desc()))
+        session.scalars(
+            select(Trade)
+            .where(Trade.account_id == account_id, Trade.status != TRADE_VOID)
+            .order_by(Trade.opened_at.desc())
+        )
     )
 
 

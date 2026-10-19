@@ -1,4 +1,9 @@
-ccxt>=4.3.0
+# Pinned to the exact version the protective-order layer (venue.py) was built
+# and validated against: Binance routes USD-M conditional orders through its
+# Algo Order API and the request/response shapes differ across ccxt releases.
+# Upgrade deliberately, re-running tests/test_ccxt_contract.py and the Testnet
+# validation procedure in ARCHITECTURE.md first.
+ccxt==4.5.88
 SQLAlchemy>=2.0
 alembic>=1.13
 cryptography>=42.0

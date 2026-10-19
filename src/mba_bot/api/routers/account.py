@@ -13,6 +13,7 @@ from ...botcode import assign_unique_bot_code
 from ...config import Settings
 from ...crypto_utils import decrypt, encrypt
 from ...db import get_open_trade
+from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, record_acceptance
 from ...models import ApiCredential, Customer, TradingAccount
 from ...onboarding import (
@@ -77,9 +78,14 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         runtime_status = "paused"
     elif has_paid and account.has_mainnet_credential and account.live_trading_enabled_at is not None and account.bot_started_at is None:
         runtime_status = "not_started"
+    elif (active_trade := get_open_trade(db, account.id)) is not None and active_trade.status == TRADE_ATTENTION:
+        # A live position the bot cannot currently vouch for (unprotected,
+        # unresolved entry, residual exposure, ...). Takes precedence over
+        # "error": it is the more specific, more urgent condition.
+        runtime_status = "attention"
     elif account.last_error is not None:
         runtime_status = "error"
-    elif get_open_trade(db, account.id) is not None:
+    elif active_trade is not None:
         runtime_status = "trade_open"
     else:
         runtime_status = "active"
@@ -472,7 +478,9 @@ async def get_position(
             sandbox=not is_live,
         )
         try:
-            ticker = await client.fetch_ticker(account.pair)
+            ticker = await client.fetch_ticker(
+                exchange.exchange_symbol(open_trade.pair or account.pair, account.market_type)
+            )
             current_price = ticker.get("last") or ticker.get("close")
         finally:
             await client.close()
@@ -488,7 +496,7 @@ async def get_position(
 
     return PositionOut(
         has_position=True,
-        pair=account.pair,
+        pair=open_trade.pair or account.pair,
         side=open_trade.side,
         is_paper=open_trade.is_paper,
         entry_price=open_trade.entry_price,
@@ -497,6 +505,7 @@ async def get_position(
         stop_loss_price=open_trade.stop_loss_price,
         unrealized_pnl=unrealized_pnl,
         opened_at=open_trade.opened_at,
+        protected=None if open_trade.is_paper else open_trade.protection_status == PROTECTION_PROTECTED,
     )
 
 

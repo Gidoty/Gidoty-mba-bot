@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { Card, EmptyState, LoadingBlock, PageHeader, PnlText } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
+import { closeReasonLabel } from "../constants.js";
 
 export default function TradeHistory() {
   const { account } = useAccount();
@@ -36,7 +37,7 @@ export default function TradeHistory() {
                   {t.side.toUpperCase()} {account.pair}
                 </p>
                 <p className="text-xs text-slate-500">
-                  {new Date(t.opened_at).toLocaleDateString()} · {t.close_reason === "stop_loss" ? "Stop-loss" : "Signal exit"}
+                  {new Date(t.opened_at).toLocaleDateString()} · {closeReasonLabel(t.close_reason)}
                 </p>
               </div>
               <div className="text-right">

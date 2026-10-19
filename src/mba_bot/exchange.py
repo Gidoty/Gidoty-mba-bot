@@ -7,6 +7,9 @@ recommended deployment shape here.
 """
 from __future__ import annotations
 
+import hashlib
+import time
+
 import ccxt.async_support as ccxt_async
 
 _EXCHANGE_CLASSES = {
@@ -53,8 +56,134 @@ async def assert_trade_only(client: ccxt_async.Exchange) -> None:
         )
 
 
+class UnsupportedAccountMode(RuntimeError):
+    """The Binance account is in a configuration whose order and protective
+    -stop semantics this bot does not (and must not guess to) handle:
+    Hedge Mode, Multi-Assets Mode, Portfolio Margin, or a mode that could
+    not be read at all. A new live entry is refused; nothing is ever
+    switched on the customer's behalf."""
+
+
+class UnsupportedSymbol(RuntimeError):
+    """The pair is not available as an active market of the right kind on
+    this exchange/environment, so no order is placed for it."""
+
+
 def quote_currency(pair: str) -> str:
     return pair.split("/", 1)[1]
+
+
+def exchange_symbol(pair: str, market_type: str) -> str:
+    """ccxt's unified symbol for `pair` on `market_type`.
+
+    The platform stores pairs as spot-style "BTC/USDT". On the Spot client
+    that IS the ccxt symbol. On the USD-M client ccxt's symbol for the
+    perpetual is "BTC/USDT:USDT" (settle currency after the colon); a bare
+    "BTC/USDT" is neither a ccxt symbol nor a Binance market id there
+    (BTCUSDT), so passing it through raises BadSymbol - this is the
+    normalization the Futures path always needed. Pure and deterministic;
+    the live path additionally verifies the result against loaded markets
+    (`verify_market`)."""
+    if market_type == "futures":
+        return f"{pair}:{quote_currency(pair)}"
+    return pair
+
+
+def verify_market(client: ccxt_async.Exchange, symbol: str, *, market_type: str) -> dict:
+    """The loaded market for `symbol`, or UnsupportedSymbol. Requires
+    `client.load_markets()` to have run. For Futures it must be an active
+    LINEAR perpetual; for Spot an active spot market."""
+    markets = getattr(client, "markets", None) or {}
+    market = markets.get(symbol)
+    if not isinstance(market, dict):
+        raise UnsupportedSymbol(f"{symbol} is not a market on this exchange")
+    if market.get("active") is False:
+        raise UnsupportedSymbol(f"{symbol} is not currently active")
+    if market_type == "futures":
+        if not (market.get("swap") is True and market.get("linear") is True and market.get("contract") is True):
+            raise UnsupportedSymbol(f"{symbol} is not a linear USD-M perpetual")
+    else:
+        if market.get("spot") is not True:
+            raise UnsupportedSymbol(f"{symbol} is not a spot market")
+    return market
+
+
+def _as_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return None
+
+
+# Successful mode verifications, keyed by a digest of the API key (never the
+# key itself), so MANAGING an open position (every 5 min, plus the 15 s
+# recovery loop) doesn't spend Binance request weight re-reading two slow
+# account settings each time. A NEW entry never uses it (max_age_seconds=0),
+# and a failed verification is never cached.
+_MODE_VERIFIED_AT: dict[str, float] = {}
+
+
+def _mode_cache_key(client) -> str | None:
+    api_key = getattr(client, "apiKey", None)
+    if not api_key:
+        return None
+    return hashlib.sha256(str(api_key).encode("utf-8")).hexdigest()
+
+
+async def verify_futures_account_mode(client: ccxt_async.Exchange, symbol: str, *, max_age_seconds: float = 0) -> None:
+    """Fail closed unless the account is positively confirmed to be in the
+    one configuration this bot supports: USD-M, ONE-WAY position mode,
+    single-asset margin, NOT Portfolio Margin.
+
+    "Positively confirmed" matters: every read below must succeed and
+    return the safe value. A failed read, a missing field or an
+    unexpected shape raises UnsupportedAccountMode, never a guess. This is
+    read-only; no mode is ever changed.
+
+    Known limit (see ARCHITECTURE.md): Portfolio Margin has no dedicated
+    "is this PM" read on the classic Futures API. PM accounts cannot use
+    the classic endpoints above (they must use `papi`), so a PM account is
+    expected to fail the reads here and be refused; the extra SAPI probe
+    only adds a positive detection where the key may call it. Whether
+    Binance behaves exactly that way must be confirmed by the Testnet/
+    Mainnet read-only validation before customers trade."""
+    key = _mode_cache_key(client)
+    if key is not None and max_age_seconds > 0:
+        verified_at = _MODE_VERIFIED_AT.get(key)
+        if verified_at is not None and time.monotonic() - verified_at < max_age_seconds:
+            return
+    try:
+        mode = await client.fetch_position_mode(symbol)
+    except Exception as exc:
+        raise UnsupportedAccountMode("could not read the Binance Futures position mode") from exc
+    hedged = mode.get("hedged") if isinstance(mode, dict) else None
+    if hedged is not False:
+        raise UnsupportedAccountMode("Binance Futures Hedge Mode is not supported" if hedged else "position mode unreadable")
+
+    try:
+        multi = await client.fapiPrivateGetMultiAssetsMargin()
+    except Exception as exc:
+        raise UnsupportedAccountMode("could not read the Binance Futures Multi-Assets Mode setting") from exc
+    multi_value = _as_bool(multi.get("multiAssetsMargin")) if isinstance(multi, dict) else None
+    if multi_value is not False:
+        raise UnsupportedAccountMode(
+            "Binance Futures Multi-Assets Mode is not supported" if multi_value else "multi-assets mode unreadable"
+        )
+
+    options = getattr(client, "options", {}) or {}
+    if options.get("portfolioMargin") or options.get("papi"):
+        raise UnsupportedAccountMode("Portfolio Margin routing is not supported")
+    probe = getattr(client, "sapiGetPortfolioAccount", None)
+    if probe is not None:
+        try:
+            result = await probe()
+        except Exception:
+            result = None
+        if isinstance(result, dict) and result:
+            raise UnsupportedAccountMode("Binance Portfolio Margin accounts are not supported")
+    if key is not None:
+        _MODE_VERIFIED_AT[key] = time.monotonic()
 
 
 def safe_error_message(exc: Exception) -> str:
@@ -66,6 +195,14 @@ def safe_error_message(exc: Exception) -> str:
     real exception and its traceback still go to the server log via
     `logger.exception` in scheduler.py, unaffected by this function.
     """
+    if isinstance(exc, UnsupportedAccountMode):
+        return (
+            "Your Binance Futures account is set to a mode this bot does not support (it needs standard "
+            "One-way Mode with single-asset margin, not Hedge Mode, Multi-Assets Mode or Portfolio Margin). "
+            "No new trade was opened."
+        )
+    if isinstance(exc, UnsupportedSymbol):
+        return "This pair is not currently available to trade on Binance for your account type. No new trade was opened."
     if isinstance(exc, WithdrawalPermissionDetected):
         return (
             "Your Binance API key has withdrawal permission enabled. For your safety, trading is "

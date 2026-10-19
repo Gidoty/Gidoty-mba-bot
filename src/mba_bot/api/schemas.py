@@ -258,7 +258,7 @@ class AccountOut(BaseModel):
     # cycle - see models.py) plus a server-computed summary of them, so
     # the frontend never has to re-derive "is this actually working" from
     # raw timestamps itself.
-    runtime_status: str  # "paused" | "not_started" | "error" | "trade_open" | "active"
+    runtime_status: str  # "paused" | "not_started" | "attention" | "error" | "trade_open" | "active"
     last_scanned_at: datetime | None
     last_signal: str | None  # "none" | "bullish_crossover" | "bearish_crossover"
     last_signal_at: datetime | None
@@ -281,6 +281,9 @@ class TradeOut(BaseModel):
     status: str
     opened_at: datetime
     closed_at: datetime | None
+    # Live trades: "protected" once the stop-loss is resting at Binance and
+    # verified. Display-only; nothing in the API can alter it.
+    protection_status: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -334,6 +337,10 @@ class PositionOut(BaseModel):
     stop_loss_price: float | None = None
     unrealized_pnl: float | None = None
     opened_at: datetime | None = None
+    # Live trades only: True once the stop-loss is resting at Binance and
+    # verified. None for paper trades. Display-only - nothing in the API
+    # lets a customer touch the protective order.
+    protected: bool | None = None
 
 
 class CredentialTestOut(BaseModel):
