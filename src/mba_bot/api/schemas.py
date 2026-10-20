@@ -10,7 +10,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from ..config import SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS, SUPPORTED_PAIRS
+from ..config import ALL_KNOWN_PAIRS, SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS
 
 # "unknown" is deliberately excluded - it's a migration-only state for
 # credentials that predate this concept (see the migration that added
@@ -112,7 +112,7 @@ class AccountCreateRequest(BaseModel):
     @field_validator("pair")
     @classmethod
     def _valid_pair(cls, v: str) -> str:
-        return _validate_choice(v, SUPPORTED_PAIRS, "pair")
+        return _validate_choice(v, ALL_KNOWN_PAIRS, "pair")
 
     @field_validator("market_type")
     @classmethod
@@ -162,7 +162,7 @@ class AccountUpdateRequest(BaseModel):
     @field_validator("pair")
     @classmethod
     def _valid_pair(cls, v: str | None) -> str | None:
-        return v if v is None else _validate_choice(v, SUPPORTED_PAIRS, "pair")
+        return v if v is None else _validate_choice(v, ALL_KNOWN_PAIRS, "pair")
 
     @field_validator("market_type")
     @classmethod
@@ -350,3 +350,15 @@ class PositionOut(BaseModel):
 class CredentialTestOut(BaseModel):
     ok: bool
     message: str
+
+
+class PairOut(BaseModel):
+    pair: str
+    available: bool
+    # Customer-facing reason when `available` is False; None otherwise.
+    reason: str | None = None
+
+
+class PairsOut(BaseModel):
+    market_type: str
+    pairs: list[PairOut]

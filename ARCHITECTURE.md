@@ -786,6 +786,17 @@ trade through entry, protection, a manual stop trigger and a strategy exit;
 then the read-only checks again. No customer funds until all of the above
 pass and are recorded.
 
+## Futures pair expansion (flag-gated, manual only)
+
+`FUTURES_PAIR_EXPANSION` (default off) adds SOL, DOGE, SUI, LINK, ADA and LTC to the **Futures, manual** pair list. With it off, behavior is identical to before: four pairs, no extra exchange calls.
+
+- Universes live in `config.py`: `manual_pairs(market_type, futures_expansion=)` and `auto_pairs(market_type)`. Auto always scans the original four. Spot never changes.
+- `GET /api/pairs?market_type=` returns each pair with `available` and a `reason`. Unaffordable pairs are shown, disabled, with "Insufficient allocated capital for this market." No dollar minimum is displayed.
+- `pair_catalog.py` reads Binance Futures market info through a public (keyless) call, cached for an hour. The capital rule is `allocated_capital * MAX_NOTIONAL_MULTIPLIER >= exchange min notional`. It is a necessary condition only. Unknown data or an unreachable exchange means "available" for display. Entry-time sizing and the min-notional, leverage and risk checks stay authoritative.
+- Auto (live Futures with the flag on) skips pairs the same rule marks unaffordable. Paper and Spot are never filtered.
+- `_maybe_enter` refuses a new entry on a pair outside `manual_pairs`, so turning the flag off cannot open a trade on an extra pair. An already open position is still managed and closed.
+- Selection is validated only when a customer changes pair or market, so saving risk settings never fails because of the current pair.
+
 ## Data model
 
 ```

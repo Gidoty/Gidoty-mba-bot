@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
 import { Card, ErrorBanner, PageHeader } from "../components/ui.jsx";
-import { MARKET_TYPES, PAIRS, UPCOMING_PAIRS } from "../constants.js";
+import { MARKET_TYPES, UPCOMING_PAIRS } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
+import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
 export default function BotSettings() {
   const { account, refreshAccount } = useAccount();
@@ -17,6 +18,18 @@ export default function BotSettings() {
   const [capitalInput, setCapitalInput] = useState(account.allocated_capital != null ? String(account.allocated_capital) : "");
   const [savingCapital, setSavingCapital] = useState(false);
   const [capitalError, setCapitalError] = useState(null);
+
+  // Selectable pairs for the chosen market, with per-customer availability. Re-read when the
+  // saved trading capital changes (availability depends on it).
+  const { pairs: pairOptions, loaded: pairsLoaded } = usePairs(marketType, account.allocated_capital);
+  const pairList = withCurrentPair(pairOptions, pair);
+  // Switching market: a pair that does not exist for the new market is replaced by the first available one.
+  useEffect(() => {
+    if (pairsLoaded && !pairOptions.some((p) => p.pair === pair)) {
+      const next = pairOptions.find((p) => p.available);
+      if (next) setPair(next.pair);
+    }
+  }, [pairsLoaded, pairOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty =
     pair !== account.pair ||
@@ -127,8 +140,10 @@ export default function BotSettings() {
               disabled={pairSelectionMode === "auto"}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
             >
-              {PAIRS.map((p) => (
-                <option key={p}>{p}</option>
+              {pairList.map((p) => (
+                <option key={p.pair} value={p.pair} disabled={!p.available}>
+                  {optionLabel(p)}
+                </option>
               ))}
               {UPCOMING_PAIRS.map((p) => (
                 <option key={p} value={p} disabled>

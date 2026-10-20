@@ -8,9 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ... import exchange
+from ... import exchange, pair_catalog
 from ...botcode import assign_unique_bot_code
-from ...config import Settings
+from ...config import Settings, manual_pairs
 from ...crypto_utils import decrypt, encrypt
 from ...db import get_open_trade
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
@@ -27,7 +27,7 @@ from ...onboarding import (
     start_trial,
 )
 from ...risk import InvalidRiskParameters, clamp_risk_pct
-from ..deps import get_db, get_settings, require_legal_acceptance
+from ..deps import get_db, get_pair_facts, get_settings, require_legal_acceptance
 from ..schemas import (
     AccountCreateRequest,
     AccountOut,
@@ -140,6 +140,23 @@ def _require_no_open_trade(db: Session, account: TradingAccount, *, action: str)
         )
 
 
+def _pair_selection_problem(pair: str, market_type: str, *, allocated_capital: float | None, settings: Settings, facts: dict | None) -> str | None:
+    """A customer-safe reason this pair cannot be chosen for this market, or
+    None. Membership first (extra Futures pairs exist only for Futures with the
+    expansion on), then - for Futures with the expansion on and exchange data
+    available - listing and capital (pair_catalog). Called only when a
+    customer CHANGES pair or market, never for an unchanged selection."""
+    if pair not in manual_pairs(market_type, futures_expansion=settings.futures_pair_expansion):
+        return f"{pair} is not available for {market_type.capitalize()}."
+    if market_type == "futures" and settings.futures_pair_expansion and facts is not None:
+        status_ = pair_catalog.assess_pair(
+            pair, facts.get(pair), allocated_capital=allocated_capital, max_notional_multiplier=settings.max_notional_multiplier
+        )
+        if not status_.available:
+            return status_.reason
+    return None
+
+
 @router.post("", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 def create_account(
     body: AccountCreateRequest,
@@ -149,6 +166,9 @@ def create_account(
 ) -> AccountOut:
     if customer.account is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has a trading account")
+    problem = _pair_selection_problem(body.pair, body.market_type, allocated_capital=None, settings=settings, facts=None)
+    if problem is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
     if body.notification_channel == "whatsapp":
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "WhatsApp notifications aren't available yet - use telegram")
     if not settings.encryption_key:
@@ -216,12 +236,27 @@ def update_account(
     customer: Customer = Depends(require_legal_acceptance),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    facts: dict | None = Depends(get_pair_facts),
 ) -> AccountOut:
     account = _require_account(customer)
 
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
     changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
+    if changing_pair or changing_market:
+        # Checked before the open-trade guard below, exactly as the schema
+        # validators (422) always preceded it. Only a CHANGE is checked: an
+        # unchanged selection is never revalidated, so nothing already in
+        # place (including an open position's pair) is ever disturbed.
+        problem = _pair_selection_problem(
+            body.pair if body.pair is not None else account.pair,
+            body.market_type if body.market_type is not None else account.market_type,
+            allocated_capital=body.allocated_capital if body.allocated_capital is not None else account.allocated_capital,
+            settings=settings,
+            facts=facts,
+        )
+        if problem is not None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
     if changing_pair or changing_market or changing_selection_mode:
         # Payment unlocks the account, not a pair - a paid customer can
         # switch pairs freely. What they can't do is switch out from

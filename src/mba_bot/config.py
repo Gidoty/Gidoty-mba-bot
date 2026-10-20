@@ -36,7 +36,29 @@ SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")
 # added here, since accepting it would let an account get created for a
 # pair the exchange integration can't actually trade.
 UPCOMING_PAIRS = ("CORE/USDT",)
+# Additional USD-M Futures markets, selectable MANUALLY only and only while
+# `Settings.futures_pair_expansion` is on (FUTURES_PAIR_EXPANSION, off by default).
+# Spot never gets them, and Auto Select never scans them: see `manual_pairs` /
+# `auto_pairs` - the one place the two universes are defined.
+FUTURES_EXTRA_PAIRS = ("SOL/USDT", "DOGE/USDT", "SUI/USDT", "LINK/USDT", "ADA/USDT", "LTC/USDT")
+# Every pair name the API will ever accept at all (validation of the NAME only;
+# whether a pair is selectable for a given market is decided by `manual_pairs`).
+ALL_KNOWN_PAIRS = SUPPORTED_PAIRS + FUTURES_EXTRA_PAIRS
 SUPPORTED_MARKET_TYPES = ("spot", "futures")
+
+
+def manual_pairs(market_type: str, *, futures_expansion: bool) -> tuple[str, ...]:
+    """The pairs a customer may choose by hand. Today's four everywhere; the
+    extra Futures markets only for Futures and only when the expansion is on."""
+    if market_type == "futures" and futures_expansion:
+        return SUPPORTED_PAIRS + FUTURES_EXTRA_PAIRS
+    return SUPPORTED_PAIRS
+
+
+def auto_pairs(market_type: str) -> tuple[str, ...]:
+    """The pairs Auto Select scans. Deliberately NOT a function of any flag or
+    market: the original four, always. Extra markets are manual-only."""
+    return SUPPORTED_PAIRS
 SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
 
 
@@ -164,6 +186,10 @@ class Settings:
     # cancelled - it may be mid-order) and no longer holds up the round: the
     # other accounts carry on, and this one is skipped until it finishes.
     cycle_watchdog_seconds: int = 120
+    # Master switch for the Futures pair expansion (extra manual-only pairs and
+    # the capital-based availability marking / Auto skip). OFF by default:
+    # with it off every code path behaves exactly as before the feature existed.
+    futures_pair_expansion: bool = False
 
 
 LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
@@ -235,4 +261,5 @@ def load_settings() -> Settings:
         lock_file=os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"),
         max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
         cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
+        futures_pair_expansion=_env_bool("FUTURES_PAIR_EXPANSION", False),
     )

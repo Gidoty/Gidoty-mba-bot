@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, lifecycle
-from .config import SUPPORTED_PAIRS, Settings
+from . import exchange, lifecycle, pair_catalog
+from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
 from .db import get_open_trade, get_trades_closed_on
 from .models import PROTECTION_PROTECTED, TRADE_OPEN, Trade, TradingAccount
@@ -165,7 +165,14 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         # the backend trading logic itself: there is no code path from
         # this branch into an account that has one.
         if open_trade is None and account.pair_selection_mode == "auto":
-            auto_result = await _scan_auto_pair(client, account, settings)
+            # Capital-based skip only for a LIVE Futures account with the pair
+            # expansion on; otherwise None = the scan is exactly what it always was.
+            auto_capital = (
+                account.allocated_capital
+                if (account.market_type == "futures" and settings.futures_pair_expansion and not is_paper)
+                else None
+            )
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital)
             if auto_result is None:
                 # Nothing in the approved universe had an actionable
                 # signal this cycle - a normal, uneventful scan, not an
@@ -276,11 +283,14 @@ def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_pape
     )
 
 
-async def _scan_auto_pair(client, account: TradingAccount, settings: Settings) -> tuple[str, list, StrategySignal] | None:
+async def _scan_auto_pair(
+    client, account: TradingAccount, settings: Settings, *, capital: float | None = None
+) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
     credentials, same account - just queried against each pair in the
-    fixed, approved universe (`config.SUPPORTED_PAIRS`, the one list
+    fixed, approved universe (`config.auto_pairs` - always the original
+    four; the extra Futures pairs are manual-only - the one list
     this platform already maintains for which pairs it can trade at
     all - not a second, separately-maintained "auto select universe"
     that could silently drift out of sync with it) instead of only the
@@ -296,7 +306,17 @@ async def _scan_auto_pair(client, account: TradingAccount, settings: Settings) -
     Returns None if nothing in the universe had an actionable signal
     this cycle - never a forced/fallback pick."""
     scanned: list[PairCandidate] = []
-    for pair in SUPPORTED_PAIRS:
+    if capital is not None:
+        try:
+            await client.load_markets()  # cached on the client; the candle fetches below reuse it
+        except Exception:
+            capital = None  # cannot read the exchange's minimums: scan exactly as before
+    for pair in auto_pairs(account.market_type):
+        if capital is not None:
+            facts = pair_catalog.facts_from_market((client.markets or {}).get(exchange.exchange_symbol(pair, account.market_type)))
+            if pair_catalog.capital_supports_market(capital, facts.min_notional, settings.max_notional_multiplier) is False:
+                logger.info("account %s: auto-select skipping %s: %s", account.id, pair, pair_catalog.REASON_INSUFFICIENT_CAPITAL)
+                continue
         try:
             ohlcv = await client.fetch_ohlcv(
                 exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit
@@ -339,6 +359,15 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     elif signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type == "futures":
         side = "short"
     else:
+        return
+
+    if account.pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
+        # Fail closed: never open a NEW position on a pair that is not currently selectable for
+        # this market (e.g. an extra Futures pair after the expansion was switched off). Managing
+        # an already-open trade never goes through here - it always uses the trade's own pair.
+        await _record_error(
+            notifier, account, "This pair is not currently available for trading, so no new trade was opened.", now=now
+        )
         return
 
     stop_price = compute_stop_loss(

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings, load_settings
 from ..db import session_scope
+from .. import pair_catalog
 from ..legal import has_current_terms_and_privacy
 from ..models import Customer
 from .security import SESSION_COOKIE_NAME, TokenError, read_customer_id
@@ -58,3 +59,13 @@ def require_legal_acceptance(
             "ACCEPTANCE_REQUIRED: accept the current Terms of Service and Privacy Policy before continuing",
         )
     return customer
+
+
+async def get_pair_facts(settings: Settings = Depends(get_settings)) -> dict | None:
+    """Current exchange facts for the Futures pair catalog, or None. With the
+    expansion OFF this is None immediately and nothing is ever fetched - the
+    existing behaviour. Never raises: an unreadable catalog just means no
+    availability checks (see pair_catalog)."""
+    if not settings.futures_pair_expansion:
+        return None
+    return await pair_catalog.futures_pair_facts()

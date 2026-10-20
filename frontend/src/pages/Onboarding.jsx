@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 import BrandLogo from "../components/BrandLogo.jsx";
 import HelpTip from "../components/HelpTip.jsx";
 import { PAIRS, UPCOMING_PAIRS } from "../constants.js";
+import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
 const SUPPORT_WHATSAPP_NUMBER = "2348124228730"; // 0812 422 8730, in wa.me's international-digits-only format
 const SUPPORT_EMAIL = "support@metabridgeacademy.com";
@@ -45,6 +46,14 @@ function AccountForm({ onLogout, onCreated }) {
   const [riskPct, setRiskPct] = useState("1");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const { pairs: pairOptions, loaded: pairsLoaded } = usePairs(marketType);
+  const pairList = withCurrentPair(pairOptions, pair);
+  useEffect(() => {
+    if (pairsLoaded && !pairOptions.some((p) => p.pair === pair)) {
+      const next = pairOptions.find((p) => p.available);
+      if (next) setPair(next.pair);
+    }
+  }, [pairsLoaded, pairOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -80,8 +89,10 @@ function AccountForm({ onLogout, onCreated }) {
             onChange={(e) => setPair(e.target.value)}
             className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
-            {PAIRS.map((p) => (
-              <option key={p}>{p}</option>
+            {pairList.map((p) => (
+              <option key={p.pair} value={p.pair} disabled={!p.available}>
+                {optionLabel(p)}
+              </option>
             ))}
             {UPCOMING_PAIRS.map((p) => (
               <option key={p} value={p} disabled>

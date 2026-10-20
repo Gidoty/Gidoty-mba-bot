@@ -22,7 +22,7 @@ from ..config import load_settings, warn_about_legacy_futures_testnet_env
 from ..db import init_db
 from ..log_safety import install_log_safety
 from ..scheduler import run_forever
-from .routers import account, auth, billing, telegram, trades
+from .routers import account, auth, billing, pairs, telegram, trades
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,7 @@ def create_app() -> FastAPI:
     app.include_router(trades.router)
     app.include_router(telegram.router)
     app.include_router(billing.router)
+    app.include_router(pairs.router)
 
     @app.get("/api/health")
     def health() -> dict:
