@@ -37,12 +37,54 @@ processes:
 
 - `trader.process_account` wraps each account's cycle; `scheduler._run_one`
   wraps that again and logs-and-continues on any exception.
-- `scheduler.run_once` fans out over all accounts with
-  `asyncio.gather(..., return_exceptions=True)`, so one account raising
-  never cancels the others' tasks or stops the poll cycle.
+- `scheduler.run_once` runs every active account's cycle concurrently (at
+  most `MAX_CONCURRENT_CYCLES` at once), so one account raising never
+  cancels the others' tasks or stops the poll cycle. Every task's outcome is
+  inspected and logged with the account id - never discarded.
 - Each account cycle opens its own DB session and ccxt client and closes
   them at the end of the cycle - no shared mutable state between accounts
   within a poll.
+
+### Scheduler concurrency and SQLite
+
+SQLite has one database-wide write lock, and sqlite3 waits for it
+synchronously, freezing the whole event loop. Concurrent cycles therefore must
+never hold a write lock across an `await` (an exchange call, Telegram). The
+original scheduler did: SQLAlchemy's implicit flush (autoflush) wrote the
+cycle's pending `last_scanned_at` at the first query and kept the lock until the
+cycle's single commit, so with two linked accounts the second one's write
+blocked the loop, could never be released, and failed after the 5 s busy
+timeout; the error handler then crashed reading the id off the failed session
+and `gather(return_exceptions=True)` swallowed it. The newer account was never
+scanned, silently, forever.
+
+Invariants now (tests/test_scheduler_concurrency.py):
+
+- **No write lock across a suspension.** Scheduler sessions use
+  `session_scope(autoflush=False)`: nothing is written until an explicit
+  commit, and every commit (heartbeat, write-ahead intent, `_cas`, `_set`, paper
+  entry/exit) is a short synchronous stretch with no `await` inside. The write-
+  ahead guarantees are unchanged: they were always explicit commits.
+- **Reliable evidence.** `process_account` commits `last_scanned_at` at once,
+  before any I/O, so a cycle that later stalls or fails still shows it ran.
+- **Nothing is silent.** Failures are logged with the account id already in
+  hand, a failed session is rolled back, the failure is recorded on the
+  account from a fresh session, and a round logs "scheduler round complete:
+  N ok, N failed, ..." (INFO, made visible under uvicorn by
+  `api.app._ensure_scheduler_logs_are_visible`). The loops are supervised and
+  a dead scheduler task is logged at CRITICAL.
+- **One account never holds up another.** A cycle still running after
+  `CYCLE_WATCHDOG_SECONDS` is reported and left to finish (never cancelled: it
+  may be mid-order); the round moves on, and that account is skipped until it
+  finishes. Waiting for a busy account never holds a concurrency slot.
+- **Bounded connections.** Each in-flight cycle holds a pooled connection, so
+  concurrency is capped (`MAX_CONCURRENT_CYCLES`, default 6) well under
+  SQLAlchemy's default pool (5 + 10 overflow, shared with the API).
+
+Limits: one process (the single-instance lock does not cover the uvicorn path -
+run one worker); SQLite still has one writer, so API writes can briefly wait for
+a commit; past a few hundred accounts move to PostgreSQL and/or shard accounts
+across processes as described below.
 
 **When to reconsider:** if customer count grows to where one event loop's
 per-cycle wall time starts exceeding `POLL_INTERVAL_SECONDS`, shard

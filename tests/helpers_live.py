@@ -149,7 +149,9 @@ def run_cycle(
     notifier = notifier or FakeNotifier()
 
     async def go():
-        with session_scope() as session:
+        # The scheduler's own session mode: no implicit flushes (see db.session_scope), so every
+        # lifecycle/trader test also proves the engine does not depend on autoflush.
+        with session_scope(autoflush=False) as session:
             account = session.get(TradingAccount, account_id)
             if swallow:
                 try:
@@ -167,7 +169,7 @@ def run_reconcile(account_id: str, settings: Settings, notifier: FakeNotifier | 
     notifier = notifier or FakeNotifier()
 
     async def go():
-        with session_scope() as session:
+        with session_scope(autoflush=False) as session:
             account = session.get(TradingAccount, account_id)
             await reconcile_account(session, account, settings, notifier)
 

@@ -45,10 +45,25 @@ def init_db(database_url: str) -> None:
 
 
 @contextmanager
-def session_scope() -> Iterator[Session]:
+def session_scope(*, autoflush: bool = True) -> Iterator[Session]:
+    """One transaction scope per unit of work: commit on success, roll back on
+    error.
+
+    `autoflush=False` is for long-running ASYNC work (the scheduler). With
+    autoflush on, SQLAlchemy writes pending changes at the next query - which
+    takes SQLite's database-wide write lock - and that lock then stays held
+    until the commit, across every `await` in between (exchange calls,
+    Telegram). With SQLite that is fatal for concurrency: a second session's
+    write blocks the whole event loop in sqlite3's busy handler, so the first
+    session can never resume to release the lock, and the second fails after
+    the busy timeout. With autoflush off, nothing touches the database until an
+    explicit commit, and every commit is a short, synchronous stretch with no
+    `await` inside it - so write locks are never held across a suspension and
+    cycles for different accounts cannot starve each other. The API keeps the
+    default (its sessions are short and synchronous)."""
     if _SessionLocal is None:
         raise RuntimeError("init_db() must be called before using the database")
-    session = _SessionLocal()
+    session = _SessionLocal(autoflush=autoflush)
     try:
         yield session
         session.commit()

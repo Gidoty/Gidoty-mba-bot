@@ -154,6 +154,16 @@ class Settings:
     # Single-instance guard (main.py); a second scheduler process refuses
     # to start while this file is locked.
     lock_file: str = "./mba_bot.lock"
+    # Scheduler concurrency (scheduler.py). Accounts are processed
+    # concurrently - network I/O overlaps - but at most this many cycles run at
+    # once, because each one holds a database connection for its whole
+    # duration (SQLAlchemy's default pool is 5 + 10 overflow, shared with the
+    # API). Keep it well under that.
+    max_concurrent_cycles: int = 6
+    # A cycle still running after this many seconds is reported (never
+    # cancelled - it may be mid-order) and no longer holds up the round: the
+    # other accounts carry on, and this one is skipped until it finishes.
+    cycle_watchdog_seconds: int = 120
 
 
 LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
@@ -223,4 +233,6 @@ def load_settings() -> Settings:
         recovery_interval_seconds=_env_int("RECOVERY_INTERVAL_SECONDS", 15),
         stop_limit_monitor_interval_seconds=_env_int("STOP_LIMIT_MONITOR_INTERVAL_SECONDS", 15),
         lock_file=os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"),
+        max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
+        cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
     )

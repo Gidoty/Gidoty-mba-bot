@@ -27,6 +27,30 @@ from .routers import account, auth, billing, telegram, trades
 logger = logging.getLogger(__name__)
 
 
+def _ensure_scheduler_logs_are_visible() -> None:
+    """Under `uvicorn mba_bot.api.app:app` nothing configures the root logger,
+    so Python's last-resort handler prints WARNING and above only, with no
+    level or timestamp - the scheduler's INFO heartbeat ("round complete ...")
+    would be invisible and an empty journal would prove nothing. Give the
+    package its own stream handler (INFO) unless logging is already set up
+    (main.py's basicConfig, pytest, a host application). Redaction does not
+    depend on handlers: it happens when each record is created."""
+    package_logger = logging.getLogger("mba_bot")
+    if package_logger.handlers or logging.getLogger().handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    package_logger.addHandler(handler)
+    package_logger.setLevel(logging.INFO)
+
+
+def _log_scheduler_task_ended(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    logger.critical("the scheduler task ended unexpectedly%s", "" if exc is None else f": {type(exc).__name__}", exc_info=exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = load_settings()
@@ -38,7 +62,9 @@ async def lifespan(app: FastAPI):
     warn_about_legacy_futures_testnet_env(logger)
     install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
     init_db(settings.database_url)
+    _ensure_scheduler_logs_are_visible()
     scheduler_task = asyncio.create_task(run_forever(settings))
+    scheduler_task.add_done_callback(_log_scheduler_task_ended)
     try:
         yield
     finally:

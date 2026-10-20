@@ -2,16 +2,32 @@
 account each poll interval, concurrently via asyncio.
 
 See ARCHITECTURE.md for why this is one shared loop rather than one OS
-process per customer. The key property this module has to preserve is
-isolation without processes: `_run_one` never lets an exception from one
-account's cycle propagate into another's, and a fresh DB session/notifier
-per poll keeps accounts from sharing mutable state across a cycle.
+process per customer. The properties this module has to preserve:
+
+* ISOLATION without processes. One account's cycle can fail, stall or be slow
+  without stopping another's. `_guarded_cycle` never lets an exception escape,
+  and `run_once` neither waits on a straggler nor lets one pile up.
+* NO WRITE LOCK ACROSS A SUSPENSION. Cycles overlap on the event loop, each
+  with its own SQLite connection. SQLite has one database-wide write lock, and
+  sqlite3 waits for it SYNCHRONOUSLY, freezing the whole loop. If a cycle held
+  that lock across an `await` (an exchange call, Telegram) a second cycle's
+  write would block the loop - so the first could never resume to release it -
+  and fail after the busy timeout. That is how a newer account used to be
+  starved forever, silently, by an older one. Scheduler sessions therefore
+  never flush implicitly (`session_scope(autoflush=False)`): they write only at
+  explicit commits, each a short synchronous stretch, so cycles cannot contend.
+* NOTHING FAILS SILENTLY. Every failure is logged with the account id we
+  already hold (never read from an ORM object: after a failed flush that very
+  read raises and used to swallow the error), a failed session is rolled back,
+  the failure is recorded on the account from a fresh session, and every task
+  outcome is inspected rather than discarded.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 
 from . import exchange
 from .config import Settings
@@ -27,6 +43,18 @@ logger = logging.getLogger(__name__)
 # process (the database claims and deterministic order ids cover the rest).
 _account_locks: dict[str, asyncio.Lock] = {}
 
+# Cycles that outlived the round watchdog and are still running. Strong
+# references, so they cannot be garbage collected mid-flight.
+_stragglers: set[asyncio.Task] = set()
+
+# Customer-facing (and safe) text stored when a cycle could not even save its state.
+CYCLE_FAILED_MESSAGE = (
+    "The last check could not be completed because of a temporary internal problem. "
+    "It will retry automatically on the next check."
+)
+
+OK, SKIPPED, FAILED = "ok", "skipped", "failed"
+
 
 def _lock_for(account_id: str) -> asyncio.Lock:
     lock = _account_locks.get(account_id)
@@ -35,30 +63,129 @@ def _lock_for(account_id: str) -> asyncio.Lock:
     return lock
 
 
-async def _run_one(account_id: str, settings: Settings) -> None:
+def _log_failure(account_id: str, what: str, exc: BaseException) -> None:
+    """Log a scheduler failure using ONLY the account id already in hand.
+
+    Never read the id (or anything) from an ORM object here: after a failed
+    flush the session's objects are expired and unreadable until a rollback,
+    and `account.id` inside the old `except` block raised, so the original
+    error was never logged and vanished into `gather`."""
+    # The phrase "error during ..." is what operators already grep the journal for.
+    logger.error("account %s: error during %s: %s: %s", account_id, what, type(exc).__name__, exc, exc_info=exc)
+
+
+def _persist_cycle_failure(account_id: str, *, scanned: bool) -> None:
+    """Best effort, on a FRESH session: leave evidence on the account that its
+    cycle ran but could not save normally. Never raises."""
+    now = datetime.now(timezone.utc)
+    try:
+        with session_scope(autoflush=False) as session:
+            account = session.get(TradingAccount, account_id)
+            if account is not None:
+                if scanned:
+                    account.last_scanned_at = now
+                account.last_error = CYCLE_FAILED_MESSAGE
+                account.last_error_at = now
+    except Exception as exc:
+        _log_failure(account_id, "recording the failure on the account", exc)
+
+
+async def _guarded_cycle(account_id: str, settings: Settings, work, *, label: str, require_active: bool, scanned: bool) -> str:
+    """Run `work(session, account, notifier)` for one account in its own
+    transaction scope. Never raises (except cancellation). Returns OK, SKIPPED
+    or FAILED."""
+    outcome = OK
+    needs_record = False
+    try:
+        with session_scope(autoflush=False) as session:
+            account = session.get(TradingAccount, account_id)
+            if account is None or (require_active and not account.is_active):
+                return SKIPPED
+            channel = account.notification_channel
+            try:
+                notifier = build_notifier(
+                    channel,
+                    telegram_bot_token=settings.telegram_bot_token,
+                    whatsapp_provider_token=settings.whatsapp_provider_token,
+                )
+            except Exception as exc:
+                _log_failure(account_id, f"building the notification channel ({channel})", exc)
+                return FAILED
+            try:
+                await work(session, account, notifier)
+            except Exception as exc:
+                outcome = FAILED
+                _log_failure(account_id, label, exc)
+                if not session.is_active:
+                    # A failed flush/commit leaves the transaction unusable until rolled back.
+                    session.rollback()
+                    needs_record = True
+    except Exception as exc:  # session setup, or the commit when the scope exits (e.g. "database is locked")
+        outcome = FAILED
+        needs_record = True
+        _log_failure(account_id, f"saving the state after {label}", exc)
+    if needs_record:
+        _persist_cycle_failure(account_id, scanned=scanned)
+    return outcome
+
+
+async def _run_one(account_id: str, settings: Settings, slots: asyncio.Semaphore | None = None) -> str:
+    # The per-account lock first, the shared slot second: waiting for a busy
+    # account must never hold a slot another account could use.
     async with _lock_for(account_id):
-        await _run_one_locked(account_id, settings)
+        if slots is None:
+            return await _run_one_locked(account_id, settings)
+        async with slots:
+            return await _run_one_locked(account_id, settings)
 
 
-async def _run_one_locked(account_id: str, settings: Settings) -> None:
-    with session_scope() as session:
-        account = session.get(TradingAccount, account_id)
-        if account is None or not account.is_active:
-            return
-        try:
-            notifier = build_notifier(
-                account.notification_channel,
-                telegram_bot_token=settings.telegram_bot_token,
-                whatsapp_provider_token=settings.whatsapp_provider_token,
-            )
-        except Exception:
-            logger.exception("account %s: could not build notifier for channel=%s", account.id, account.notification_channel)
-            return
+async def _run_one_locked(account_id: str, settings: Settings) -> str:
+    async def work(session, account, notifier):
+        await process_account(session, account, settings, notifier)
 
-        try:
-            await process_account(session, account, settings, notifier)
-        except Exception:
-            logger.exception("account %s: error during processing cycle", account.id)
+    return await _guarded_cycle(
+        account_id, settings, work, label="processing cycle", require_active=True, scanned=True
+    )
+
+
+def _report_finished(account_id: str, task: asyncio.Task, label: str) -> str:
+    """Inspect a finished cycle task - its outcome is never discarded."""
+    if task.cancelled():
+        logger.warning("account %s: %s was cancelled", account_id, label)
+        return FAILED
+    exc = task.exception()
+    if exc is not None:  # _guarded_cycle never raises, so this is a bug if it ever happens
+        _log_failure(account_id, label, exc)
+        return FAILED
+    return task.result()
+
+
+def _straggler_finished(account_id: str, label: str, task: asyncio.Task) -> None:
+    _stragglers.discard(task)
+    outcome = _report_finished(account_id, task, label)
+    logger.warning("account %s: the %s that exceeded the watchdog has now finished (%s)", account_id, label, outcome)
+
+
+async def _wait_round(tasks: dict[asyncio.Task, str], *, timeout: float, label: str) -> dict[str, int]:
+    """Wait for a round of per-account tasks, but only up to `timeout`. A task
+    that is still running is reported and left to finish (never cancelled: it
+    may be mid-order); it no longer holds up the round."""
+    counts = {OK: 0, SKIPPED: 0, FAILED: 0, "running": 0}
+    if not tasks:
+        return counts
+    done, pending = await asyncio.wait(tasks.keys(), timeout=timeout)
+    for task in done:
+        counts[_report_finished(tasks[task], task, label)] += 1
+    for task in pending:
+        account_id = tasks[task]
+        counts["running"] += 1
+        logger.warning(
+            "account %s: %s still running after %.0fs; other accounts carry on and this one is skipped until it finishes",
+            account_id, label, timeout,
+        )
+        _stragglers.add(task)
+        task.add_done_callback(lambda t, a=account_id, lb=label: _straggler_finished(a, lb, t))
+    return counts
 
 
 async def run_once(settings: Settings) -> None:
@@ -69,29 +196,36 @@ async def run_once(settings: Settings) -> None:
         logger.info("no active accounts to process")
         return
 
-    logger.info("processing %d active account(s)", len(account_ids))
-    await asyncio.gather(*(_run_one(account_id, settings) for account_id in account_ids), return_exceptions=True)
+    started = time.monotonic()
+    slots = asyncio.Semaphore(max(1, settings.max_concurrent_cycles))
+    tasks: dict[asyncio.Task, str] = {}
+    for account_id in account_ids:
+        if _lock_for(account_id).locked():
+            logger.warning("account %s: its previous cycle is still running, skipping this round", account_id)
+            continue
+        tasks[asyncio.ensure_future(_run_one(account_id, settings, slots))] = account_id
+
+    counts = await _wait_round(tasks, timeout=settings.cycle_watchdog_seconds, label="processing cycle")
+    level = logging.WARNING if counts[FAILED] or counts["running"] else logging.INFO
+    logger.log(
+        level,
+        "scheduler round complete: %d active account(s), %d ok, %d failed, %d still running, %d skipped, %.1fs",
+        len(account_ids), counts[OK], counts[FAILED], counts["running"], len(account_ids) - len(tasks), time.monotonic() - started,
+    )
 
 
-async def _recover_one(account_id: str, settings: Settings, *, current_price: float | None = None) -> None:
+async def _recover_one(
+    account_id: str, settings: Settings, *, current_price: float | None = None, slots: asyncio.Semaphore | None = None
+) -> str:
+    async def work(session, account, notifier):
+        await reconcile_account(session, account, settings, notifier, current_price=current_price)
+
     async with _lock_for(account_id):
-        with session_scope() as session:
-            account = session.get(TradingAccount, account_id)
-            if account is None:
-                return
-            try:
-                notifier = build_notifier(
-                    account.notification_channel,
-                    telegram_bot_token=settings.telegram_bot_token,
-                    whatsapp_provider_token=settings.whatsapp_provider_token,
-                )
-            except Exception:
-                logger.exception("account %s: could not build notifier for channel=%s", account.id, account.notification_channel)
-                return
-            try:
-                await reconcile_account(session, account, settings, notifier, current_price=current_price)
-            except Exception:
-                logger.exception("account %s: error during reconciliation", account.id)
+        if slots is None:
+            # Not require_active: an open position is managed even on an account switched off.
+            return await _guarded_cycle(account_id, settings, work, label="reconciliation", require_active=False, scanned=False)
+        async with slots:
+            return await _guarded_cycle(account_id, settings, work, label="reconciliation", require_active=False, scanned=False)
 
 
 async def recover_once(settings: Settings, *, include_healthy: bool = False) -> None:
@@ -109,7 +243,9 @@ async def recover_once(settings: Settings, *, include_healthy: bool = False) -> 
         )
     if account_ids:
         logger.info("reconciling %d account(s) with live trades needing attention", len(account_ids))
-        await asyncio.gather(*(_recover_one(a, settings) for a in account_ids), return_exceptions=True)
+        slots = asyncio.Semaphore(max(1, settings.max_concurrent_cycles))
+        tasks = {asyncio.ensure_future(_recover_one(a, settings, slots=slots)): a for a in account_ids}
+        await _wait_round(tasks, timeout=settings.cycle_watchdog_seconds, label="reconciliation")
 
 
 async def monitor_stop_limits_once(settings: Settings) -> None:
@@ -153,7 +289,9 @@ async def monitor_stop_limits_once(settings: Settings) -> None:
             due.append((account_id, price))
     if due:
         logger.info("stop-limit watch: %d position(s) at or through their trigger", len(due))
-        await asyncio.gather(*(_recover_one(a, settings, current_price=p) for a, p in due), return_exceptions=True)
+        slots = asyncio.Semaphore(max(1, settings.max_concurrent_cycles))
+        tasks = {asyncio.ensure_future(_recover_one(a, settings, current_price=p, slots=slots)): a for a, p in due}
+        await _wait_round(tasks, timeout=settings.cycle_watchdog_seconds, label="stop-limit reconciliation")
 
 
 async def run_recovery_forever(settings: Settings) -> None:
@@ -185,6 +323,20 @@ async def run_poll_forever(settings: Settings) -> None:
         await asyncio.sleep(settings.poll_interval_seconds)
 
 
+async def _supervised(name: str, make_loop) -> None:
+    """Run a never-ending loop and restart it if it ever dies with an ordinary
+    exception (they already catch their own; this is the last line of defence,
+    and it logs - a dead scheduler must never be a silent one)."""
+    while True:
+        try:
+            await make_loop()
+        except Exception:
+            logger.exception("the scheduler's %s stopped unexpectedly; restarting it in 5s", name)
+            await asyncio.sleep(5)
+        else:
+            logger.error("the scheduler's %s returned unexpectedly; restarting it", name)
+
+
 async def run_forever(settings: Settings) -> None:
     # Startup reconciliation: before the first poll, bring every live trade
     # in line with Binance. SQLite alone is never trusted after a restart.
@@ -192,4 +344,7 @@ async def run_forever(settings: Settings) -> None:
         await recover_once(settings, include_healthy=True)
     except Exception:
         logger.exception("startup reconciliation failed")
-    await asyncio.gather(run_poll_forever(settings), run_recovery_forever(settings))
+    await asyncio.gather(
+        _supervised("poll loop", lambda: run_poll_forever(settings)),
+        _supervised("recovery loop", lambda: run_recovery_forever(settings)),
+    )

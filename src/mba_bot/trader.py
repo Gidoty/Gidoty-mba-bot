@@ -37,6 +37,12 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     # of how the rest of this function goes, so "last checked" on the
     # dashboard reflects reality even during a run of errors.
     account.last_scanned_at = now
+    # Persist the heartbeat NOW, in its own short synchronous transaction, so a
+    # cycle that later stalls, errors or fails to save still leaves reliable
+    # evidence that the scheduler reached this account. (Scheduler sessions do
+    # not flush implicitly - see db.session_scope - so this is also the only
+    # place the stamp is written before the cycle's I/O begins.)
+    session.commit()
 
     trial_state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at,
@@ -488,6 +494,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         pair=account.pair,
     )
     session.add(trade)
+    session.commit()  # durable before the (network) notification, and never held across it
 
     mode_label = "PAPER" if is_paper else "LIVE"
     await notifier.send(
@@ -526,6 +533,7 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     open_trade.close_reason = "stop_loss" if hit_stop else "crossover_exit"
 
     account.paper_balance += pnl
+    session.commit()  # durable before the (network) notification; also makes it visible to the daily summary
 
     mode_label = "PAPER"
     await notifier.send(
