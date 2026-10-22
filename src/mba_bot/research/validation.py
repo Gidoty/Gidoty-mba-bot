@@ -159,6 +159,54 @@ class TrialRegistry:
         return self.lockbox_openings(family)
 
 
+class LookLedger:
+    """Append-only record of every time a dataset (or a slice of one) was examined, and what for.
+
+    The trial registry counts configurations. This counts LOOKS: a result that was seen cannot be treated as unseen
+    evidence later. Each entry says which pairs and period were looked at, the purpose, and whether the look could
+    influence design (`kind`: "design" informed choices, "descriptive" was only inspected, "confirmation" was a
+    pre-registered one-shot test). Nothing is ever edited or removed."""
+
+    KINDS = ("design", "descriptive", "confirmation")
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def record(self, *, dataset: str, pairs: list[str], period: str, kind: str, purpose: str, plan_hash: str = "", note: str = "") -> dict:
+        if kind not in self.KINDS:
+            raise ValueError(f"look kind must be one of {self.KINDS}")
+        row = {"ts": datetime.now(timezone.utc).isoformat(), "dataset": dataset, "pairs": sorted(pairs), "period": period, "kind": kind,
+               "purpose": purpose, "plan_hash": plan_hash, "note": note}
+        with self.path.open("a") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+        return row
+
+    def entries(self) -> list[dict]:
+        if not self.path.exists():
+            return []
+        return [json.loads(line) for line in self.path.read_text().splitlines() if line.strip()]
+
+    def confirmations(self, dataset: str) -> list[dict]:
+        return [e for e in self.entries() if e["dataset"] == dataset and e["kind"] == "confirmation"]
+
+    def assert_unconsumed(self, dataset: str) -> None:
+        """One-shot evidence: refuse a second confirmation look at the same dataset."""
+        if self.confirmations(dataset):
+            raise LockboxError(f"dataset {dataset!r} was already consumed as confirmation evidence; it is no longer unseen")
+
+
+#: What was examined before Phase 2, reconstructed from the committed history. Written into every Phase 2 ledger.
+RETROSPECTIVE_LOOKS = (
+    dict(dataset="phase1_store", pairs=["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT"], period="development range (all but the sealed lockbox)",
+         kind="design", purpose="Phase 0 baseline and Phase 1 candidate search: 29 candidates, 33 trials, none passed C1-C9"),
+    dict(dataset="phase1_store", pairs=["SOL/USDT", "DOGE/USDT", "SUI/USDT", "LINK/USDT", "ADA/USDT", "LTC/USDT"], period="development range (all but the sealed lockbox)",
+         kind="descriptive", purpose="Phase 0/1 baseline and descriptive studies only. No Phase 1 candidate was run on these pairs"),
+    dict(dataset="phase1_lockbox", pairs=["BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT", "DOGE/USDT", "SUI/USDT", "LINK/USDT", "ADA/USDT", "LTC/USDT"],
+         period="final months of the Phase 1 store", kind="design", purpose="NEVER OPENED. Listed so its sealed state is on the record", note="sealed"),
+)
+
+
 # ------------------------------------------------------------------ lockbox
 
 

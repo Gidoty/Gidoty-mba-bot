@@ -6,6 +6,7 @@
   backtest   one quick run (single pair or Auto Select) printed to the terminal
   live       analyse the bot's own recorded trades and decisions (opens the database read-only)
   phase1     the pre-registered Phase 1 experiments (plan | run | lockbox)
+  phase2     the pre-registered Phase 2 confirmation (plan | resources | download | run | report)
   registry   show the experiment ledger
   synthetic  write a SYNTHETIC store for trying the tooling without market access
 
@@ -80,6 +81,18 @@ def main(argv: list[str] | None = None) -> int:
     p1.add_argument("--candidate", default=None, help="lockbox: the single candidate to score")
     p1.add_argument("--confirm", action="store_true", help="lockbox: required; opens the sealed final months, once")
     p1.add_argument("--reason", default="", help="lockbox: why it is being opened")
+
+    p2 = sub.add_parser("phase2", help="pre-registered Phase 2 one-shot confirmation")
+    p2.add_argument("action", choices=["plan", "resources", "download", "run", "report"])
+    p2.add_argument("--old-root", default="research_data_older", help="store for the older history (separate from the Phase 1 store)")
+    p2.add_argument("--phase1-root", default="research_data")
+    p2.add_argument("--phase1-results", default="research_out/phase1/phase1_results.json")
+    p2.add_argument("--out", default="research_out/phase2")
+    p2.add_argument("--expect-plan-hash", default=None)
+    p2.add_argument("--expect-code-fingerprint", default=None)
+    p2.add_argument("--expect-phase1-sha256", default=None)
+    p2.add_argument("--since", default="2019-09-01", help="download: first day of the older history (UTC, YYYY-MM-DD)")
+    p2.add_argument("--until", default=None, help="download: default is the first moment of the Phase 1 store, read from phase1_results.json")
 
     rg = sub.add_parser("registry", help="show the experiment ledger")
     rg.add_argument("--path", default="research_out/trials.jsonl")
@@ -194,6 +207,67 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             res = P1.run_lockbox(Path(args.root), Path(args.out), args.candidate, opts, confirm=args.confirm, reason=args.reason, progress=lambda m: print(m, flush=True))
             print(_json.dumps(res, indent=1, default=str))
+            return 0
+
+    if args.cmd == "phase2":
+        from . import phase2 as P2
+        from .phase2_report import render as render2
+
+        if args.action == "plan":
+            print(f"plan hash {P2.plan_hash()}\ncode fingerprint {P2.code_fingerprint()}")
+            for a in P2.ARMS:
+                print(f"  {a.id:<11} {a.role:<11} {a.hypothesis:<6} {a.label}")
+            print(f"  AUTO        auto        P2-H6  production ranking vs random ({len(P2.AUTO_SEEDS)} seeds)")
+            return 0
+        if args.action == "resources":
+            import shutil
+
+            mem = {}
+            for line in Path("/proc/meminfo").read_text().splitlines():
+                k, _, v = line.partition(":")
+                mem[k] = int(v.split()[0]) / 1048576
+            du = shutil.disk_usage(args.old_root if Path(args.old_root).exists() else ".")
+            print(f"RAM total {mem.get('MemTotal', 0):.2f} GiB, available {mem.get('MemAvailable', 0):.2f} GiB; swap total {mem.get('SwapTotal', 0):.2f} GiB, free {mem.get('SwapFree', 0):.2f} GiB; "
+                  f"disk free {du.free / 2**30:.1f} GiB of {du.total / 2**30:.1f} GiB")
+            return 0
+        if args.action == "download":
+            from datetime import datetime, timezone
+
+            from . import data as D
+
+            try:
+                P2.guard_download(expect_plan_hash=args.expect_plan_hash)
+                ref = P2.load_phase1_reference(Path(args.phase1_results), expect_sha256=args.expect_phase1_sha256)
+            except RuntimeError as e:
+                print(str(e), file=sys.stderr)
+                return 3
+            if not args.expect_phase1_sha256:
+                print("download requires --expect-phase1-sha256", file=sys.stderr)
+                return 3
+            since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            until = datetime.strptime(args.until, "%Y-%m-%d").replace(tzinfo=timezone.utc) if args.until else datetime.fromtimestamp(ref["span"][0] / 1000, timezone.utc)
+            if until.timestamp() * 1000 > ref["span"][0]:
+                print("--until reaches into the Phase 1 store; refusing", file=sys.stderr)
+                return 3
+            pairs = tuple(dict.fromkeys(P2.A_PAIRS + P2.C_PAIRS))
+            out = D.download_range(Path(args.old_root), pairs=pairs, since=since, until=until, progress=lambda m: print(m, flush=True))
+            print(json.dumps({"requests": out["requests"], "files": out["files"]}))
+            print("Downloaded only. Nothing in the store has been examined or analysed.")
+            return 0
+        if args.action == "run":
+            try:
+                res = P2.run_phase2(Path(args.old_root), Path(args.phase1_root), Path(args.phase1_results), Path(args.out), expect_plan_hash=args.expect_plan_hash,
+                                    expect_code_fingerprint=args.expect_code_fingerprint, expect_phase1_sha256=args.expect_phase1_sha256, progress=lambda m: print(m, flush=True))
+            except RuntimeError as e:
+                print(str(e), file=sys.stderr)
+                return 3
+            print(f"report: {Path(args.out) / 'phase2_report.md'}")
+            print("verdicts: " + ", ".join(f"{k} {v}" for k, v in res["verdicts"].items()))
+            return 0
+        if args.action == "report":
+            res = json.loads((Path(args.out) / "phase2_results.json").read_text())
+            (Path(args.out) / "phase2_report.md").write_text(render2(res))
+            print(f"report: {Path(args.out) / 'phase2_report.md'}")
             return 0
 
     if args.cmd == "registry":

@@ -130,6 +130,7 @@ class Policy:
     long_allowed: bool = True
     short_allowed: bool = True
     short_max_ret30d: float | None = None  # shorts only while the trailing 30-day return is at or below this
+    short_risk_scale: float = 1.0  # Phase 2: shorts are sized at this fraction of the normal risk (1.0 = production)
     # H2: volatility (causal percentile of the pair's own ATR% over the trailing 90 days)
     vol_skip_above: float | None = None
     vol_half_risk_above: float | None = None
@@ -217,6 +218,7 @@ class RunResult:
     counters: dict[str, int]
     span: tuple[int, int]
     notes: list[str] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)  # Auto entry decisions with 2+ eligible candidates
 
     def counted_trades(self) -> list[TradeRecord]:
         """Trades that closed for a real reason (not the forced close at the end of the data)."""
@@ -298,7 +300,9 @@ class _Engine:
             "poll_rejections_direction": 0, "poll_rejections_short_trend": 0, "poll_rejections_margin": 0,
             "poll_rejections_persistence": 0, "poll_rejections_volatility": 0, "deferred_to_candle_close": 0,
             "half_risk_entries": 0, "stop_moves": 0,
+            "decision_polls_1_candidate": 0, "decision_polls_2_candidates": 0, "decision_polls_3plus_candidates": 0,
         }
+        self.decision_log: list[dict] = []  # Auto decisions with two or more eligible candidates
         self.notes: list[str] = []
         self.last_exit: tuple[str, int] | None = None  # (symbol, hour of exit)
         self.venues = {sym: _rules_venue(p.rules) for sym, p in pairs.items() if p.rules is not None}
@@ -360,13 +364,19 @@ class _Engine:
                 return False, 1.0
             if pol.vol_half_risk_above is not None and v > pol.vol_half_risk_above:
                 scale = 0.5
+        if side == "short" and pol.short_risk_scale < 1.0:
+            scale *= pol.short_risk_scale
         return True, scale
 
-    def _extras(self, sym: str, sig: StrategySignal, aux_idx: int | None, run_n: int) -> dict:
+    def _count_candidates(self, n: int) -> None:
+        key = "decision_polls_1_candidate" if n == 1 else ("decision_polls_2_candidates" if n == 2 else "decision_polls_3plus_candidates")
+        self.counters[key] += 1
+
+    def _extras(self, sym: str, sig: StrategySignal, aux_idx: int | None, run_n: int, n_cand: int = 1) -> dict:
         aux = self.aux[sym]
         gap = abs(sig.fast_ema - sig.slow_ema) / sig.atr if (sig.atr and sig.fast_ema is not None) else None
         return {
-            "gap_atr_at_entry": gap, "persist_polls": run_n,
+            "gap_atr_at_entry": gap, "persist_polls": run_n, "n_candidates": n_cand,
             "vol_pct_90d": aux.vol_pct[aux_idx] if aux_idx is not None else None,
             "ret30d": aux.ret30d[aux_idx] if aux_idx is not None else None,
             "ret72h": aux.ret72h[aux_idx] if aux_idx is not None else None,
@@ -618,14 +628,17 @@ class _Engine:
             return
         sym, sig, side, ai, n, scale = self._pick(elig, ts) if self.cfg.auto else elig[0]
         self.counters["actionable_signals"] += 1
+        self._count_candidates(len(elig))
         if side in self.pol.wait_for_close_sides:
             if not complete_hour:
                 self.counters["deferred_to_candle_close"] += 1
                 return
             self.pending = {"kind": "enter", "symbol": sym, "signal": sig, "window_fn": window_fn(sym), "scale": scale,
-                            "extra": self._extras(sym, sig, ai, n)}
+                            "extra": self._extras(sym, sig, ai, n, len(elig))}
             return
-        self._try_enter(sym, sig, prices[sym], ts, window_fn(sym), risk_scale=scale, extra=self._extras(sym, sig, ai, n))
+        entered = self._try_enter(sym, sig, prices[sym], ts, window_fn(sym), risk_scale=scale, extra=self._extras(sym, sig, ai, n, len(elig)))
+        if self.cfg.auto and len(elig) >= 2:
+            self.decision_log.append({"ts": ts, "chosen": sym, "candidates": [r[0] for r in elig], "entered": entered})
 
     def _decide_closed(self, sigs: dict[str, StrategySignal], aux_idx: dict[str, int | None], window_fn, ts: int) -> dict | None:
         """The hour-close decision. Returned, not executed: execution happens at the next poll."""
@@ -639,7 +652,10 @@ class _Engine:
             return None
         sym, sig, side, ai, n, scale = self._pick(elig, ts) if self.cfg.auto else elig[0]
         self.counters["actionable_signals"] += 1
-        return {"kind": "enter", "symbol": sym, "signal": sig, "window_fn": window_fn(sym), "scale": scale, "extra": self._extras(sym, sig, ai, n)}
+        self._count_candidates(len(elig))
+        if self.cfg.auto and len(elig) >= 2:
+            self.decision_log.append({"ts": ts, "chosen": sym, "candidates": [r[0] for r in elig], "entered": None})
+        return {"kind": "enter", "symbol": sym, "signal": sig, "window_fn": window_fn(sym), "scale": scale, "extra": self._extras(sym, sig, ai, n, len(elig))}
 
     def _execute_pending(self, pending: dict, prices: dict[str, float], ts: int) -> None:
         if pending["kind"] == "exit":
@@ -737,7 +753,7 @@ def run_backtest(
     return RunResult(
         config=asdict(config), symbols=engine.symbols, start_equity=engine.start_equity, end_equity=engine.equity,
         trades=engine.trades, equity=engine.curve, counters=engine.counters,
-        span=(engine.curve[0][0], engine.curve[-1][0]) if engine.curve else (0, 0), notes=engine.notes,
+        span=(engine.curve[0][0], engine.curve[-1][0]) if engine.curve else (0, 0), notes=engine.notes, decisions=engine.decision_log,
     )
 
 

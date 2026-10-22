@@ -202,7 +202,7 @@ def _count_rows(path: Path) -> int:
         return max(sum(1 for _ in fh) - 1, 0)
 
 
-def download_klines(http: PublicHTTP, root: Path, symbol: str, interval: str, *, start_ms: int, now_ms: int, premium: bool = False) -> FileResult:
+def download_klines(http: PublicHTTP, root: Path, symbol: str, interval: str, *, start_ms: int, now_ms: int, premium: bool = False, bounded: bool = False) -> FileResult:
     step = INTERVAL_MS[interval]
     path = premium_path(root, interval, symbol) if premium else kline_path(root, interval, symbol)
     fields = PREMIUM_FIELDS if premium else KLINE_FIELDS
@@ -211,7 +211,10 @@ def download_klines(http: PublicHTTP, root: Path, symbol: str, interval: str, *,
     endpoint = "/fapi/v1/premiumIndexKlines" if premium else "/fapi/v1/klines"
     added = 0
     while cursor < now_ms:
-        data = http.get(endpoint, {"symbol": symbol, "interval": interval, "startTime": cursor, "limit": KLINE_LIMIT})
+        params = {"symbol": symbol, "interval": interval, "startTime": cursor, "limit": KLINE_LIMIT}
+        if bounded:
+            params["endTime"] = now_ms - 1
+        data = http.get(endpoint, params)
         if not data:
             break
         rows: list[list[str]] = []
@@ -233,16 +236,19 @@ def download_klines(http: PublicHTTP, root: Path, symbol: str, interval: str, *,
     return FileResult(path, added, _count_rows(path))
 
 
-def download_funding(http: PublicHTTP, root: Path, symbol: str, *, start_ms: int, now_ms: int) -> FileResult:
+def download_funding(http: PublicHTTP, root: Path, symbol: str, *, start_ms: int, now_ms: int, bounded: bool = False) -> FileResult:
     path = funding_path(root, symbol)
     last = _last_ts(path)
     cursor = start_ms if last is None else last + 1
     added = 0
     while cursor < now_ms:
-        data = http.get("/fapi/v1/fundingRate", {"symbol": symbol, "startTime": cursor, "limit": FUNDING_LIMIT})
+        params = {"symbol": symbol, "startTime": cursor, "limit": FUNDING_LIMIT}
+        if bounded:
+            params["endTime"] = now_ms - 1
+        data = http.get("/fapi/v1/fundingRate", params)
         if not data:
             break
-        rows = [[str(int(r["fundingTime"])), r["fundingRate"], r.get("markPrice", "")] for r in data if int(r["fundingTime"]) >= cursor]
+        rows = [[str(int(r["fundingTime"])), r["fundingRate"], r.get("markPrice", "")] for r in data if cursor <= int(r["fundingTime"]) < now_ms]
         added += _append(path, FUNDING_FIELDS, rows)
         newest = int(data[-1]["fundingTime"])
         if len(data) < FUNDING_LIMIT or newest < cursor:
@@ -323,6 +329,48 @@ def download_all(
             progress(f"{sym} funding: +{res.new_rows} (total {res.total_rows})")
             results[f"funding/{sym}"] = res.new_rows
     manifest = write_manifest(root, now=now)
+    return {"requests": http.requests, "new_rows": results, "files": len(manifest["files"])}
+
+
+def download_range(
+    root: Path,
+    *,
+    pairs: tuple[str, ...] | list[str],
+    since: datetime,
+    until: datetime,
+    intervals: tuple[str, ...] = ("1h", "5m"),
+    include_funding: bool = True,
+    http: PublicHTTP | None = None,
+    progress: Callable[[str], None] = lambda msg: None,
+) -> dict:
+    """Download a fixed calendar range [since, until) into a store of its own. Public market data only.
+
+    Used for the Phase 2 older-history confirmation. Unlike `download_all` the end is explicit, so the store can never
+    reach into the period an earlier store already holds. The caller is responsible for the one-shot guard (see
+    phase2.guard_download)."""
+    if since.tzinfo is None or until.tzinfo is None:
+        raise DownloadError("since and until must be timezone-aware")
+    if until <= since:
+        raise DownloadError("until must be after since")
+    http = http or PublicHTTP()
+    start_ms, until_ms = int(since.timestamp() * 1000), int(until.timestamp() * 1000)
+    symbols = [symbol_for(p) for p in pairs]
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    results: dict[str, int] = {}
+    snapshot_exchange_info(http, root, symbols, today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    for sym in symbols:
+        for interval in intervals:
+            if interval not in INTERVAL_MS:
+                raise DownloadError(f"unsupported interval {interval}")
+            res = download_klines(http, root, sym, interval, start_ms=start_ms, now_ms=until_ms, bounded=True)
+            progress(f"{sym} klines {interval}: +{res.new_rows} (total {res.total_rows})")
+            results[f"klines/{interval}/{sym}"] = res.new_rows
+        if include_funding:
+            res = download_funding(http, root, sym, start_ms=start_ms, now_ms=until_ms, bounded=True)
+            progress(f"{sym} funding: +{res.new_rows} (total {res.total_rows})")
+            results[f"funding/{sym}"] = res.new_rows
+    manifest = write_manifest(root, now=datetime.now(timezone.utc))
     return {"requests": http.requests, "new_rows": results, "files": len(manifest["files"])}
 
 

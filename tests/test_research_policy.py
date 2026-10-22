@@ -352,3 +352,36 @@ def test_acting_on_the_opposite_cross_only_at_the_candle_close_ignores_an_intrab
     close_only = run({"TESTUSDT": p}, MODE_REPLAY, Policy(exit_on_close_only=True)).trades[0]
     assert base.exit_reason == "crossover_exit" and base.exit_ts < T0 + 20 * HOUR
     assert close_only.entry_ts == base.entry_ts and close_only.exit_reason == "end_of_data", "the dip had recovered by the close, so the position was kept"
+
+
+# ------------------------------------------------------------------ Phase 2 additions
+
+
+def test_short_risk_scale_sizes_shorts_smaller_and_leaves_longs_and_entries_alone(synth_store):
+    p = _real_pair(synth_store)
+    base = run_prod({"BTCUSDT": p}, _prod_cfg())
+    half = run_prod({"BTCUSDT": p}, _prod_cfg(policy=Policy(short_risk_scale=0.5)))
+    assert any(t.side == "short" for t in half.trades) and any(t.side == "long" for t in half.trades)
+    cap = 2000.0
+    for t in half.trades:
+        limit = 0.01 * min(cap, t.equity_before) * (0.5 if t.side == "short" else 1.0)
+        assert t.planned_risk <= limit * 1.001
+    # same signals are taken (sizing only): the first trade is identical in timing and side
+    assert [(t.side, t.entry_ts) for t in half.trades[:1]] == [(t.side, t.entry_ts) for t in base.trades[:1]]
+    # a scale of 1.0 is exactly production
+    same = run_prod({"BTCUSDT": p}, _prod_cfg(policy=Policy(short_risk_scale=1.0)))
+    assert [(t.entry_ts, t.net_pnl) for t in same.trades] == [(t.entry_ts, t.net_pnl) for t in base.trades]
+
+
+def test_auto_runs_log_simultaneous_signal_decisions_and_count_them(synth_store):
+    pairs = _two_pairs(synth_store)
+    res = run_prod(pairs, _prod_cfg(auto=True))
+    c = res.counters
+    assert c["decision_polls_1_candidate"] + c["decision_polls_2_candidates"] + c["decision_polls_3plus_candidates"] == c["actionable_signals"]
+    multi = c["decision_polls_2_candidates"] + c["decision_polls_3plus_candidates"]
+    assert len(res.decisions) == multi
+    for d in res.decisions:
+        assert d["chosen"] in d["candidates"] and len(d["candidates"]) >= 2 and isinstance(d["entered"], bool)
+    # single-pair runs never log a decision
+    assert run_prod({"BTCUSDT": pairs["BTCUSDT"]}, _prod_cfg()).decisions == []
+    assert all(t.features["n_candidates"] >= 1 for t in res.trades)

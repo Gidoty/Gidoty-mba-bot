@@ -114,9 +114,19 @@ class Phase1Options:
     screen: analysis.Screen = field(default_factory=analysis.Screen)
 
 
+# Policy fields added after the Phase 1 plan was registered. They are left out of the Phase 1 hash so the
+# registered value (6f29fad5f4cd6e33) keeps identifying exactly the plan that was registered.
+_POST_REGISTRATION_POLICY_FIELDS = frozenset({"short_risk_scale"})
+
+
 def plan_hash(options: Phase1Options | None = None, plan: tuple[Candidate, ...] = PLAN) -> str:
     options = options or Phase1Options()
-    blob = {"plan": [asdict(c) for c in plan], "options": asdict(options)}
+    rows = []
+    for c in plan:
+        d = asdict(c)
+        d["policy"] = {k: v for k, v in d["policy"].items() if k not in _POST_REGISTRATION_POLICY_FIELDS}
+        rows.append(d)
+    blob = {"plan": rows, "options": asdict(options)}
     return hashlib.sha1(json.dumps(blob, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
@@ -223,11 +233,14 @@ class Lab:
                               policy=policy, start_ts=start_ts, end_ts=end_ts)
 
     def run(self, symbols: list[str], cfg: BacktestConfig) -> RunDigest:
+        return self.run_with_decisions(symbols, cfg)[0]
+
+    def run_with_decisions(self, symbols: list[str], cfg: BacktestConfig) -> tuple[RunDigest, list[dict]]:
         pairs = {s: self.load(s) for s in symbols}
         tapes = self.replay_tapes(symbols) if cfg.mode == MODE_REPLAY else None
         ctapes = self.closed_tapes(symbols)
         res = run_backtest(pairs, cfg, tapes=tapes, closed_tapes=ctapes, aux={s: self.aux(s) for s in symbols})
-        return digest(res)
+        return digest(res), res.decisions
 
 
 # ------------------------------------------------------------------ the runner
