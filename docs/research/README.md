@@ -89,3 +89,12 @@ To look at the bot's own recorded trades afterwards (read-only, opens the SQLite
 
 Costs are assumptions. Historical exchange filters are not available, so the latest snapshot is used throughout. Poll phase is fixed to 5-minute
 boundaries. Liquidation is not simulated. Bootstrap intervals assume independent trades. One market cycle is a small sample.
+
+
+## Phase 1 (disciplined experiments)
+
+`docs/research/phase1_preregistration.md` holds the registered plan, the survival screen and the exact commands. In short:
+`python -m mba_bot.research phase1 plan` prints the plan hash, `phase1 run` executes every registered candidate on the development pairs and
+period and writes `phase1_report.md`, and `phase1 lockbox --candidate ID --confirm --reason "..."` opens the sealed final months once.
+The engine used is the Phase 0 engine plus research-only policies; with every policy at its default it reproduces Phase 0 exactly
+(`tests/test_research_phase0_regression.py`). Nothing in Phase 1 touches the trading service.

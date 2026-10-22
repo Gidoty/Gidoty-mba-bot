@@ -1,0 +1,155 @@
+{
+ "AUTO|closed_candle": {
+  "counters": {
+   "actionable_signals": 23,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 23,
+   "liquidation_risk_entries": 0,
+   "polls": 1745,
+   "same_hour_reentries": 0
+  },
+  "curve_sha": "819e7034a51faf0ce83dd64b3ed6bc6907d6b5e0",
+  "end_equity": 1230.91744952,
+  "n": 23,
+  "trades_sha": "1d82846b8a169eed07acd64c00bd194bbede04c3"
+ },
+ "AUTO|production_replay": {
+  "counters": {
+   "actionable_signals": 29,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 29,
+   "liquidation_risk_entries": 0,
+   "polls": 20940,
+   "same_hour_reentries": 15
+  },
+  "curve_sha": "f88559c9991578bb52759c6362789784a3914e88",
+  "end_equity": 1345.99800612,
+  "n": 29,
+  "trades_sha": "4c8807b08a394efba2307168d7273ef86de101f3"
+ },
+ "BTCUSDT|closed_candle": {
+  "counters": {
+   "actionable_signals": 20,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 20,
+   "liquidation_risk_entries": 0,
+   "polls": 1745,
+   "same_hour_reentries": 0
+  },
+  "curve_sha": "1e1e7a82d57c4ecfc785d48991eb5cad2ebb2665",
+  "end_equity": 1075.41918093,
+  "n": 20,
+  "trades_sha": "4410c795978af2fb8a3beb348e70418cfcae2d93"
+ },
+ "BTCUSDT|closed_hourly": {
+  "counters": {
+   "actionable_signals": 20,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 20,
+   "liquidation_risk_entries": 0,
+   "polls": 1745,
+   "same_hour_reentries": 2
+  },
+  "curve_sha": "e0baaaa59322a3147c71a3b121b1f769bc1b96d2",
+  "end_equity": 1076.55641517,
+  "n": 20,
+  "trades_sha": "67cb4e7230927787a28995211ca7d9eb73b4e9be"
+ },
+ "BTCUSDT|production_replay": {
+  "counters": {
+   "actionable_signals": 30,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 30,
+   "liquidation_risk_entries": 0,
+   "polls": 20940,
+   "same_hour_reentries": 19
+  },
+  "curve_sha": "bde7c3fccd92473cf45546d1a510748685d71e56",
+  "end_equity": 1211.59110269,
+  "n": 30,
+  "trades_sha": "0d3b25dfead8e1e14c0da93c372689b69f37af96"
+ },
+ "ETHUSDT|closed_candle": {
+  "counters": {
+   "actionable_signals": 16,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 16,
+   "liquidation_risk_entries": 0,
+   "polls": 1745,
+   "same_hour_reentries": 0
+  },
+  "curve_sha": "a42dbfdfaee02ea5f150d09d7964cf5faaa08d00",
+  "end_equity": 1108.02987779,
+  "n": 16,
+  "trades_sha": "5f3b4e770268ed9431d1a425a15f2ec38ee34f25"
+ },
+ "ETHUSDT|production_replay": {
+  "counters": {
+   "actionable_signals": 24,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 24,
+   "liquidation_risk_entries": 0,
+   "polls": 20940,
+   "same_hour_reentries": 10
+  },
+  "curve_sha": "9214428c41291946f6c10bf2f227abc7b99106de",
+  "end_equity": 1075.46386427,
+  "n": 24,
+  "trades_sha": "ca2968c1f1f6b26e880312eed32361c2b79da5eb"
+ },
+ "SOLUSDT|closed_candle": {
+  "counters": {
+   "actionable_signals": 16,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 16,
+   "liquidation_risk_entries": 0,
+   "polls": 1745,
+   "same_hour_reentries": 0
+  },
+  "curve_sha": "67beb4ff5f79a7fb7a14edd18f78e8f4263229c9",
+  "end_equity": 1062.27268079,
+  "n": 16,
+  "trades_sha": "b9bed68f63dbbc905c8113b23e1ee7916da6ba66"
+ },
+ "SOLUSDT|production_replay": {
+  "counters": {
+   "actionable_signals": 25,
+   "blocked_exchange_filters": 0,
+   "blocked_no_rules": 0,
+   "blocked_no_stop_order": 0,
+   "blocked_size_zero": 0,
+   "entries": 25,
+   "liquidation_risk_entries": 0,
+   "polls": 20940,
+   "same_hour_reentries": 15
+  },
+  "curve_sha": "4c6142b3333f0f8aaee20d8ebcf7852fb18ad95c",
+  "end_equity": 1148.73053598,
+  "n": 25,
+  "trades_sha": "363c9b44d3641a202dde83dda9c90b4a63b8a62a"
+ }
+}

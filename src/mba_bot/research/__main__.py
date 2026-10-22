@@ -5,6 +5,7 @@
   baseline   backtest the current strategy on a store and write the report
   backtest   one quick run (single pair or Auto Select) printed to the terminal
   live       analyse the bot's own recorded trades and decisions (opens the database read-only)
+  phase1     the pre-registered Phase 1 experiments (plan | run | lockbox)
   registry   show the experiment ledger
   synthetic  write a SYNTHETIC store for trying the tooling without market access
 
@@ -64,6 +65,21 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--database", default=None, help="path to the SQLite file (default: the path in DATABASE_URL)")
     lv.add_argument("--fee-bps", type=float, default=5.0)
     lv.add_argument("--json", action="store_true")
+
+    p1 = sub.add_parser("phase1", help="pre-registered Phase 1 experiments")
+    p1.add_argument("action", choices=["plan", "run", "lockbox"])
+    p1.add_argument("--root", default="research_data")
+    p1.add_argument("--out", default="research_out/phase1")
+    p1.add_argument("--baseline-json", default="research_out/baseline.json", help="the Phase 0 baseline.json, to prove this engine reproduces it")
+    p1.add_argument("--capital", type=float, default=1000.0)
+    p1.add_argument("--fee-bps", type=float, default=5.0)
+    p1.add_argument("--expect-plan-hash", default=None, help="refuse to run if the plan differs from the registered one")
+    p1.add_argument("--expect-data-fingerprint", default=None, help="refuse to run on a dataset other than the one the baseline used")
+    p1.add_argument("--skip-repro", action="store_true")
+    p1.add_argument("--only", default=None, help="comma separated candidate ids (test runs; marks the run PARTIAL)")
+    p1.add_argument("--candidate", default=None, help="lockbox: the single candidate to score")
+    p1.add_argument("--confirm", action="store_true", help="lockbox: required; opens the sealed final months, once")
+    p1.add_argument("--reason", default="", help="lockbox: why it is being opened")
 
     rg = sub.add_parser("registry", help="show the experiment ledger")
     rg.add_argument("--path", default="research_out/trials.jsonl")
@@ -141,6 +157,44 @@ def main(argv: list[str] | None = None) -> int:
         rep = LR.live_report(db, fee_bps=args.fee_bps)
         print(json.dumps(rep, indent=1, default=str) if args.json else LR.render(rep))
         return 0
+
+    if args.cmd == "phase1":
+        from . import phase1 as P1, phase1_report as P1R
+        from .engine import AccountParams, CostModel
+
+        opts = P1.Phase1Options(account=AccountParams(allocated_capital=args.capital), costs=CostModel(taker_fee_bps=args.fee_bps))
+        plan = P1.PLAN
+        if args.only:
+            wanted = {x.strip() for x in args.only.split(",")}
+            plan = tuple(c for c in P1.PLAN if c.id in wanted)
+        if args.action == "plan":
+            print(f"plan hash {P1.plan_hash(opts)}  ({len(P1.PLAN)} candidates, {sum(max(1, len(c.seeds)) for c in P1.PLAN)} trials)")
+            for c in P1.PLAN:
+                print(f"  {c.id:<10} {c.hypothesis} {'diag ' if c.diagnostic else '     '}{c.scope:<5} {c.label}")
+            return 0
+        if args.expect_plan_hash and args.expect_plan_hash != P1.plan_hash(opts):
+            print(f"plan hash {P1.plan_hash(opts)} does not match the registered {args.expect_plan_hash}; refusing to run", file=sys.stderr)
+            return 3
+        if args.action == "run":
+            import json as _json
+
+            baseline = Path(args.baseline_json) if args.baseline_json and Path(args.baseline_json).exists() else None
+            res = P1.run_phase1(Path(args.root), Path(args.out), opts, plan=plan, baseline_json=baseline, skip_repro=args.skip_repro, expect_fingerprint=args.expect_data_fingerprint, progress=lambda m: print(m, flush=True))
+            out = Path(args.out)
+            (out / "phase1_results.json").write_text(_json.dumps(res, indent=1, default=str))
+            (out / "phase1_report.md").write_text(P1R.render(res))
+            print(f"report: {out / 'phase1_report.md'}")
+            print(f"plan hash {res['meta']['plan_hash']} | survivors: {', '.join(res['survivors']) or 'none'}")
+            return 0
+        if args.action == "lockbox":
+            import json as _json
+
+            if not args.candidate:
+                print("--candidate is required", file=sys.stderr)
+                return 2
+            res = P1.run_lockbox(Path(args.root), Path(args.out), args.candidate, opts, confirm=args.confirm, reason=args.reason, progress=lambda m: print(m, flush=True))
+            print(_json.dumps(res, indent=1, default=str))
+            return 0
 
     if args.cmd == "registry":
         from .validation import TrialRegistry

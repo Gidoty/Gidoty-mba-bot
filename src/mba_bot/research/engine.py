@@ -22,6 +22,12 @@ TWO EXECUTION MODES
                      first poll of the next hour) or hourly-only data (execution at the next
                      bar's open).
 
+PHASE 1 ADDITIONS (research only; the defaults reproduce Phase 0 exactly, pinned by a golden test)
+  Policy       optional entry filters, exits and Auto scoring that production does NOT have. Every field
+               defaults to "off". They exist so a candidate change can be measured before anyone builds it.
+  SignalTape   the production signal per poll, computed once and shared (see tape.py), so an experiment
+               costs seconds instead of minutes.
+
 KNOWN LIMITS (also written into every report): historical exchange filters are unavailable (the
 latest snapshot is used); liquidation and margin calls are not simulated, only counted when a stop
 sits beyond ~80% of the liquidation distance; poll phase is fixed to 5-minute boundaries; stop
@@ -30,11 +36,10 @@ triggers assume the last-price trigger; a stop-hit bar's favourable excursion is
 from __future__ import annotations
 
 import bisect
+import random
 from dataclasses import asdict, dataclass, field
-from typing import Any
 
 from ..features import compute_features
-from ..pair_selection import PairCandidate, rank_candidates
 from ..risk import (
     InvalidRiskParameters,
     apply_exposure_ceiling,
@@ -42,8 +47,10 @@ from ..risk import (
     compute_position_size,
     compute_stop_loss,
 )
-from ..strategy import Candle, SignalType, StrategySignal, generate_signal
+from ..strategy import Candle, SignalType, StrategySignal
 from ..venue import FuturesVenue, MarketRules
+from . import tape as tapelib
+from .tape import CODE_BEAR, CODE_BULL, CODE_NA, HourlyAux, SignalTape
 
 HOUR = 3_600_000
 MODE_REPLAY = "production_replay"
@@ -111,6 +118,35 @@ class CostModel:
 
 
 @dataclass(frozen=True)
+class Policy:
+    """Research-only rules layered on the production decision path. All off by default."""
+
+    # H1: entry confirmation (replay mode). `confirm_sides` says which sides the rules apply to.
+    confirm_sides: tuple[str, ...] = ("long", "short")
+    confirm_polls: int = 0  # the same actionable signal on this many consecutive scanning polls
+    confirm_margin_atr: float = 0.0  # |fast - slow| / ATR at the poll must be at least this
+    wait_for_close_sides: tuple[str, ...] = ()  # these sides enter only on a CLOSED hourly candle, executed one poll later
+    # direction
+    long_allowed: bool = True
+    short_allowed: bool = True
+    short_max_ret30d: float | None = None  # shorts only while the trailing 30-day return is at or below this
+    # H2: volatility (causal percentile of the pair's own ATR% over the trailing 90 days)
+    vol_skip_above: float | None = None
+    vol_half_risk_above: float | None = None
+    # H4: exits (the stop only ever tightens; it moves at a poll and applies from the next bar)
+    exit_on_close_only: bool = False  # the strategy's opposite-crossover exit is acted on only when the hourly candle closes
+    breakeven_at_r: float | None = None
+    trail_atr_mult: float | None = None  # trailing distance in entry-ATR multiples from the best price seen
+    trail_start_r: float = 1.0  # the trail arms once the trade has been this many R in profit
+    # H5: Auto Select scoring: production | random | calm | momentum | composite
+    auto_score: str = "production"
+    auto_seed: int = 0
+
+    def is_default(self) -> bool:
+        return self == Policy()
+
+
+@dataclass(frozen=True)
 class BacktestConfig:
     mode: str = MODE_REPLAY
     strategy: StrategyParams = field(default_factory=StrategyParams)
@@ -118,6 +154,7 @@ class BacktestConfig:
     costs: CostModel = field(default_factory=CostModel)
     auto: bool = False  # True: rank the whole universe like Auto Select; False: one fixed pair
     allow_short: bool = True
+    policy: Policy = field(default_factory=Policy)
     start_ts: int | None = None  # inclusive, ms
     end_ts: int | None = None  # exclusive, ms
     warmup_bars: int | None = None  # hourly bars of history required before the first decision
@@ -205,6 +242,7 @@ class _Position:
     equity_before: float
     entry_signal: str
     atr_pct: float | None
+    atr_entry: float
     features: dict
     liquidation_risk: bool
     same_hour_reentry: bool
@@ -212,6 +250,8 @@ class _Position:
     fund_idx: int = 0
     best: float = 0.0
     worst: float = 0.0
+    stop_kind: str | None = None
+    stop_moves: int = 0
 
 
 def _rules_venue(rules: MarketRules) -> FuturesVenue:
@@ -226,10 +266,20 @@ def _sign(side: str) -> int:
     return 1 if side == "long" else -1
 
 
+AUTO_SCORES = ("production", "random", "calm", "momentum", "composite")
+
+
+def production_score(sig: StrategySignal) -> float:
+    """Auto Select's ranking score (pair_selection.rank_candidates): EMA separation in ATR units."""
+    return abs(sig.fast_ema - sig.slow_ema) / sig.atr
+
+
 class _Engine:
-    def __init__(self, pairs: dict[str, PairData], config: BacktestConfig):
+    def __init__(self, pairs: dict[str, PairData], config: BacktestConfig, aux: dict[str, HourlyAux]):
         self.cfg = config
+        self.pol = config.policy
         self.pairs = pairs
+        self.aux = aux
         self.symbols = list(pairs)
         s = config.strategy
         self.sp = dict(
@@ -245,17 +295,19 @@ class _Engine:
         self.counters: dict[str, int] = {
             "polls": 0, "actionable_signals": 0, "entries": 0, "blocked_exchange_filters": 0, "blocked_size_zero": 0,
             "blocked_no_rules": 0, "blocked_no_stop_order": 0, "same_hour_reentries": 0, "liquidation_risk_entries": 0,
+            "poll_rejections_direction": 0, "poll_rejections_short_trend": 0, "poll_rejections_margin": 0,
+            "poll_rejections_persistence": 0, "poll_rejections_volatility": 0, "deferred_to_candle_close": 0,
+            "half_risk_entries": 0, "stop_moves": 0,
         }
         self.notes: list[str] = []
         self.last_exit: tuple[str, int] | None = None  # (symbol, hour of exit)
         self.venues = {sym: _rules_venue(p.rules) for sym, p in pairs.items() if p.rules is not None}
-        self.hour_ts = {sym: [c.timestamp for c in p.hourly] for sym, p in pairs.items()}
-        self.hour_pos = {sym: {t: i for i, t in enumerate(ts)} for sym, ts in self.hour_ts.items()}
+        self.hour_pos = {sym: {c.timestamp: i for i, c in enumerate(p.hourly)} for sym, p in pairs.items()}
+        self.runs: dict[str, tuple[SignalType, int]] = {}  # consecutive scanning polls with the same actionable signal
+        self.pending: dict | None = None
+        self._rng_cache: dict = {}
 
     # -------- signals
-
-    def _signal(self, window: list[Candle]) -> StrategySignal:
-        return generate_signal(window, **self.sp)
 
     def _closed_window(self, sym: str, last_idx: int) -> list[Candle]:
         """The hourly candles ending at index `last_idx` (inclusive) - at most ohlcv_limit of them."""
@@ -278,9 +330,76 @@ class _Engine:
     def _sell(self, ref: float, slip: float) -> float:
         return ref * (1.0 - slip)
 
+    # -------- policy: is this signal allowed to become an entry?
+
+    def _eligible(self, sym: str, sig: StrategySignal, side: str, aux_idx: int | None, run_n: int, *, replay: bool) -> tuple[bool, float]:
+        """Returns (allowed, risk_scale). Rules are checked in a fixed order and the first failure is counted."""
+        pol, c = self.pol, self.counters
+        if (side == "long" and not pol.long_allowed) or (side == "short" and not pol.short_allowed):
+            c["poll_rejections_direction"] += 1
+            return False, 1.0
+        aux = self.aux[sym]
+        if side == "short" and pol.short_max_ret30d is not None and aux_idx is not None:
+            r = aux.ret30d[aux_idx]
+            if r is not None and r > pol.short_max_ret30d:
+                c["poll_rejections_short_trend"] += 1
+                return False, 1.0
+        if side in pol.confirm_sides:
+            if pol.confirm_margin_atr > 0 and sig.atr:
+                if abs(sig.fast_ema - sig.slow_ema) / sig.atr < pol.confirm_margin_atr:
+                    c["poll_rejections_margin"] += 1
+                    return False, 1.0
+            if replay and pol.confirm_polls > 1 and run_n < pol.confirm_polls:
+                c["poll_rejections_persistence"] += 1
+                return False, 1.0
+        scale = 1.0
+        v = aux.vol_pct[aux_idx] if aux_idx is not None else None
+        if v is not None:
+            if pol.vol_skip_above is not None and v > pol.vol_skip_above:
+                c["poll_rejections_volatility"] += 1
+                return False, 1.0
+            if pol.vol_half_risk_above is not None and v > pol.vol_half_risk_above:
+                scale = 0.5
+        return True, scale
+
+    def _extras(self, sym: str, sig: StrategySignal, aux_idx: int | None, run_n: int) -> dict:
+        aux = self.aux[sym]
+        gap = abs(sig.fast_ema - sig.slow_ema) / sig.atr if (sig.atr and sig.fast_ema is not None) else None
+        return {
+            "gap_atr_at_entry": gap, "persist_polls": run_n,
+            "vol_pct_90d": aux.vol_pct[aux_idx] if aux_idx is not None else None,
+            "ret30d": aux.ret30d[aux_idx] if aux_idx is not None else None,
+            "ret72h": aux.ret72h[aux_idx] if aux_idx is not None else None,
+        }
+
+    # -------- Auto Select scoring
+
+    def _pick(self, elig: list[tuple], ts: int) -> tuple:
+        """`elig` rows: (symbol, signal, side, aux_idx, run_n, risk_scale). Production keeps list order for ties."""
+        mode = self.pol.auto_score
+        if mode == "production":
+            return sorted(elig, key=lambda r: production_score(r[1]), reverse=True)[0]
+        if mode == "random":
+            return random.Random(f"{self.pol.auto_seed}|{ts}").choice(elig)
+        calm = {r[0]: 1.0 - (self.aux[r[0]].vol_pct[r[3]] if (r[3] is not None and self.aux[r[0]].vol_pct[r[3]] is not None) else 0.5) for r in elig}
+        mom = {}
+        for r in elig:
+            a = self.aux[r[0]]
+            ret = a.ret72h[r[3]] if r[3] is not None else None
+            apct = r[1].atr_pct or 0.0
+            mom[r[0]] = (_sign(r[2]) * ret / apct) if (ret is not None and apct) else 0.0
+        if mode == "calm":
+            return sorted(elig, key=lambda r: (calm[r[0]], production_score(r[1])), reverse=True)[0]
+        if mode == "momentum":
+            return sorted(elig, key=lambda r: (mom[r[0]], production_score(r[1])), reverse=True)[0]
+        # composite: average of the two ranks (a higher value is better in each)
+        rc = {r[0]: i for i, r in enumerate(sorted(elig, key=lambda r: calm[r[0]]))}
+        rm = {r[0]: i for i, r in enumerate(sorted(elig, key=lambda r: mom[r[0]]))}
+        return sorted(elig, key=lambda r: (rc[r[0]] + rm[r[0]], production_score(r[1])), reverse=True)[0]
+
     # -------- entry (mirrors trader._maybe_enter's live Futures branch)
 
-    def _try_enter(self, sym: str, sig: StrategySignal, price: float, ts: int, window: list[Candle]) -> bool:
+    def _try_enter(self, sym: str, sig: StrategySignal, price: float, ts: int, window_fn, *, risk_scale: float = 1.0, extra: dict | None = None) -> bool:
         side = self._side_for(sig)
         if side is None or not sig.atr:
             return False
@@ -298,7 +417,7 @@ class _Engine:
             if effective_capital <= 0:
                 return False
             size = compute_position_size(
-                account_balance=effective_capital, risk_pct=acct.risk_pct, entry_price=price, stop_price=stop_raw,
+                account_balance=effective_capital, risk_pct=acct.risk_pct * risk_scale, entry_price=price, stop_price=stop_raw,
                 max_risk_pct=acct.max_risk_pct,
             )
             if size.quantity <= 0:
@@ -327,19 +446,24 @@ class _Engine:
         liq = stop_dist_pct > 0.8 / acct.leverage
         same_hour = self.last_exit is not None and self.last_exit == (sym, (ts - 1) // HOUR * HOUR)
         feats = compute_features(
-            window, ema_fast_period=sp.ema_fast_period, ema_slow_period=sp.ema_slow_period, atr_period=sp.atr_period,
+            window_fn(), ema_fast_period=sp.ema_fast_period, ema_slow_period=sp.ema_slow_period, atr_period=sp.atr_period,
             atr_rolling_window=sp.atr_rolling_window, now_ms=ts,
         )
         feats["bar_progress_at_entry"] = feats.pop("last_bar_progress", None)
+        if extra:
+            feats.update(extra)
         fund = self.pairs[sym].funding
         self.pos = _Position(
             symbol=sym, side=side, qty=qty, signal_price=price, entry_fill=fill, stop=stop, stop_raw=stop_raw,
             planned_risk=qty * abs(price - stop_raw), entry_ts=ts, fee_entry=fee, slip_entry=slip_cost,
-            equity_before=self.equity, entry_signal=sig.signal.value, atr_pct=sig.atr_pct, features=feats,
+            equity_before=self.equity, entry_signal=sig.signal.value, atr_pct=sig.atr_pct, atr_entry=sig.atr, features=feats,
             liquidation_risk=liq, same_hour_reentry=same_hour, fund_idx=bisect.bisect_right([f[0] for f in fund], ts),
             best=price, worst=price,
         )
+        self.runs.clear()
         self.counters["entries"] += 1
+        if risk_scale < 1.0:
+            self.counters["half_risk_entries"] += 1
         if same_hour:
             self.counters["same_hour_reentries"] += 1
         if liq:
@@ -366,6 +490,8 @@ class _Engine:
             mfe, mae = (p.best - p.signal_price) / per_unit, (p.signal_price - p.worst) / per_unit
         else:
             mfe, mae = (p.signal_price - p.worst) / per_unit, (p.best - p.signal_price) / per_unit
+        if p.stop_moves:
+            p.features["stop_moves"] = p.stop_moves
         self.trades.append(
             TradeRecord(
                 symbol=p.symbol, side=p.side, entry_ts=p.entry_ts, exit_ts=ts, signal_price=p.signal_price,
@@ -399,15 +525,16 @@ class _Engine:
         if p is None:
             return False
         _, stop_slip = self.cfg.costs.slip(p.symbol)
+        reason = p.stop_kind or "stop_loss"
         if p.side == "long" and bar.low <= p.stop:
             p.worst = min(p.worst, bar.low)  # the adverse side of a stop-hit bar is known; the favourable side is not
             ref = min(bar.open, p.stop)  # a gap open below the stop fills at the open
-            self._close(ref, self._sell(ref, stop_slip), bar_end, "stop_loss")
+            self._close(ref, self._sell(ref, stop_slip), bar_end, reason)
             return True
         if p.side == "short" and bar.high >= p.stop:
             p.best = max(p.best, bar.high)
             ref = max(bar.open, p.stop)
-            self._close(ref, self._buy(ref, stop_slip), bar_end, "stop_loss")
+            self._close(ref, self._buy(ref, stop_slip), bar_end, reason)
             return True
         return False
 
@@ -417,6 +544,33 @@ class _Engine:
             return
         p.best = max(p.best, bar.high)
         p.worst = min(p.worst, bar.low)
+
+    def _update_stops(self, last_close: float) -> None:
+        """Breakeven and trailing stop. Evaluated at a poll from bars already completed; the new stop applies
+        from the NEXT bar, as a cancel-and-replace at the exchange would. It only ever moves toward the price."""
+        pol, p = self.pol, self.pos
+        if p is None or (pol.breakeven_at_r is None and pol.trail_atr_mult is None):
+            return
+        long = p.side == "long"
+        per_unit = abs(p.signal_price - p.stop_raw) or 1e-12
+        mfe_r = ((p.best - p.signal_price) if long else (p.signal_price - p.worst)) / per_unit
+        venue = self.venues.get(p.symbol)
+        if venue is None:
+            return
+        levels: list[tuple[float, str]] = []
+        fee = self.cfg.costs.fee()
+        if pol.breakeven_at_r is not None and mfe_r >= pol.breakeven_at_r:
+            levels.append((p.entry_fill * (1 + 2 * fee) if long else p.entry_fill * (1 - 2 * fee), "breakeven_stop"))
+        if pol.trail_atr_mult is not None and mfe_r >= pol.trail_start_r and p.atr_entry:
+            dist = pol.trail_atr_mult * p.atr_entry
+            levels.append((p.best - dist if long else p.worst + dist, "trailing_stop"))
+        for level, kind in sorted(levels, key=lambda x: x[0], reverse=long):
+            level = venue.round_stop(level, side=p.side)
+            if long and p.stop < level < last_close or (not long) and last_close < level < p.stop:
+                p.stop, p.stop_kind = level, kind
+                p.stop_moves += 1
+                self.counters["stop_moves"] += 1
+                return
 
     def _market_exit(self, price: float, ts: int, reason: str) -> None:
         p = self.pos
@@ -432,56 +586,105 @@ class _Engine:
             side == "short" and sig.signal == SignalType.BULLISH_CROSSOVER
         )
 
-    def _decide(self, windows: dict[str, list[Candle]], prices: dict[str, float], ts: int) -> None:
-        """One poll's worth of decisions on the supplied windows (production's `process_account`)."""
+    def _scan(self, sigs: dict[str, StrategySignal], aux_idx: dict[str, int | None], *, replay: bool) -> list[tuple]:
+        """Eligible entry candidates among `sigs`: rows (symbol, signal, side, aux_idx, run_n, risk_scale)."""
+        elig = []
+        for sym, sig in sigs.items():
+            side = self._side_for(sig)
+            if side is None:
+                self.runs.pop(sym, None)
+                continue
+            last = self.runs.get(sym)
+            n = last[1] + 1 if (last is not None and last[0] == sig.signal) else 1
+            self.runs[sym] = (sig.signal, n)
+            if self.cfg.auto and not sig.atr:
+                continue
+            ok, scale = self._eligible(sym, sig, side, aux_idx.get(sym), n, replay=replay)
+            if ok:
+                elig.append((sym, sig, side, aux_idx.get(sym), n, scale))
+        return elig
+
+    def _decide_replay(self, sigs: dict[str, StrategySignal], prices: dict[str, float], ts: int, aux_idx: dict[str, int | None],
+                       window_fn, complete_hour: bool) -> None:
+        """One poll's worth of decisions (production's `process_account`)."""
         self.counters["polls"] += 1
         if self.pos is not None:
             sym = self.pos.symbol
-            sig = self._signal(windows[sym])
-            if self._is_opposite(self.pos.side, sig):
+            if self._is_opposite(self.pos.side, sigs[sym]) and (complete_hour or not self.pol.exit_on_close_only):
                 self._market_exit(prices[sym], ts, "crossover_exit")
             return
-        if self.cfg.auto:
-            candidates = [PairCandidate(pair=s, candles=w) for s, w in windows.items()]
-            ranked = rank_candidates(candidates, market_type="futures", **self.sp)
-            if not ranked:
-                return
-            sym = ranked[0].pair
-            sig = self._signal(windows[sym])
-        else:
-            sym = self.symbols[0]
-            sig = self._signal(windows[sym])
-        if self._side_for(sig) is None:
+        elig = self._scan(sigs, aux_idx, replay=True)
+        if not elig:
             return
+        sym, sig, side, ai, n, scale = self._pick(elig, ts) if self.cfg.auto else elig[0]
         self.counters["actionable_signals"] += 1
-        self._try_enter(sym, sig, prices[sym], ts, windows[sym])
+        if side in self.pol.wait_for_close_sides:
+            if not complete_hour:
+                self.counters["deferred_to_candle_close"] += 1
+                return
+            self.pending = {"kind": "enter", "symbol": sym, "signal": sig, "window_fn": window_fn(sym), "scale": scale,
+                            "extra": self._extras(sym, sig, ai, n)}
+            return
+        self._try_enter(sym, sig, prices[sym], ts, window_fn(sym), risk_scale=scale, extra=self._extras(sym, sig, ai, n))
 
-    def _snapshot(self, ts: int, marks: dict[str, float]) -> None:
+    def _decide_closed(self, sigs: dict[str, StrategySignal], aux_idx: dict[str, int | None], window_fn, ts: int) -> dict | None:
+        """The hour-close decision. Returned, not executed: execution happens at the next poll."""
+        self.counters["polls"] += 1
+        if self.pos is not None:
+            if self._is_opposite(self.pos.side, sigs[self.pos.symbol]):
+                return {"kind": "exit", "symbol": self.pos.symbol}
+            return None
+        elig = self._scan(sigs, aux_idx, replay=False)
+        if not elig:
+            return None
+        sym, sig, side, ai, n, scale = self._pick(elig, ts) if self.cfg.auto else elig[0]
+        self.counters["actionable_signals"] += 1
+        return {"kind": "enter", "symbol": sym, "signal": sig, "window_fn": window_fn(sym), "scale": scale, "extra": self._extras(sym, sig, ai, n)}
+
+    def _execute_pending(self, pending: dict, prices: dict[str, float], ts: int) -> None:
+        if pending["kind"] == "exit":
+            if self.pos is not None and self.pos.symbol == pending["symbol"]:
+                self._market_exit(prices[pending["symbol"]], ts, "crossover_exit")
+        elif self.pos is None:
+            # ATR comes from the closed-candle signal; the stop is placed from the actual execution price
+            self._try_enter(pending["symbol"], pending["signal"], prices[pending["symbol"]], ts, pending["window_fn"],
+                            risk_scale=pending["scale"], extra=pending["extra"])
+
+    def _snapshot(self, ts: int, mark: float | None) -> None:
         eq = self.equity
         p = self.pos
-        if p is not None:
-            eq += (marks[p.symbol] - p.signal_price) * p.qty * _sign(p.side) - p.funding_paid - p.fee_entry - p.slip_entry
+        if p is not None and mark is not None:
+            eq += (mark - p.signal_price) * p.qty * _sign(p.side) - p.funding_paid - p.fee_entry - p.slip_entry
         self.curve.append((ts, eq))
 
 
-# ------------------------------------------------------------------ the two walkers
+# ------------------------------------------------------------------ driver
 
 
-def _common_timeline(pairs: dict[str, PairData], cfg: BacktestConfig, use_exec: bool) -> list[int]:
+def _full_timeline(pairs: dict[str, PairData], use_exec: bool) -> list[int]:
     sets = []
     for p in pairs.values():
         bars = p.exec_bars if use_exec else p.hourly
         sets.append({c.timestamp for c in bars})
-    common = set.intersection(*sets)
-    out = sorted(common)
-    if cfg.start_ts is not None:
-        out = [t for t in out if t >= cfg.start_ts]
-    if cfg.end_ts is not None:
-        out = [t for t in out if t < cfg.end_ts]
-    return out
+    return sorted(set.intersection(*sets))
 
 
-def run_backtest(pairs: dict[str, PairData], config: BacktestConfig) -> RunResult:
+def timeline_key(timeline: list[int]) -> str:
+    """Identifies a timeline for caching a tape built on it."""
+    return f"{len(timeline)}:{timeline[0] if timeline else 0}:{timeline[-1] if timeline else 0}"
+
+
+def run_backtest(
+    pairs: dict[str, PairData],
+    config: BacktestConfig,
+    *,
+    tapes: dict[str, SignalTape] | None = None,
+    closed_tapes: dict[str, SignalTape] | None = None,
+    aux: dict[str, HourlyAux] | None = None,
+) -> RunResult:
+    """`tapes` are the replay-mode signal tapes (built on the FULL common 5-minute timeline), `closed_tapes`
+    the closed-candle ones (one row per hourly candle). Both are optional: when absent they are built here.
+    Supplying them only makes repeated runs faster; the result is identical."""
     if not pairs:
         raise BacktestError("no pairs supplied")
     if config.mode not in (MODE_REPLAY, MODE_CLOSED):
@@ -490,208 +693,216 @@ def run_backtest(pairs: dict[str, PairData], config: BacktestConfig) -> RunResul
         raise BacktestError("auto mode needs a universe of at least two pairs")
     if not config.auto and len(pairs) != 1:
         raise BacktestError("fixed-pair mode takes exactly one pair")
+    if config.policy.auto_score not in AUTO_SCORES:
+        raise BacktestError(f"unknown auto_score {config.policy.auto_score!r}")
     have_exec = all(p.exec_bars for p in pairs.values())
     if config.mode == MODE_REPLAY and not have_exec:
         raise BacktestError("production_replay needs 5-minute data for every pair (it replays the 5-minute polls)")
-    engine = _Engine(pairs, config)
+    sp = dict(
+        ema_fast_period=config.strategy.ema_fast_period, ema_slow_period=config.strategy.ema_slow_period, atr_period=config.strategy.atr_period,
+        atr_flat_threshold=config.strategy.atr_flat_threshold, atr_rolling_window=config.strategy.atr_rolling_window,
+    )
+    limit = config.strategy.ohlcv_limit
+    warm = config.warmup_bars if config.warmup_bars is not None else max(config.strategy.ema_slow_period + 5, config.strategy.atr_rolling_window + 5)
+    if aux is None:
+        aux = {s: tapelib.build_hourly_aux(p.hourly, config.strategy.atr_period) for s, p in pairs.items()}
+    engine = _Engine(pairs, config, aux)
+
+    use_exec = have_exec
+    timeline = _full_timeline(pairs, use_exec)
+    if not timeline:
+        raise BacktestError("the pairs share no " + ("5-minute" if use_exec else "hourly") + " timestamps")
+    k0 = bisect.bisect_left(timeline, config.start_ts) if config.start_ts is not None else 0
+    k1 = bisect.bisect_left(timeline, config.end_ts) if config.end_ts is not None else len(timeline)
+    if k0 >= k1:
+        raise BacktestError("the requested window contains no data")
+
     if config.mode == MODE_REPLAY:
-        _walk_replay(engine)
-    elif have_exec:
-        _walk_closed_5m(engine)
-    else:
-        _walk_closed_hourly(engine)
-    _diagnose_confirmation(engine)
-    if config.mode == MODE_REPLAY:
+        if tapes is None:
+            tapes = {s: tapelib.build_replay_tape(s, p.hourly, timeline, p.exec_bars, sp, limit=limit, warm=warm) for s, p in pairs.items()}
+        for s, t in tapes.items():
+            if len(t) != len(timeline):
+                raise BacktestError(f"the replay tape for {s} was built on a different timeline")
+        _walk_replay(engine, timeline, k0, k1, tapes)
         engine.notes.append("production_replay: signals were read from the still-forming hourly candle at 5-minute polls")
+    else:
+        if closed_tapes is None:
+            closed_tapes = {s: tapelib.build_closed_tape(s, p.hourly, sp, limit=limit, warm=warm) for s, p in pairs.items()}
+        if have_exec:
+            _walk_closed_5m(engine, timeline, k0, k1, closed_tapes)
+        else:
+            engine.notes.append("hourly-only execution: entries at the next bar's open; intrabar order of events inside a bar is unknown")
+            _walk_closed_hourly(engine, timeline, k0, k1, closed_tapes)
+    _diagnose_confirmation(engine, closed_tapes, sp, limit, warm)
     return RunResult(
-        config=_config_dict(config), symbols=engine.symbols, start_equity=engine.start_equity, end_equity=engine.equity,
+        config=asdict(config), symbols=engine.symbols, start_equity=engine.start_equity, end_equity=engine.equity,
         trades=engine.trades, equity=engine.curve, counters=engine.counters,
         span=(engine.curve[0][0], engine.curve[-1][0]) if engine.curve else (0, 0), notes=engine.notes,
     )
 
 
-def _config_dict(config: BacktestConfig) -> dict[str, Any]:
-    return asdict(config)
+# --------------------------- walkers
 
 
-# --------------------------- production_replay
+def _aligned_bars(pairs: dict[str, PairData], timeline: list[int], use_exec: bool) -> dict[str, list[Candle]]:
+    out = {}
+    for s, p in pairs.items():
+        by_ts = {c.timestamp: c for c in (p.exec_bars if use_exec else p.hourly)}
+        out[s] = [by_ts[t] for t in timeline]
+    return out
 
 
-def _walk_replay(e: _Engine) -> None:
-    cfg = e.cfg
-    limit = cfg.strategy.ohlcv_limit
-    warm = cfg.warmup_bars if cfg.warmup_bars is not None else max(cfg.strategy.ema_slow_period + 5, cfg.strategy.atr_rolling_window + 5)
-    timeline = _common_timeline(e.pairs, cfg, use_exec=True)
-    if not timeline:
-        raise BacktestError("the pairs share no 5-minute timestamps")
+def _walk_replay(e: _Engine, tl: list[int], k0: int, k1: int, tapes: dict[str, SignalTape]) -> None:
     step = 300_000
-    bars = {s: {c.timestamp: c for c in p.exec_bars} for s, p in e.pairs.items()}
-    e.curve.append((timeline[0], e.equity))
-    forming: dict[str, list[float]] = {}  # symbol -> [hour_start, o, h, l, c, v]
-    for ts in timeline:
+    limit = e.cfg.strategy.ohlcv_limit
+    bars_at = _aligned_bars(e.pairs, tl, True)
+    e.curve.append((tl[k0], e.equity))
+
+    def window_for(k: int, hs: int):
+        def factory(sym: str):
+            def build() -> list[Candle]:
+                idx = e.hour_pos[sym][hs]
+                j = k
+                bars = bars_at[sym]
+                while j - 1 >= 0 and tl[j - 1] - tl[j - 1] % HOUR == hs:
+                    j -= 1
+                chunk = bars[j : k + 1]
+                forming = Candle(hs, chunk[0].open, max(c.high for c in chunk), min(c.low for c in chunk), chunk[-1].close, sum(c.volume for c in chunk))
+                return e.pairs[sym].hourly[max(0, idx - (limit - 1)) : idx] + [forming]
+            return build
+        return factory
+
+    for k in range(k0, k1):
+        ts = tl[k]
+        end = ts + step
         hs = ts - ts % HOUR
-        end = ts + step
-        prices: dict[str, float] = {}
-        for sym in e.symbols:
-            b = bars[sym][ts]
-            f = forming.get(sym)
-            if f is None or f[0] != hs:
-                forming[sym] = [hs, b.open, b.high, b.low, b.close, b.volume]
-            else:
-                f[2] = max(f[2], b.high)
-                f[3] = min(f[3], b.low)
-                f[4] = b.close
-                f[5] += b.volume
-            prices[sym] = b.close
         if e.pos is not None:
-            b = bars[e.pos.symbol][ts]
-            e._apply_funding(ts, end, b.open)
-            stopped = e._check_stop(b, end)
-            if not stopped:
-                e._track_excursion(b)
-        # the poll at the end of this 5-minute bar
-        ready = {}
-        for sym in e.symbols:
-            idx = e.hour_pos[sym].get(hs)
-            if idx is None:
-                continue
-            if idx < warm:
-                continue
-            f = forming[sym]
-            closed = e.pairs[sym].hourly[max(0, idx - (limit - 1)) : idx]
-            ready[sym] = closed + [Candle(int(f[0]), f[1], f[2], f[3], f[4], f[5])]
-        wanted = [e.pos.symbol] if e.pos is not None else e.symbols
-        if all(s in ready for s in wanted):
-            e._decide({s: ready[s] for s in wanted}, prices, end)
-        if end % HOUR == 0:
-            e._snapshot(end, prices)
-    _force_close(e, timeline[-1] + step, {s: bars[s][timeline[-1]].close for s in e.symbols})
-
-
-# --------------------------- closed_candle with 5-minute execution
-
-
-def _walk_closed_5m(e: _Engine) -> None:
-    cfg = e.cfg
-    warm = cfg.warmup_bars if cfg.warmup_bars is not None else max(cfg.strategy.ema_slow_period + 5, cfg.strategy.atr_rolling_window + 5)
-    timeline = _common_timeline(e.pairs, cfg, use_exec=True)
-    if not timeline:
-        raise BacktestError("the pairs share no 5-minute timestamps")
-    step = 300_000
-    bars = {s: {c.timestamp: c for c in p.exec_bars} for s, p in e.pairs.items()}
-    e.curve.append((timeline[0], e.equity))
-    pending: dict | None = None
-    for ts in timeline:
-        end = ts + step
-        prices = {sym: bars[sym][ts].close for sym in e.symbols}
-        if e.pos is not None:
-            b = bars[e.pos.symbol][ts]
+            b = bars_at[e.pos.symbol][k]
             e._apply_funding(ts, end, b.open)
             if not e._check_stop(b, end):
                 e._track_excursion(b)
+                e._update_stops(b.close)
+        if e.pending is not None:  # a candle-close entry decided at the previous poll, executed at this one
+            pend, e.pending = e.pending, None
+            e._execute_pending(pend, {s: bars_at[s][k].close for s in e.symbols}, end)
+        wanted = [e.pos.symbol] if e.pos is not None else e.symbols
+        sigs = {}
+        for sym in wanted:
+            sg = tapes[sym].signal(k)
+            if sg is None:
+                sigs = None
+                break
+            sigs[sym] = sg
+        if sigs is not None:
+            prices = {s: bars_at[s][k].close for s in wanted}
+            aux_idx = {s: _prev_closed_idx(e, s, hs) for s in wanted}
+            e._decide_replay(sigs, prices, end, aux_idx, window_for(k, hs), end % HOUR == 0)
+        if end % HOUR == 0:
+            e._snapshot(end, bars_at[e.pos.symbol][k].close if e.pos is not None else None)
+    kl = k1 - 1
+    if e.pos is not None:
+        e._market_exit(bars_at[e.pos.symbol][kl].close, tl[kl] + step, "end_of_data")
+
+
+def _prev_closed_idx(e: _Engine, sym: str, hs: int) -> int | None:
+    """Hourly index of the last CLOSED hour before the hour starting at `hs` (what a causal filter may use)."""
+    i = e.hour_pos[sym].get(hs)
+    return None if i is None or i == 0 else i - 1
+
+
+def _walk_closed_5m(e: _Engine, tl: list[int], k0: int, k1: int, ctapes: dict[str, SignalTape]) -> None:
+    step = 300_000
+    bars_at = _aligned_bars(e.pairs, tl, True)
+    e.curve.append((tl[k0], e.equity))
+    pending: dict | None = None
+    for k in range(k0, k1):
+        ts = tl[k]
+        end = ts + step
+        prices = {sym: bars_at[sym][k].close for sym in e.symbols}
+        if e.pos is not None:
+            b = bars_at[e.pos.symbol][k]
+            e._apply_funding(ts, end, b.open)
+            if not e._check_stop(b, end):
+                e._track_excursion(b)
+                e._update_stops(b.close)
         # execute what the previous hour-close decided, at this poll
         if pending is not None:
-            _execute_pending(e, pending, prices, end)
+            e._execute_pending(pending, prices, end)
             pending = None
         if end % HOUR == 0:  # an hourly candle just closed: decide on it, execute next poll
             hs = ts - ts % HOUR
-            windows = {}
-            for sym in e.symbols:
-                idx = e.hour_pos[sym].get(hs)
-                if idx is not None and idx >= warm:
-                    windows[sym] = e._closed_window(sym, idx)
             wanted = [e.pos.symbol] if e.pos is not None else e.symbols
-            if all(s in windows for s in wanted):
-                pending = _decide_closed(e, {s: windows[s] for s in wanted})
-            e._snapshot(end, prices)
-    _force_close(e, timeline[-1] + step, {s: bars[s][timeline[-1]].close for s in e.symbols})
+            sigs, aux_idx = {}, {}
+            for sym in wanted:
+                idx = e.hour_pos[sym].get(hs)
+                sg = ctapes[sym].signal(idx) if idx is not None else None
+                if sg is None:
+                    sigs = None
+                    break
+                sigs[sym], aux_idx[sym] = sg, idx
+            if sigs is not None:
+                pending = e._decide_closed(sigs, aux_idx, lambda sym, hs=hs: _closed_window_fn(e, sym, hs), end)
+            e._snapshot(end, bars_at[e.pos.symbol][k].close if e.pos is not None else None)
+    kl = k1 - 1
+    if e.pos is not None:
+        e._market_exit(bars_at[e.pos.symbol][kl].close, tl[kl] + step, "end_of_data")
 
 
-# --------------------------- closed_candle with hourly-only execution
+def _closed_window_fn(e: _Engine, sym: str, hs: int):
+    return lambda: e._closed_window(sym, e.hour_pos[sym][hs])
 
 
-def _walk_closed_hourly(e: _Engine) -> None:
-    cfg = e.cfg
-    warm = cfg.warmup_bars if cfg.warmup_bars is not None else max(cfg.strategy.ema_slow_period + 5, cfg.strategy.atr_rolling_window + 5)
-    timeline = _common_timeline(e.pairs, cfg, use_exec=False)
-    if not timeline:
-        raise BacktestError("the pairs share no hourly timestamps")
-    e.notes.append("hourly-only execution: entries at the next bar's open; intrabar order of events inside a bar is unknown")
-    bars = {s: {c.timestamp: c for c in p.hourly} for s, p in e.pairs.items()}
-    e.curve.append((timeline[0], e.equity))
+def _walk_closed_hourly(e: _Engine, tl: list[int], k0: int, k1: int, ctapes: dict[str, SignalTape]) -> None:
+    bars_at = _aligned_bars(e.pairs, tl, False)
+    e.curve.append((tl[k0], e.equity))
     pending: dict | None = None
-    for ts in timeline:
+    for k in range(k0, k1):
+        ts = tl[k]
         end = ts + HOUR
-        opens = {sym: bars[sym][ts].open for sym in e.symbols}
         if pending is not None:
-            _execute_pending(e, pending, opens, ts)
+            e._execute_pending(pending, {sym: bars_at[sym][k].open for sym in e.symbols}, ts)
             pending = None
         if e.pos is not None:
-            b = bars[e.pos.symbol][ts]
+            b = bars_at[e.pos.symbol][k]
             e._apply_funding(ts, end, b.open)
             if not e._check_stop(b, end):
                 e._track_excursion(b)
-        closes = {sym: bars[sym][ts].close for sym in e.symbols}
-        windows = {}
-        for sym in e.symbols:
-            idx = e.hour_pos[sym].get(ts)
-            if idx is not None and idx >= warm:
-                windows[sym] = e._closed_window(sym, idx)
+                e._update_stops(b.close)
         wanted = [e.pos.symbol] if e.pos is not None else e.symbols
-        if all(s in windows for s in wanted):
-            pending = _decide_closed(e, {s: windows[s] for s in wanted})
-        e._snapshot(end, closes)
-    _force_close(e, timeline[-1] + HOUR, {s: bars[s][timeline[-1]].close for s in e.symbols})
-
-
-def _decide_closed(e: _Engine, windows: dict[str, list[Candle]]) -> dict | None:
-    """The hour-close decision. Returned, not executed: execution happens at the next poll."""
-    e.counters["polls"] += 1
+        sigs, aux_idx = {}, {}
+        for sym in wanted:
+            idx = e.hour_pos[sym].get(ts)
+            sg = ctapes[sym].signal(idx) if idx is not None else None
+            if sg is None:
+                sigs = None
+                break
+            sigs[sym], aux_idx[sym] = sg, idx
+        if sigs is not None:
+            pending = e._decide_closed(sigs, aux_idx, lambda sym, ts=ts: _closed_window_fn(e, sym, ts), end)
+        e._snapshot(end, bars_at[e.pos.symbol][k].close if e.pos is not None else None)
+    kl = k1 - 1
     if e.pos is not None:
-        sig = e._signal(windows[e.pos.symbol])
-        if e._is_opposite(e.pos.side, sig):
-            return {"kind": "exit", "symbol": e.pos.symbol}
-        return None
-    if e.cfg.auto:
-        ranked = rank_candidates([PairCandidate(pair=s, candles=w) for s, w in windows.items()], market_type="futures", **e.sp)
-        if not ranked:
-            return None
-        sym = ranked[0].pair
-    else:
-        sym = e.symbols[0]
-    sig = e._signal(windows[sym])
-    if e._side_for(sig) is None:
-        return None
-    e.counters["actionable_signals"] += 1
-    return {"kind": "enter", "symbol": sym, "signal": sig, "window": windows[sym]}
-
-
-def _execute_pending(e: _Engine, pending: dict, prices: dict[str, float], ts: int) -> None:
-    if pending["kind"] == "exit":
-        if e.pos is not None and e.pos.symbol == pending["symbol"]:
-            e._market_exit(prices[pending["symbol"]], ts, "crossover_exit")
-    elif e.pos is None:
-        # ATR comes from the closed-candle signal; the stop is placed from the actual execution price
-        e._try_enter(pending["symbol"], pending["signal"], prices[pending["symbol"]], ts, pending["window"])
-
-
-def _force_close(e: _Engine, ts: int, prices: dict[str, float]) -> None:
-    if e.pos is not None:
-        e._market_exit(prices[e.pos.symbol], ts, "end_of_data")
+        e._market_exit(bars_at[e.pos.symbol][kl].close, tl[kl] + HOUR, "end_of_data")
 
 
 # ------------------------------------------------------------------ diagnostics
 
 
-def _diagnose_confirmation(e: _Engine) -> None:
+def _diagnose_confirmation(e: _Engine, closed_tapes: dict[str, SignalTape] | None, sp: dict, limit: int, warm: int) -> None:
     """Replay mode only. For each entry, was the signal STILL there once its hour had closed?
     Computed after the run from data the decision could not see; it never influences a trade."""
-    if e.cfg.mode != MODE_REPLAY:
+    if e.cfg.mode != MODE_REPLAY or not e.trades:
         return
+    expect = {"bullish_crossover": CODE_BULL, "bearish_crossover": CODE_BEAR}
+    tapes = dict(closed_tapes or {})
     for t in e.trades:
         hs = (t.entry_ts - 1) // HOUR * HOUR
         idx = e.hour_pos[t.symbol].get(hs)
         if idx is None:
             continue
-        sig = e._signal(e._closed_window(t.symbol, idx))
-        t.signal_confirmed_at_close = sig.signal.value == t.entry_signal
+        if t.symbol not in tapes:
+            p = e.pairs[t.symbol]
+            tapes[t.symbol] = tapelib.build_closed_tape(t.symbol, p.hourly, sp, limit=limit, warm=warm)
+        code = tapes[t.symbol].code(idx)
+        if code != CODE_NA:
+            t.signal_confirmed_at_close = code == expect.get(t.entry_signal)
