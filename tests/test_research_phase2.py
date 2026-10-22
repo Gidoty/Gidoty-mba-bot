@@ -339,3 +339,22 @@ def test_a_corrupt_older_store_stops_the_run_before_any_analysis(world, tmp_path
     with pytest.raises(RuntimeError, match="quality gate"):
         p2.run_phase2(bad, world["p1"], world["results_path"], tmp_path / "o", world["opts"], expect_plan_hash=None, expect_code_fingerprint=None, expect_phase1_sha256=None, registered=False)
     assert not (tmp_path / "o" / "phase2_results.json").exists()
+
+
+# ------------------------------------------------------------------ the registration document
+
+
+def test_the_registration_document_carries_the_hash_the_fingerprint_and_the_frozen_numbers():
+    from pathlib import Path
+
+    doc = (Path(__file__).parent.parent / "docs" / "research" / "phase2_preregistration.md").read_text()
+    assert p2.plan_hash() in doc, "the plan changed after it was registered: new hash, new registration"
+    assert p2.code_fingerprint() in doc, "a fingerprinted source file changed after registration: new fingerprint, new registration"
+    for a in p2.ARMS:
+        assert f"| {a.id} |" in doc
+    c = p2.CRITERIA
+    for needle in (f"{c.holm_alpha:.2f}", f"{c.min_shrinkage:.0%}", f"{c.min_big_winner_ratio:.0%}", f"{c.max_drawdown_ratio:.0%}", str(c.min_c_baseline_trades), str(c.regime_min_trades),
+                   f"{c.cost_check_multiplier:.1f}x", f"{c.sizing_max_return_loss:.0%}", f"{int(c.auto_percentile * 100)}th percentile", f"{c.bootstrap_iterations}", f"{c.block_days}-day"):
+        assert needle in doc, needle
+    for needle in ("Survivor bias", "Extreme-event slippage", "Deviation (disclosed)", "No candidate reaches production from", "forward shadow"):
+        assert needle in doc

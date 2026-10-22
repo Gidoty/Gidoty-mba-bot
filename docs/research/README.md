@@ -98,3 +98,10 @@ boundaries. Liquidation is not simulated. Bootstrap intervals assume independent
 period and writes `phase1_report.md`, and `phase1 lockbox --candidate ID --confirm --reason "..."` opens the sealed final months once.
 The engine used is the Phase 0 engine plus research-only policies; with every policy at its default it reproduces Phase 0 exactly
 (`tests/test_research_phase0_regression.py`). Nothing in Phase 1 touches the trading service.
+
+## Phase 2 (confirmation)
+
+`phase2_preregistration.md` freezes the arms, statistics and pass/fail rules (plan hash and code fingerprint inside) before the older
+history is downloaded. Commands: `python -m mba_bot.research phase2 plan | resources | download | run | report`. `download` and `run`
+refuse to start unless the hash, the fingerprint and the SHA-256 of `phase1_results.json` match the registered values. The older store is
+one-shot evidence; see the registration for what that means and for the limitations.
