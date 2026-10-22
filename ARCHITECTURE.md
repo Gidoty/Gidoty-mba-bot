@@ -797,6 +797,17 @@ pass and are recorded.
 - `_maybe_enter` refuses a new entry on a pair outside `manual_pairs`, so turning the flag off cannot open a trade on an extra pair. An already open position is still managed and closed.
 - Selection is validated only when a customer changes pair or market, so saving risk settings never fails because of the current pair.
 
+## Trading Intelligence Foundation (Phase 0, no behaviour change)
+
+Two additions, neither of which changes what a customer's bot does:
+
+* **Telemetry** (`telemetry.py`, `features.py`, tables `trade_telemetry` and `decision_log`, flag `TRADE_TELEMETRY`, default off). Observation only: it queues rows in the
+  caller's session without flushing or committing, so scheduler sessions still take no SQLite write lock because of it, it swallows its own failures, and it stores
+  no secrets. Hooks in `trader.py` are guarded by the flag and sit next to existing early returns; with the flag off nothing runs.
+* **Research tooling** (`src/mba_bot/research/`, see `docs/research/README.md`). Offline only. The service never imports it and it never imports credentials, the database
+  layer, configuration or order code. Backtester V2 runs the production `generate_signal`, `rank_candidates`, sizing functions and `FuturesVenue.plan_entry_quantity`
+  unchanged against stored candles, modelling fees, slippage, funding and intrabar stops, in two modes: a replay of today's forming-candle behaviour and a closed-candle comparison.
+
 ## Data model
 
 ```

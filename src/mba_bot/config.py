@@ -190,6 +190,10 @@ class Settings:
     # the capital-based availability marking / Auto skip). OFF by default:
     # with it off every code path behaves exactly as before the feature existed.
     futures_pair_expansion: bool = False
+    # Research telemetry (telemetry.py): per-trade context and a decision log,
+    # written to two separate tables and never read by the trading path. OFF by
+    # default: with it off no telemetry code runs and behaviour is unchanged.
+    trade_telemetry: bool = False
 
 
 LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
@@ -262,4 +266,5 @@ def load_settings() -> Settings:
         max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
         cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
         futures_pair_expansion=_env_bool("FUTURES_PAIR_EXPANSION", False),
+        trade_telemetry=_env_bool("TRADE_TELEMETRY", False),
     )
