@@ -7,6 +7,8 @@
   live       analyse the bot's own recorded trades and decisions (opens the database read-only)
   phase1     the pre-registered Phase 1 experiments (plan | run | lockbox)
   phase2     the pre-registered Phase 2 confirmation (plan | resources | download | run | report)
+  risk       1% versus 2% per-trade risk: Monte Carlo drawdown/ruin and an exact engine grid (development range only)
+  telemetry-check  read-only health check of the telemetry tables (deployment runbook)
   registry   show the experiment ledger
   synthetic  write a SYNTHETIC store for trying the tooling without market access
 
@@ -93,6 +95,17 @@ def main(argv: list[str] | None = None) -> int:
     p2.add_argument("--expect-phase1-sha256", default=None)
     p2.add_argument("--since", default="2019-09-01", help="download: first day of the older history (UTC, YYYY-MM-DD)")
     p2.add_argument("--until", default=None, help="download: default is the first moment of the Phase 1 store, read from phase1_results.json")
+
+    rk = sub.add_parser("risk", help="risk-governance study (research only; the production cap is untouched)")
+    rk.add_argument("--root", default="research_data")
+    rk.add_argument("--out", default="research_out/risk")
+    rk.add_argument("--phase1-results", default="research_out/phase1/phase1_results.json", help="supplies the development range, so the lockbox stays sealed")
+    rk.add_argument("--pairs", help="default: the four development pairs")
+    rk.add_argument("--horizon-trades", type=int, default=150)
+    rk.add_argument("--sims", type=int, default=5000)
+
+    tc = sub.add_parser("telemetry-check", help="read-only telemetry health check")
+    tc.add_argument("--database", required=True)
 
     rg = sub.add_parser("registry", help="show the experiment ledger")
     rg.add_argument("--path", default="research_out/trials.jsonl")
@@ -269,6 +282,35 @@ def main(argv: list[str] | None = None) -> int:
             (Path(args.out) / "phase2_report.md").write_text(render2(res))
             print(f"report: {Path(args.out) / 'phase2_report.md'}")
             return 0
+
+    if args.cmd == "risk":
+        from . import data as D, phase1 as P1, risk_study as RS
+        from .phase2 import load_phase1_reference
+
+        ref = load_phase1_reference(Path(args.phase1_results), expect_sha256=None)
+        start_ts, end_ts = ref["development_range"]
+        syms = [D.symbol_for(p) for p in _pairs(args.pairs, P1.ORIGINAL_FOUR)]
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        lab = P1.Lab(Path(args.root), out_dir, P1.Phase1Options(), progress=lambda m: print(m, flush=True))
+        base_trades = []
+        for s_ in syms:
+            lab.load(s_)
+            base_trades += lab.run([s_], lab.config(start_ts=start_ts, end_ts=end_ts)).counted()
+            lab.drop([s_])
+        mc = RS.monte_carlo(base_trades, horizon_trades=args.horizon_trades, sims=args.sims)
+        grids = {f"{syms[0]} alone": RS.engine_grid(lab, syms[:1], start_ts=start_ts, end_ts=end_ts, progress=lambda m: print(m, flush=True)),
+                 "Auto Select, four pairs": RS.engine_grid(lab, syms, auto=True, start_ts=start_ts, end_ts=end_ts, progress=lambda m: print(m, flush=True))}
+        (out_dir / "risk_results.json").write_text(json.dumps({"monte_carlo": mc, "grids": grids, "development_range": [start_ts, end_ts], "n_trades": len(base_trades)}, indent=1, default=str))
+        (out_dir / "risk_report.md").write_text(RS.render(mc, grids))
+        print(f"report: {out_dir / 'risk_report.md'}")
+        return 0
+
+    if args.cmd == "telemetry-check":
+        from . import telemetry_check as TC
+
+        print(TC.render(TC.check(args.database)), end="")
+        return 0
 
     if args.cmd == "registry":
         from .validation import TrialRegistry
