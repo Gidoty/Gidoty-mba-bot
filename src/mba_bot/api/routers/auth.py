@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,10 +14,23 @@ from ...legal import (
 )
 from ...models import Customer
 from ..deps import get_current_customer, get_db, get_settings
+from ..ratelimit import LoginThrottle
 from ..schemas import AcceptLegalRequest, CustomerOut, LoginRequest, SignupRequest
 from ..security import SESSION_COOKIE_NAME, create_session_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+_throttles: dict[tuple[int, int], LoginThrottle] = {}
+
+
+def _login_throttle(settings: Settings) -> LoginThrottle | None:
+    """One throttle per process and per (limit, lockout) setting. None while LOGIN_THROTTLE_ENABLED is off."""
+    if not settings.login_throttle_enabled:
+        return None
+    key = (settings.login_max_failures, settings.login_lockout_seconds)
+    if key not in _throttles:
+        _throttles[key] = LoginThrottle(max_failures=key[0], lockout_seconds=key[1])
+    return _throttles[key]
 
 
 def _to_customer_out(customer: Customer, db: Session) -> CustomerOut:
@@ -81,11 +94,25 @@ def signup(
 
 @router.post("/login", response_model=CustomerOut)
 def login(
-    body: LoginRequest, response: Response, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> CustomerOut:
+    throttle = _login_throttle(settings)
+    ip = request.client.host if request.client else "unknown"
+    if throttle is not None:
+        wait = throttle.blocked(ip, body.email)
+        if wait:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many failed sign-in attempts, try again later", headers={"Retry-After": str(wait)})
     customer = db.query(Customer).filter(Customer.email == body.email.lower()).first()
     if customer is None or not verify_password(body.password, customer.password_hash):
+        if throttle is not None:
+            throttle.record_failure(ip, body.email)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "incorrect email or password")
+    if throttle is not None:
+        throttle.record_success(ip, body.email)
 
     _set_session_cookie(response, customer_id=customer.id, settings=settings)
     return _to_customer_out(customer, db)

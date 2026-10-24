@@ -340,3 +340,24 @@ class Trade(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="trades")
+
+
+class PaymentEvent(Base):
+    """One row per payment-provider event that was ACCEPTED, so a repeated delivery of the same event is recognised
+    and does nothing (F-01). Written only when PAYSTACK_STRICT_VERIFY is on; with it off nothing reads or writes
+    this table. Holds no card data, no secret and no raw payload: only the provider's reference, the amounts and a
+    short outcome code. The unique constraint on (provider, event_key) is what makes replays harmless, even if two
+    deliveries race."""
+
+    __tablename__ = "payment_events"
+    __table_args__ = (UniqueConstraint("provider", "event_key", name="uq_payment_events_provider_event_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    customer_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    amount: Mapped[int | None] = mapped_column(Integer, nullable=True)  # minor units, as the provider reports it
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)  # "applied" | "already_paid"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

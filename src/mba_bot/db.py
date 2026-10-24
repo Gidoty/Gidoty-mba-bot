@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator
 
-from sqlalchemy import create_engine, or_, select
+from sqlalchemy import create_engine, event, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -36,10 +36,22 @@ _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
 
 
-def init_db(database_url: str) -> None:
+def init_db(database_url: str, *, wal: bool = False, busy_timeout_ms: int = 15000) -> None:
+    """`wal=False` (the default) is exactly the previous behaviour. `wal=True` (SQLITE_WAL, prepared but not
+    deployed) switches a SQLite file to write-ahead logging with a busy timeout on every connection; see
+    docs/security/wal_runbook.md for the backup, enable and rollback steps. The journal mode is stored in the
+    database file, so turning the flag off later does NOT revert it: follow the runbook's rollback."""
     global _engine, _SessionLocal
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     _engine = create_engine(database_url, connect_args=connect_args)
+    if wal and database_url.startswith("sqlite"):
+        @event.listens_for(_engine, "connect")
+        def _sqlite_wal_pragmas(dbapi_connection, _record):  # noqa: ANN001
+            cur = dbapi_connection.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.close()
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 

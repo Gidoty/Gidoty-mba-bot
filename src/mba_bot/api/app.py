@@ -20,8 +20,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import load_settings, warn_about_legacy_futures_testnet_env
 from ..db import init_db
+from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
 from ..scheduler import run_forever
+from .ratelimit import RateLimitMiddleware
 from .routers import account, auth, billing, pairs, telegram, trades
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,15 @@ async def lifespan(app: FastAPI):
 
     warn_about_legacy_futures_testnet_env(logger)
     install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
-    init_db(settings.database_url)
+    lock_handle = None
+    if settings.api_single_instance_lock:
+        # F-03: production starts through uvicorn, which never runs main.py, so the single-instance guard has to be
+        # taken here. A second worker or a second copy of the service refuses to start instead of running a second scheduler.
+        try:
+            lock_handle = acquire_single_instance_lock(settings.lock_file)
+        except AlreadyRunning as exc:
+            raise RuntimeError(str(exc)) from None
+    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms)
     _ensure_scheduler_logs_are_visible()
     scheduler_task = asyncio.create_task(run_forever(settings))
     scheduler_task.add_done_callback(_log_scheduler_task_ended)
@@ -73,11 +83,19 @@ async def lifespan(app: FastAPI):
             await scheduler_task
         except asyncio.CancelledError:
             pass
+        if lock_handle is not None:
+            lock_handle.close()  # releases the flock
 
 
 def create_app() -> FastAPI:
     settings = load_settings()
-    app = FastAPI(title="MBA Bot API", lifespan=lifespan)
+    # F-06: with DISABLE_API_DOCS on, the interactive docs and the schema are not served at all.
+    docs_off = {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.disable_api_docs else {}
+    app = FastAPI(title="MBA Bot API", lifespan=lifespan, **docs_off)
+
+    if settings.rate_limit_enabled:  # F-04, second line behind Nginx. Added BEFORE the CORS layer so it sits inside it:
+        # a 429 still carries the CORS headers and the browser shows the real status instead of a CORS error.
+        app.add_middleware(RateLimitMiddleware, per_minute=settings.rate_limit_per_minute, auth_per_minute=settings.rate_limit_auth_per_minute)
 
     app.add_middleware(
         CORSMiddleware,

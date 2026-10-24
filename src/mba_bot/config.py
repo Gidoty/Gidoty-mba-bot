@@ -190,6 +190,28 @@ class Settings:
     # the capital-based availability marking / Auto skip). OFF by default:
     # with it off every code path behaves exactly as before the feature existed.
     futures_pair_expansion: bool = False
+    # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
+    # with all of them off the application behaves exactly as before they existed.
+    # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
+    # /initialize, check amount and currency, and record processed events (unique constraint).
+    paystack_strict_verify: bool = False
+    # F-03: take the single-instance lock inside the API lifespan too (not only in main.py).
+    api_single_instance_lock: bool = False
+    # F-05: when set, the Telegram webhook requires this value in the
+    # X-Telegram-Bot-Api-Secret-Token header. Unset = accept every request (today's behaviour).
+    telegram_webhook_secret: str | None = field(default=None, repr=False)
+    # F-04: in-app rate limit and login throttle (the Nginx limits are separate; see docs/security).
+    rate_limit_enabled: bool = False
+    rate_limit_per_minute: int = 120
+    rate_limit_auth_per_minute: int = 10
+    login_throttle_enabled: bool = False
+    login_max_failures: int = 5
+    login_lockout_seconds: int = 900
+    # F-06: switch off /docs, /redoc and /openapi.json.
+    disable_api_docs: bool = False
+    # WAL + busy timeout for SQLite. PREPARED ONLY: do not enable without the runbook.
+    sqlite_wal: bool = False
+    sqlite_busy_timeout_ms: int = 15000
 
 
 LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
@@ -262,4 +284,16 @@ def load_settings() -> Settings:
         max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
         cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
         futures_pair_expansion=_env_bool("FUTURES_PAIR_EXPANSION", False),
+        paystack_strict_verify=_env_bool("PAYSTACK_STRICT_VERIFY", False),
+        api_single_instance_lock=_env_bool("API_SINGLE_INSTANCE_LOCK", False),
+        telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None,
+        rate_limit_enabled=_env_bool("RATE_LIMIT_ENABLED", False),
+        rate_limit_per_minute=max(1, _env_int("RATE_LIMIT_PER_MINUTE", 120)),
+        rate_limit_auth_per_minute=max(1, _env_int("RATE_LIMIT_AUTH_PER_MINUTE", 10)),
+        login_throttle_enabled=_env_bool("LOGIN_THROTTLE_ENABLED", False),
+        login_max_failures=max(1, _env_int("LOGIN_MAX_FAILURES", 5)),
+        login_lockout_seconds=max(1, _env_int("LOGIN_LOCKOUT_SECONDS", 900)),
+        disable_api_docs=_env_bool("DISABLE_API_DOCS", False),
+        sqlite_wal=_env_bool("SQLITE_WAL", False),
+        sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
     )
