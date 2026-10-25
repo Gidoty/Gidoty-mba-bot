@@ -8,11 +8,23 @@ Everything here is OBSERVATION ONLY.
 * It never raises into the caller. A telemetry bug must not be able to cost a
   customer a trade, so every public function swallows its own failures
   (logging only the exception TYPE, never its text).
-* It never flushes or commits. Scheduler sessions do not autoflush (see
-  db.session_scope), so adding a row only queues it in memory; it is written
-  by the commit the trading code was going to make anyway. That keeps the
-  scheduler's rule intact: no SQLite write lock is taken, let alone held
-  across an await, because of telemetry.
+* Queuing a row (log_decision, record_entry) only adds it to the session in
+  memory: no flush, no commit. Scheduler sessions do not autoflush (see
+  db.session_scope), so such rows are written by the next commit the trading
+  code makes. Two helpers do write, and only when the flag is on:
+    - write_with_trade (paper entry): inside a SAVEPOINT it flushes the
+      telemetry rows just before the trade's own commit. The caller has
+      already flushed the trade and commits right after, with no await in
+      between.
+    - write_and_commit (live entry): after the live trade has been opened and
+      committed by the lifecycle code, it queues the rows in a SAVEPOINT,
+      flushes, and COMMITS once, synchronously. That commit also writes
+      whatever else is pending in the same session at that moment, slightly
+      earlier than the trading code alone would have.
+  In both, a failing telemetry row rolls back only its own SAVEPOINT and the
+  trade is unaffected. The scheduler's rule still holds: the write lock is
+  taken only for a short synchronous stretch and is never held across an
+  await. With the flag off none of this runs.
 * It stores no secrets: no keys, no tokens, no customer text, no exchange
   error text. Only numbers and short machine codes.
 * The decision log records actionable moments only (a crossover was seen, an

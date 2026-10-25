@@ -801,8 +801,10 @@ pass and are recorded.
 
 Two additions, neither of which changes what a customer's bot does:
 
-* **Telemetry** (`telemetry.py`, `features.py`, tables `trade_telemetry` and `decision_log`, flag `TRADE_TELEMETRY`, default off). Observation only: it queues rows in the
-  caller's session without flushing or committing, so scheduler sessions still take no SQLite write lock because of it, it swallows its own failures, and it stores
+* **Telemetry** (`telemetry.py`, `features.py`, tables `trade_telemetry` and `decision_log`, flag `TRADE_TELEMETRY`, default off). Observation only: decision rows are queued in the
+  caller's session without flushing or committing. Entries are written by two short helpers (flag on only): on a paper entry the telemetry row is flushed inside a savepoint just before
+  the trade's own commit; on a live entry, once the trade is open and committed, one extra synchronous commit writes the telemetry row (and anything else pending in that session at that
+  moment). Neither holds the SQLite write lock across an `await`. A failing telemetry row rolls back on its own and never affects the trade; telemetry swallows its own failures and stores
   no secrets. Hooks in `trader.py` are guarded by the flag and sit next to existing early returns; with the flag off nothing runs.
 * **Research tooling** is NOT part of this deployment. It lives on a separate branch and runs offline on a separate host; the service never imports it.
 

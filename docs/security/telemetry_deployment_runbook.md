@@ -5,7 +5,10 @@
 Two empty tables, `trade_telemetry` and `decision_log`, and code that fills them **only when `TRADE_TELEMETRY=1`**. It is observation only:
 
 * nothing in the trading path reads those rows;
-* the telemetry functions never raise into the caller, never flush or commit (rows ride the commit the trading code was already going to make), and take no SQLite write lock of their own;
+* the telemetry functions never raise into the caller. Decision rows are only queued in memory and are written by the next commit the trading code makes. Trade rows are written by two short synchronous helpers, **only when the flag is on**:
+  * **paper entry:** the telemetry row is flushed inside a savepoint just before the trade's own commit, with no await in between;
+  * **live entry:** after the live trade has been opened and committed, telemetry queues its row in a savepoint, flushes, and **commits once**. That commit also writes anything else pending in the same session at that moment, a little earlier than the trading code alone would have;
+  * in both, a failing telemetry row rolls back only its own savepoint and the trade is unaffected, and the write lock is never held across an await;
 * sizing, signals, orders, stops, lifecycle and customer-facing behaviour are unchanged; with the flag off, no telemetry code runs;
 * it stores numbers and short machine codes only: no keys, tokens, customer text or exchange error text;
 * the decision log is capped per account per day.
@@ -41,6 +44,7 @@ The research package, Phase 2, the risk study and the fee-audit tool stay out of
 
 ## Risks, stated plainly
 
+* With the flag on, a live entry costs one extra short commit (described above). Watch the first real entry after step 7.
 * Extra rows enlarge each commit slightly. The tables are small (a few rows per trade, bounded decision rows).
 * A bug in telemetry is designed to be swallowed (logged by exception type only). If it ever appears in the journal, turn the flag off.
 * A restart pauses scheduling briefly, as in every previous deployment; open positions keep their exchange-native stops.
