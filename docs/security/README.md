@@ -43,9 +43,11 @@ Rollback: unset the variable and restart (the header Telegram sends is then igno
 
 ### Paystack strict mode: what to expect and how to fall back
 
-* Verified against Paystack's response fields `status`, `reference`, `currency`, `amount`, `requested_amount` (if present) and `metadata.customer_id`.
-  If your Paystack account makes the customer pay the fees, Paystack's `amount` is larger than the price while `requested_amount` equals it; both cases are accepted. **Please confirm
-  with a real transaction record that these fields look as assumed before relying on this**; I cannot call Paystack from here.
+* Verified against Paystack's response fields `status`, `reference`, `currency`, `amount`, `requested_amount` (if present), `fees` and `metadata.customer_id`.
+  The owner has confirmed that **customers pay the transaction charges**. The amount rule (`amount_problem` in `billing.py`, tested case by case) is: the price is `PAYSTACK_AMOUNT`;
+  `amount` may equal the price (business pays) or equal price + `fees` (customer pays), with `requested_amount` used as the price when Paystack sends it. Underpaid, overpaid without a matching fee,
+  non-integer figures and negative or oversized fees are refused. The amount alone never grants access: status, reference, currency, customer and the stored reference are checked as well.
+  Fee arithmetic allows 1 minor unit of rounding; the price itself is compared exactly.
 * One known limit: if a customer starts a second checkout and then pays the FIRST one, the stored reference is the second, so the payment is refused (logged
   as `reason=reference_not_issued`). Fail-safe direction (no free access), and you can grant manually with `scripts/mark_customer_paid.py`.
 * Look for rejections: `journalctl -u mba-bot | grep "paystack webhook rejected"` (reason codes only, no secrets).

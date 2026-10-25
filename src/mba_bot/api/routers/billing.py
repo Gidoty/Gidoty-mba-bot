@@ -143,6 +143,46 @@ async def _verify_with_paystack(reference: str, settings: Settings) -> dict:
         raise PaystackUnavailable("unreadable response") from None
 
 
+_FEE_ROUNDING = 1  # minor units of slack in the fee ARITHMETIC only (amount - requested_amount vs fees); the price is compared exactly
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def amount_problem(data: dict, expected: int) -> str | None:
+    """Is what Paystack says was paid exactly the price, with anything extra explained by Paystack's own fee figure?
+
+    Paystack reports `amount` (what the customer was charged), usually `requested_amount` (the price that was asked
+    for) and `fees` (Paystack's charge). Two legitimate shapes:
+      * the business pays the charges: amount == price;
+      * the customer pays the charges: amount == price + fees (so amount is larger than the price).
+    The price itself is never inferred from the amount alone. A larger amount is accepted only when `fees` accounts
+    for the whole difference, so overpaying, or a fee figure that does not add up, is refused rather than guessed at.
+    Returns None if acceptable, else a short reason code."""
+    amount, requested, fees = data.get("amount"), data.get("requested_amount"), data.get("fees")
+    if not _is_int(amount) or (requested is not None and not _is_int(requested)) or (fees is not None and not _is_int(fees)):
+        return "amount_unreadable"
+    if amount < expected:
+        return "underpaid"
+    if requested is not None:
+        if requested < expected:
+            return "underpaid"
+        if requested != expected:
+            return "amount_mismatch"
+        if amount == requested:
+            return None  # business pays the charges
+    elif amount == expected:
+        return None  # business pays the charges; this response carries no requested_amount
+    # Something is on top of the price: it must be exactly Paystack's fee.
+    if fees is None or fees < 0 or fees > amount:
+        return "amount_unexplained"
+    base = requested if requested is not None else amount - fees
+    if requested is not None:
+        return None if abs(amount - requested - fees) <= _FEE_ROUNDING else "fee_relation_unexpected"
+    return None if base == expected else ("underpaid" if base < expected else "amount_mismatch")  # exact: no slack on the price
+
+
 def check_verified_transaction(body: dict, *, reference: str, customer_id: str, settings: Settings) -> str | None:
     """None if Paystack's record matches what we issued, else a short reason code (never exchange text)."""
     if not settings.paystack_amount or settings.paystack_amount <= 0:
@@ -156,9 +196,9 @@ def check_verified_transaction(body: dict, *, reference: str, customer_id: str, 
         return "reference_differs"
     if str(data.get("currency", "")).upper() != str(settings.paystack_currency).upper():
         return "currency_mismatch"
-    paid = data.get("requested_amount", data.get("amount"))
-    if paid != settings.paystack_amount or (data.get("amount") or 0) < settings.paystack_amount:
-        return "amount_mismatch"
+    problem = amount_problem(data, settings.paystack_amount)
+    if problem is not None:
+        return problem
     if (data.get("metadata") or {}).get("customer_id") != customer_id:
         return "customer_mismatch"
     return None

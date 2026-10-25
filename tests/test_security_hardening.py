@@ -11,6 +11,7 @@ import hmac
 import importlib.util
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -242,12 +243,99 @@ def test_anything_that_does_not_match_grants_nothing(make_app, paystack, name, s
             assert s.query(PaymentEvent).count() == 0  # rejections are not recorded, so a later genuine event still works
 
 
-def test_fees_added_on_top_of_the_price_are_accepted_when_the_requested_amount_is_right(make_app, paystack):
+PRICE = AMOUNT
+
+
+@pytest.mark.parametrize("name,data,expect", [
+    # --- accepted: the business pays Paystack's charges
+    ("business pays, requested_amount present", {"amount": PRICE, "requested_amount": PRICE, "fees": 200_000}, None),
+    ("business pays, no requested_amount", {"amount": PRICE, "fees": 200_000}, None),
+    ("business pays, no requested_amount and no fees", {"amount": PRICE}, None),
+    # --- accepted: the customer pays the charges (amount = price + fees)
+    ("customer pays, requested_amount present", {"amount": PRICE + 200_000, "requested_amount": PRICE, "fees": 200_000}, None),
+    ("customer pays, requested_amount MISSING", {"amount": PRICE + 200_000, "fees": 200_000}, None),
+    ("customer pays, fee off by one minor unit (rounding)", {"amount": PRICE + 200_001, "requested_amount": PRICE, "fees": 200_000}, None),
+    # --- refused: underpaid
+    ("underpaid by one", {"amount": PRICE - 1, "requested_amount": PRICE - 1}, "underpaid"),
+    ("underpaid, no requested_amount", {"amount": PRICE - 1_000}, "underpaid"),
+    ("requested less than the price although fees pad the total", {"amount": PRICE + 100_000, "requested_amount": PRICE - 1_000, "fees": 101_000}, "underpaid"),
+    ("customer-paid but the base after fees is short (requested missing)", {"amount": PRICE + 100_000, "fees": 101_000}, "underpaid"),
+    ("fees swallow the payment", {"amount": PRICE, "requested_amount": PRICE - 500_000, "fees": 500_000}, "underpaid"),
+    # --- refused: more than the price that fees do not explain
+    ("double the price, no fees", {"amount": PRICE * 2}, "amount_unexplained"),
+    ("double the price, requested_amount says price, no fees", {"amount": PRICE * 2, "requested_amount": PRICE}, "amount_unexplained"),
+    ("extra bigger than the fee", {"amount": PRICE + 500_000, "requested_amount": PRICE, "fees": 200_000}, "fee_relation_unexpected"),
+    ("extra smaller than the fee", {"amount": PRICE + 100_000, "requested_amount": PRICE, "fees": 200_000}, "fee_relation_unexpected"),
+    ("fee off by two minor units", {"amount": PRICE + 200_002, "requested_amount": PRICE, "fees": 200_000}, "fee_relation_unexpected"),
+    ("fees reported as zero but amount is higher", {"amount": PRICE + 200_000, "requested_amount": PRICE, "fees": 0}, "fee_relation_unexpected"),
+    ("negative fees", {"amount": PRICE + 100, "requested_amount": PRICE, "fees": -100}, "amount_unexplained"),
+    ("fees larger than the amount", {"amount": PRICE + 100, "fees": PRICE * 5}, "amount_unexplained"),
+    ("requested_amount above the price", {"amount": PRICE * 2, "requested_amount": PRICE * 2, "fees": 0}, "amount_mismatch"),
+    # --- refused: unreadable figures
+    ("amount as text", {"amount": str(PRICE)}, "amount_unreadable"),
+    ("amount missing", {}, "amount_unreadable"),
+    ("amount is a boolean", {"amount": True}, "amount_unreadable"),
+    ("float amount", {"amount": float(PRICE)}, "amount_unreadable"),
+    ("requested_amount as text", {"amount": PRICE, "requested_amount": str(PRICE)}, "amount_unreadable"),
+    ("fees as text", {"amount": PRICE + 10, "fees": "10"}, "amount_unreadable"),
+])
+def test_the_amount_rules_for_business_paid_and_customer_paid_charges(name, data, expect):
+    assert billing.amount_problem(data, PRICE) == expect, name
+
+
+@pytest.mark.parametrize("status", ["abandoned", "failed", "pending", "ongoing", "reversed", "queued", "", None])
+def test_a_transaction_that_is_not_successful_is_refused_whatever_it_was_charged(make_app, paystack, status):
     with client_for(make_app(**STRICT)) as c:
         cid = new_customer()
-        paystack.answer = verified(cid, amount=AMOUNT + 50_000, requested_amount=AMOUNT)
-        post_event(c, charge(cid))
-        assert user(cid)[0] is True
+        paystack.answer = verified(cid, status=status, amount=PRICE + 200_000, requested_amount=PRICE, fees=200_000)
+        assert post_event(c, charge(cid)).status_code == 200
+        assert user(cid)[0] is False
+        with session_scope() as s:
+            assert s.query(PaymentEvent).count() == 0
+
+
+@pytest.mark.parametrize("name,over,reason", [
+    ("exactly the right money, but the transaction was abandoned", {"status": "abandoned"}, "transaction_not_successful"),
+    ("customer-paid fees, abandoned", {"status": "abandoned", "amount": PRICE + 200_000, "requested_amount": PRICE, "fees": 200_000}, "transaction_not_successful"),
+    ("exactly the right money, for another customer", {"metadata": {"customer_id": "someone-else"}}, "customer_mismatch"),
+    ("exactly the right money, no customer in the metadata", {"metadata": {}}, "customer_mismatch"),
+    ("exactly the right money, wrong currency", {"currency": "USD"}, "currency_mismatch"),
+    ("exactly the right money, different reference", {"reference": "ref_other"}, "reference_differs"),
+])
+def test_the_right_amount_alone_never_grants_access(name, over, reason):
+    """The amount is one condition among several. Every other condition is enforced even when the money is exactly right."""
+    settings = replace(load_settings(), paystack_amount=PRICE, paystack_currency="NGN")
+    cid = "cust-1"
+    body = verified(cid, **{"amount": PRICE, **over})
+    assert billing.check_verified_transaction(body, reference="ref_1", customer_id=cid, settings=settings) == reason, name
+    # and the same transaction with nothing wrong is accepted, so the refusal above is caused by the one thing changed
+    assert billing.check_verified_transaction(verified(cid), reference="ref_1", customer_id=cid, settings=settings) is None
+
+
+def test_end_to_end_customer_paid_fees_are_accepted_with_or_without_requested_amount(make_app, paystack):
+    with client_for(make_app(**STRICT)) as c:
+        a = new_customer("a1@example.com", reference="ref_a")
+        paystack.answer = verified(a, "ref_a", amount=PRICE + 200_000, requested_amount=PRICE, fees=200_000)
+        post_event(c, charge(a, "ref_a"))
+        b = new_customer("b1@example.com", reference="ref_b")
+        paystack.answer = verified(b, "ref_b", amount=PRICE + 200_000, fees=200_000)  # requested_amount missing
+        post_event(c, charge(b, "ref_b"))
+        d = new_customer("d1@example.com", reference="ref_d")
+        paystack.answer = verified(d, "ref_d", amount=PRICE, fees=150_000)  # business pays
+        post_event(c, charge(d, "ref_d"))
+        assert user(a)[0] and user(b)[0] and user(d)[0]
+        with session_scope() as s:
+            assert {e.reference: e.amount for e in s.query(PaymentEvent)} == {"ref_a": PRICE, "ref_b": PRICE, "ref_d": PRICE}  # records the PRICE, not the charge
+
+
+def test_end_to_end_underpaid_and_unexplained_amounts_are_refused(make_app, paystack):
+    with client_for(make_app(**STRICT)) as c:
+        for i, answer in enumerate([{"amount": PRICE - 1}, {"amount": PRICE + 200_000, "requested_amount": PRICE - 500, "fees": 200_500},
+                                    {"amount": PRICE * 3}, {"amount": PRICE + 200_000, "requested_amount": PRICE, "fees": 100_000}]):
+            cid = new_customer(f"u{i}@example.com", reference=f"ref_u{i}")
+            paystack.answer = verified(cid, f"ref_u{i}", **answer)
+            assert post_event(c, charge(cid, f"ref_u{i}")).status_code == 200
+            assert user(cid)[0] is False, answer
 
 
 def test_paystack_being_unreachable_asks_for_a_retry_and_records_nothing(make_app, paystack):
