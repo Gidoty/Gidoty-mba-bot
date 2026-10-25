@@ -17,11 +17,12 @@ from sqlalchemy.exc import IntegrityError
 from mba_bot import scheduler
 from mba_bot.db import get_open_trade, init_db, list_active_accounts, session_scope
 from mba_bot.instance_lock import AlreadyRunning, acquire_single_instance_lock
-from mba_bot.models import Base, Trade, TradingAccount
+from mba_bot.models import Base, DecisionLog, Trade, TradeTelemetry, TradingAccount
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
 PREVIOUS_HEAD = "dc1a28b7a42e"
-NEW_HEAD = "c7d2e5f8a1b3"  # head now includes the withdrawal-block column
+WITHDRAWAL_REVISION = "c7d2e5f8a1b3"  # the withdrawal-block column
+NEW_HEAD = "d4a8f1c3e6b2"  # head now also includes the research telemetry tables
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -111,6 +112,9 @@ def test_fresh_database_migrates_to_the_model_schema(tmp_path, monkeypatch):
     assert "withdrawal_blocked_at" in account_cols
     indexes = {i["name"] for i in inspect(engine).get_indexes("trades")}
     assert "uq_trades_one_nonterminal_per_account" in indexes
+    for model in (TradeTelemetry, DecisionLog):
+        table_cols = {c["name"] for c in inspect(engine).get_columns(model.__tablename__)}
+        assert table_cols == {c.name for c in model.__table__.columns}, f"{model.__tablename__}: migration and model must agree"
     with engine.connect() as conn:
         assert conn.execute(text("select version_num from alembic_version")).scalar() == NEW_HEAD
 
@@ -212,7 +216,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     assert script.get_heads() == [NEW_HEAD]
     assert script.get_revision(PROTECTIVE_REVISION).down_revision == PREVIOUS_HEAD
-    assert script.get_revision(NEW_HEAD).down_revision == PROTECTIVE_REVISION
+    assert script.get_revision(WITHDRAWAL_REVISION).down_revision == PROTECTIVE_REVISION
+    assert script.get_revision(NEW_HEAD).down_revision == WITHDRAWAL_REVISION
 
 
 # =========================== single-instance lock ===========================

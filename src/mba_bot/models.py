@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -380,3 +380,95 @@ class PaymentReference(Base):
     amount: Mapped[int] = mapped_column(Integer, nullable=False)  # the price asked for, in minor units
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+class TradeTelemetry(Base):
+    """Research context recorded when a trade is opened (telemetry.py).
+
+    One row per trade, written only when TRADE_TELEMETRY is on, and never read
+    by the trading path. Everything that can be derived later from the Trade
+    row itself (R-multiple, hold time, gross P&L, slippage against
+    `signal_price`) is deliberately NOT stored here; only what cannot be
+    reconstructed afterwards is: the signal as it looked at decision time, the
+    sizing inputs, and the market features. The cost columns are filled by the
+    optional read-only enrichment tool, never by the trading path."""
+
+    __tablename__ = "trade_telemetry"
+
+    trade_id: Mapped[str] = mapped_column(String(36), ForeignKey("trades.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+
+    strategy_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    strategy_params_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)  # "paper" | "live"
+    market_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    pair: Mapped[str] = mapped_column(String(20), nullable=False)
+    pair_selection_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    timeframe: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    signal_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    signal_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    signal_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candle_ts: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # last candle open time, ms
+    atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    atr_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fast_ema: Mapped[float | None] = mapped_column(Float, nullable=True)
+    slow_ema: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    effective_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    planned_risk_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    planned_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    planned_notional: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_distance_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    account_leverage: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    auto_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auto_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    auto_candidates: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    features_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Exact exchange costs, filled after the fact by the read-only enrichment
+    # tool (research/enrich.py). NULL = not measured; reports then use the
+    # modelled estimate and say so.
+    entry_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    funding_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    costs_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DecisionLog(Base):
+    """One row per distinct strategy decision worth studying (telemetry.py).
+
+    Only actionable moments are logged (a crossover was seen, an entry was
+    attempted, an Auto scan picked or skipped a pair), never every idle
+    5-minute poll, and the same decision on the same candle is written once.
+    `detail_json` holds small, non-sensitive numbers only."""
+
+    __tablename__ = "decision_log"
+    __table_args__ = (
+        Index("ix_decision_log_ts", "ts"),
+        Index("ix_decision_log_account_ts", "account_id", "ts"),
+        Index("ix_decision_log_reason", "reason_code"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # Plain string, not a foreign key: a log row must never block or be
+    # blocked by account maintenance.
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)
+    market_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    pair: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    strategy_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    stage: Mapped[str] = mapped_column(String(16), nullable=False)  # signal | entry | auto_scan
+    outcome: Mapped[str] = mapped_column(String(10), nullable=False)  # accepted | rejected | skipped
+    reason_code: Mapped[str] = mapped_column(String(48), nullable=False)
+    signal: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    candle_ts: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    trade_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)

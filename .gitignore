@@ -18,3 +18,8 @@ frontend/.env
 
 # single-instance scheduler lock (runtime only)
 mba_bot.lock
+
+# research tooling output (market data, reports, experiment ledger): never committed
+research_data/
+research_out/
+research_synthetic/
