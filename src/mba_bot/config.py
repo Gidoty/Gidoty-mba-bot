@@ -207,6 +207,10 @@ class Settings:
     # the capital-based availability marking / Auto skip). OFF by default:
     # with it off every code path behaves exactly as before the feature existed.
     futures_pair_expansion: bool = False
+    # Research telemetry (telemetry.py): per-trade context and a decision log,
+    # written to two separate tables and never read by the trading path. OFF by
+    # default: with it off no telemetry code runs and behaviour is unchanged.
+    trade_telemetry: bool = False
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -320,4 +324,5 @@ def load_settings() -> Settings:
         disable_api_docs=_env_bool("DISABLE_API_DOCS", False),
         sqlite_wal=_env_bool("SQLITE_WAL", False),
         sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
+        trade_telemetry=_env_bool("TRADE_TELEMETRY", False),
     )

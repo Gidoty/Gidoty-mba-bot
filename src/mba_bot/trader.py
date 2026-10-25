@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, lifecycle, pair_catalog
+from . import exchange, lifecycle, pair_catalog, telemetry
 from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
 from .db import get_open_trade, get_trades_closed_on
@@ -164,6 +164,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         # makes "never switch pairs while a position is open" true in
         # the backend trading logic itself: there is no code path from
         # this branch into an account that has one.
+        scan_info = None
         if open_trade is None and account.pair_selection_mode == "auto":
             # Capital-based skip only for a LIVE Futures account with the pair
             # expansion on; otherwise None = the scan is exactly what it always was.
@@ -172,7 +173,13 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 if (account.market_type == "futures" and settings.futures_pair_expansion and not is_paper)
                 else None
             )
-            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital)
+            scan_out: dict | None = {} if telemetry.enabled(settings) else None
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out)
+            if scan_out is not None:
+                scan_info = _scan_info(scan_out, auto_result)
+                telemetry.log_auto_scan(
+                    session, settings, account, scan_info, _scan_events(scan_out), is_paper=is_paper, now=now
+                )
             if auto_result is None:
                 # Nothing in the approved universe had an actionable
                 # signal this cycle - a normal, uneventful scan, not an
@@ -214,6 +221,15 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         account.last_error = None
         account.last_error_at = None
 
+        tctx = None
+        if open_trade is None and telemetry.enabled(settings) and (
+            signal.signal != SignalType.NONE or "flat" in (signal.reason or "")
+        ):
+            # Research telemetry only (never read by the trading path): what the
+            # strategy concluded, and the market features at that moment.
+            tctx = telemetry.build_entry_context(candles, signal, settings, now=now, scan=scan_info)
+            telemetry.signal_stage(session, settings, account, tctx, signal, is_paper=is_paper, now=now)
+
         if open_trade is None:
             if scan_pair != account.pair:
                 # The only place `pair` is ever reassigned by the bot
@@ -223,7 +239,9 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # reflects the pair actually just traded, never an
                 # intermediate scan result that didn't lead to a trade.
                 account.pair = scan_pair
-            await _maybe_enter(session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now)
+            await _maybe_enter(
+                session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx
+            )
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
@@ -284,7 +302,7 @@ def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_pape
 
 
 async def _scan_auto_pair(
-    client, account: TradingAccount, settings: Settings, *, capital: float | None = None
+    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None
 ) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
@@ -303,6 +321,10 @@ async def _scan_auto_pair(
     which `pair_selection.RankedPair` deliberately doesn't carry, to
     keep that module's public shape minimal and side-effect free).
 
+    `scan_out`, when given, is filled with what the scan saw (pairs skipped
+    for capital, candidates dropped by the flat-market filter, the ranking)
+    for research telemetry only. It never influences the result.
+
     Returns None if nothing in the universe had an actionable signal
     this cycle - never a forced/fallback pick."""
     scanned: list[PairCandidate] = []
@@ -316,6 +338,8 @@ async def _scan_auto_pair(
             facts = pair_catalog.facts_from_market((client.markets or {}).get(exchange.exchange_symbol(pair, account.market_type)))
             if pair_catalog.capital_supports_market(capital, facts.min_notional, settings.max_notional_multiplier) is False:
                 logger.info("account %s: auto-select skipping %s: %s", account.id, pair, pair_catalog.REASON_INSUFFICIENT_CAPITAL)
+                if scan_out is not None:
+                    scan_out.setdefault("skipped_capital", []).append(pair)
                 continue
         try:
             ohlcv = await client.fetch_ohlcv(
@@ -337,6 +361,8 @@ async def _scan_auto_pair(
         atr_flat_threshold=settings.atr_flat_threshold,
         atr_rolling_window=settings.atr_rolling_window,
     )
+    if scan_out is not None:
+        _note_scan(scan_out, scanned, ranked, settings)
     if not ranked:
         return None
 
@@ -353,7 +379,62 @@ async def _scan_auto_pair(
     return best_pair, best_candles, signal
 
 
-async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now):
+def _scan_info(scan_out: dict, result) -> telemetry.ScanInfo | None:
+    """Telemetry only: summarise an Auto scan; never raises."""
+    try:
+        if result is None:
+            return None
+        picked = result[0]
+        ranked = [(p, float(sc)) for p, sc in scan_out.get("ranked", [])]
+        names = [p for p, _ in ranked]
+        rank = names.index(picked) + 1 if picked in names else 1
+        score = dict(ranked).get(picked)
+        return telemetry.ScanInfo(
+            picked=picked,
+            rank=rank,
+            score=score,
+            ranked=ranked,
+            skipped_capital=list(scan_out.get("skipped_capital", [])),
+            flat_filtered=[p for p, _ in scan_out.get("flat_filtered", [])],
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _scan_events(scan_out: dict) -> list[dict]:
+    try:
+        events = [{"pair": p, "reason": telemetry.R_AUTO_SKIP_CAPITAL} for p in scan_out.get("skipped_capital", [])]
+        events += [{"pair": p, "reason": telemetry.R_AUTO_FLAT, "candle_ts": ts} for p, ts in scan_out.get("flat_filtered", [])]
+        return events
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _note_scan(scan_out: dict, scanned: list, ranked: list, settings: Settings) -> None:
+    """Telemetry only (see telemetry.py): never raises, never changes the scan."""
+    try:
+        scan_out["ranked"] = [(r.pair, r.score) for r in ranked]
+        in_rank = {r.pair for r in ranked}
+        flat = []
+        for cand in scanned:
+            if cand.pair in in_rank:
+                continue
+            sig = generate_signal(
+                cand.candles,
+                ema_fast_period=settings.ema_fast_period,
+                ema_slow_period=settings.ema_slow_period,
+                atr_period=settings.atr_period,
+                atr_flat_threshold=settings.atr_flat_threshold,
+                atr_rolling_window=settings.atr_rolling_window,
+            )
+            if sig.signal == SignalType.NONE and "flat" in (sig.reason or ""):
+                flat.append((cand.pair, int(cand.candles[-1].timestamp)))
+        scan_out["flat_filtered"] = flat
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None):
     if signal.signal == SignalType.BULLISH_CROSSOVER:
         side = "long"
     elif signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type == "futures":
@@ -361,10 +442,18 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     else:
         return
 
+    def _tlog(outcome: str, reason: str, **detail) -> None:
+        # Research telemetry only; no-op unless TRADE_TELEMETRY is on. Never raises.
+        telemetry.log_decision(
+            session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=outcome, reason=reason,
+            is_paper=is_paper, ctx=tctx, now=now, detail=detail or None,
+        )
+
     if account.pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
         # Fail closed: never open a NEW position on a pair that is not currently selectable for
         # this market (e.g. an extra Futures pair after the expansion was switched off). Managing
         # an already-open trade never goes through here - it always uses the trade's own pair.
+        _tlog(telemetry.REJECTED, telemetry.R_PAIR_UNAVAILABLE)
         await _record_error(
             notifier, account, "This pair is not currently available for trading, so no new trade was opened.", now=now
         )
@@ -387,10 +476,12 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         # withdraw never reaches an order, and a durable block (set the first
         # time one was seen) holds until the credential is replaced.
         if account.withdrawal_blocked_at is not None:
+            _tlog(telemetry.REJECTED, telemetry.R_WITHDRAWAL_BLOCKED)
             return
         try:
             await exchange.assert_trade_only(client)
         except exchange.WithdrawalPermissionDetected:
+            _tlog(telemetry.REJECTED, telemetry.R_WITHDRAWAL_DETECTED)
             await _flag_withdrawal_block(session, account, notifier, now=now)
             return
 
@@ -403,6 +494,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             # so this should be unreachable in practice - this check is
             # deliberate defense in depth, not redundancy to be trimmed.
             logger.warning("account %s: live account has no allocated_capital configured, refusing to enter", account.id)
+            _tlog(telemetry.REJECTED, telemetry.R_NO_CAPITAL_SET)
             return
         live_balance = await exchange.fetch_available_quote_balance(client, account.pair)
         # The customer's configured ceiling, never more than what
@@ -411,6 +503,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         # effective_capital = min(configured_trading_capital, currently_available_balance).
         effective_capital = min(account.allocated_capital, live_balance)
         if effective_capital <= 0:
+            _tlog(telemetry.REJECTED, telemetry.R_NO_FREE_BALANCE, allocated=account.allocated_capital, free=live_balance)
             return
 
     size = compute_position_size(
@@ -421,6 +514,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         max_risk_pct=settings.risk_pct_max,
     )
     if size.quantity <= 0:
+        _tlog(telemetry.REJECTED, telemetry.R_SIZE_ZERO)
         return
 
     if not is_paper:
@@ -451,12 +545,15 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             await venue.prepare()
             await lifecycle.preflight_entry(ctx)
         except lifecycle.EntryRefused as exc:
+            _tlog(telemetry.REJECTED, telemetry.R_PREFLIGHT_REFUSED)
             await _record_error(notifier, account, exc.message, now=now)
             return
         except (exchange.UnsupportedAccountMode, exchange.UnsupportedSymbol) as exc:
+            _tlog(telemetry.REJECTED, telemetry.R_UNSUPPORTED)
             await _record_error(notifier, account, exchange.safe_error_message(exc), now=now)
             return
         except ProtectionUnavailable:
+            _tlog(telemetry.REJECTED, telemetry.R_NO_PROTECTION)
             await _record_error(
                 notifier,
                 account,
@@ -466,6 +563,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             )
             return
 
+        leverage = None  # recorded by telemetry only; Spot has none
         if account.market_type == "futures":
             # Read-only - this module never calls set_leverage (see
             # exchange.fetch_symbol_leverage). Margin safety for a real
@@ -483,6 +581,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             # scoped to a brand new live Futures entry only.
             leverage = await exchange.fetch_symbol_leverage(client, venue.symbol, side=side)
             if leverage is None:
+                _tlog(telemetry.REJECTED, telemetry.R_LEVERAGE_UNREADABLE)
                 await _record_error(
                     notifier,
                     account,
@@ -495,13 +594,18 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
             )
         if size.quantity <= 0:
+            _tlog(telemetry.REJECTED, telemetry.R_SIZE_ZERO_CEILING)
             return
         quantity = venue.plan_entry_quantity(size.quantity, entry_price=current_price, stop_price=stop_price, side=side)
         if quantity <= 0:
             logger.info("account %s: sized quantity cannot satisfy %s exchange filters/protection, no entry", account.id, venue.symbol)
+            _tlog(
+                telemetry.REJECTED, telemetry.R_EXCHANGE_FILTERS,
+                wanted_qty=size.quantity, wanted_notional=size.quantity * current_price, capital=effective_capital,
+            )
             return
         risk_amount = quantity * size.stop_distance
-        await lifecycle.open_live_trade(
+        opened = await lifecycle.open_live_trade(
             ctx,
             side=side,
             quantity=quantity,
@@ -509,6 +613,17 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             stop_price=stop_price,
             risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
         )
+        if opened is None:
+            _tlog(telemetry.REJECTED, telemetry.R_CONCURRENT_TRADE)
+        elif telemetry.enabled(settings):
+            def _record_live() -> None:
+                _tlog(telemetry.ACCEPTED, telemetry.R_ENTRY_SUBMITTED, trade_status=opened.status)
+                telemetry.record_entry(
+                    session, settings, account, opened, ctx=tctx, is_paper=False, effective_capital=effective_capital,
+                    risk_amount=risk_amount, quantity=quantity, stop_price=stop_price, leverage=leverage,
+                )
+
+            telemetry.write_and_commit(session, _record_live)
         return
 
     trade = Trade(
@@ -523,6 +638,17 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         pair=account.pair,
     )
     session.add(trade)
+    if tctx is not None:
+        session.flush()  # assigns trade.id so the telemetry row can reference it; same transaction, committed just below
+
+        def _record_paper() -> None:
+            _tlog(telemetry.ACCEPTED, telemetry.R_ENTRY_PAPER, trade_id=trade.id)
+            telemetry.record_entry(
+                session, settings, account, trade, ctx=tctx, is_paper=True, effective_capital=effective_capital,
+                risk_amount=size.risk_amount, quantity=size.quantity, stop_price=stop_price,
+            )
+
+        telemetry.write_with_trade(session, _record_paper)
     session.commit()  # durable before the (network) notification, and never held across it
 
     mode_label = "PAPER" if is_paper else "LIVE"
