@@ -1,5 +1,7 @@
 # Nginx rate limits (proposed, not applied)
 
+> Update 2026-10-25: the owner has already applied the Cloudflare real-IP and `X-Forwarded-For` overwrite described in `README.md` ("Runbook entry"). The zone and `location` sketches below are still only a proposal.
+
 Nothing in this file has been applied. The owner edits Nginx. Adapt names to your existing site file (I have not seen it). Keep your existing `proxy_pass` and
 `proxy_set_header` lines inside each `location`; the sketches below show only what is added.
 

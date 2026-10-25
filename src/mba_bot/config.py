@@ -62,6 +62,23 @@ def auto_pairs(market_type: str) -> tuple[str, ...]:
 SUPPORTED_NOTIFICATION_CHANNELS = ("telegram", "whatsapp")
 
 
+_VERIFY_ENFORCE = ("1", "true", "yes", "on", "enforce")
+_VERIFY_OFF = ("", "0", "false", "no", "off")
+
+
+def parse_verify_mode(raw: str | None) -> str:
+    """off | log | enforce. Anything unrecognised is OFF (today's behaviour), never enforce by accident."""
+    value = (raw or "").strip().lower()
+    if value in _VERIFY_ENFORCE:
+        return "enforce"
+    return "log" if value == "log" else "off"
+
+
+def verify_mode_is_unrecognised(raw: str | None) -> bool:
+    value = (raw or "").strip().lower()
+    return value not in _VERIFY_ENFORCE + _VERIFY_OFF + ("log",)
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -194,7 +211,9 @@ class Settings:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
     # /initialize, check amount and currency, and record processed events (unique constraint).
-    paystack_strict_verify: bool = False
+    # PAYSTACK_STRICT_VERIFY: "off" (unset, 0, false: today's behaviour), "log" (run the full verification and log the
+    # verdict, but accept and reject exactly as today), "enforce" ("1", true, yes, on, enforce: the verdict decides).
+    paystack_verify_mode: str = "off"
     # F-03: take the single-instance lock inside the API lifespan too (not only in main.py).
     api_single_instance_lock: bool = False
     # F-05: when set, the Telegram webhook requires this value in the
@@ -212,6 +231,11 @@ class Settings:
     # WAL + busy timeout for SQLite. PREPARED ONLY: do not enable without the runbook.
     sqlite_wal: bool = False
     sqlite_busy_timeout_ms: int = 15000
+
+    @property
+    def paystack_strict_verify(self) -> bool:
+        """True only in enforce mode (kept for callers that ask a yes/no question)."""
+        return self.paystack_verify_mode == "enforce"
 
 
 LEGACY_FUTURES_TESTNET_VARS = ("TESTNET_FUTURES_API_KEY", "TESTNET_FUTURES_API_SECRET")
@@ -284,7 +308,7 @@ def load_settings() -> Settings:
         max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
         cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
         futures_pair_expansion=_env_bool("FUTURES_PAIR_EXPANSION", False),
-        paystack_strict_verify=_env_bool("PAYSTACK_STRICT_VERIFY", False),
+        paystack_verify_mode=parse_verify_mode(os.environ.get("PAYSTACK_STRICT_VERIFY")),
         api_single_instance_lock=_env_bool("API_SINGLE_INSTANCE_LOCK", False),
         telegram_webhook_secret=os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None,
         rate_limit_enabled=_env_bool("RATE_LIMIT_ENABLED", False),

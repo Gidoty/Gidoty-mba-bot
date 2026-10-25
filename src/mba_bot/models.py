@@ -361,3 +361,22 @@ class PaymentEvent(Base):
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     outcome: Mapped[str] = mapped_column(String(24), nullable=False)  # "applied" | "already_paid"
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PaymentReference(Base):
+    """A payment reference this application issued at /initialize (F-01 follow-up). Recorded only while
+    PAYSTACK_STRICT_VERIFY is `log` or `enforce`. It lets a customer who started checkout twice pay either link: the
+    webhook is matched against every reference issued to that customer, not only the latest one, and against the
+    price at the time of issue. Holds no card data, no email and no secret. Nothing reads it while the mode is off."""
+
+    __tablename__ = "payment_references"
+    __table_args__ = (UniqueConstraint("provider", "reference", name="uq_payment_references_provider_reference"),
+                      Index("ix_payment_references_customer_id", "customer_id"))
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    reference: Mapped[str] = mapped_column(String(100), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # the price asked for, in minor units
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
