@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..config import load_settings, warn_about_legacy_futures_testnet_env
+from ..config import load_settings, verify_mode_is_unrecognised, warn_about_legacy_futures_testnet_env
 from ..db import init_db
 from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
@@ -62,6 +63,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("JWT_SECRET is not set")
 
     warn_about_legacy_futures_testnet_env(logger)
+    if verify_mode_is_unrecognised(os.environ.get("PAYSTACK_STRICT_VERIFY")):
+        logger.warning("PAYSTACK_STRICT_VERIFY has an unrecognised value; treating it as OFF. Use off, log or enforce.")
     install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
     lock_handle = None
     if settings.api_single_instance_lock:
