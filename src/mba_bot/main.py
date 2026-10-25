@@ -33,7 +33,7 @@ def main() -> None:
         lock = acquire_single_instance_lock(settings.lock_file)  # noqa: F841
     except AlreadyRunning as exc:
         raise SystemExit(str(exc))
-    init_db(settings.database_url)
+    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms)
     asyncio.run(run_forever(settings))
 
 

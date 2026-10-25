@@ -11,6 +11,7 @@ onboarding gate, not just a nice-to-have.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
 
@@ -73,6 +74,12 @@ _LINKED_MESSAGE = "Your MBA Bot account is linked. Trade entries, exits, and dai
 async def telegram_webhook(
     request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
 ) -> dict:
+    # F-05: when TELEGRAM_WEBHOOK_SECRET is set, only requests carrying it are accepted (Telegram sends the value
+    # given to setWebhook as secret_token in this header). Unset = no check, exactly as before.
+    expected = settings.telegram_webhook_secret
+    if expected and not hmac.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), expected):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "forbidden")
+
     # Telegram just needs a 200 response; errors here are logged and
     # swallowed rather than raised, since a non-200 makes Telegram retry
     # the same update indefinitely.
