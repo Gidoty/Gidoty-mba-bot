@@ -385,7 +385,9 @@ def safe_error_message(exc: Exception) -> str:
     return "An unexpected error occurred while checking the market for this account."
 
 
-async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
+async def fetch_symbol_leverage_and_margin_mode(
+    client: ccxt_async.Exchange, pair: str, *, side: str
+) -> tuple[float | None, str | None]:
     """Read-only. Returns the account's currently configured leverage for
     `pair`/`side` ("long" or "short"), or None if it can't be determined.
 
@@ -398,6 +400,9 @@ async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side:
     onto Binance's symbol-config/account-info endpoints) - safe to call
     every cycle purely to learn what leverage is already configured.
 
+    Returns (leverage, margin_mode) from the one read. margin_mode is "isolated", "cross" or
+    None (not reported); the pre-entry protection check treats None as isolated, the conservative case.
+
     A None return means the caller's margin ceiling (risk.
     apply_margin_ceiling) is simply skipped for this entry - never
     treated as "assume some leverage" or "assume no leverage". The
@@ -408,17 +413,24 @@ async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side:
     try:
         leverage = await client.fetch_leverage(pair)
     except Exception:
-        return None
+        return None, None
     if not isinstance(leverage, dict):
-        return None
+        return None, None
+    mode = leverage.get("marginMode")
+    mode = mode if mode in ("isolated", "cross") else None
     value = leverage.get("longLeverage") if side == "long" else leverage.get("shortLeverage")
     if value is None:
-        return None
+        return None, mode
     try:
         value = float(value)
     except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
+        return None, mode
+    return (value if value > 0 else None), mode
+
+
+async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
+    """Leverage only; see fetch_symbol_leverage_and_margin_mode (same single read-only call)."""
+    return (await fetch_symbol_leverage_and_margin_mode(client, pair, side=side))[0]
 
 
 async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) -> float:

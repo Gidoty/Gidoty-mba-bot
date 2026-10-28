@@ -211,6 +211,23 @@ class Settings:
     # written to two separate tables and never read by the trading path. OFF by
     # default: with it off no telemetry code runs and behaviour is unchanged.
     trade_telemetry: bool = False
+    # Pre-entry protection check (risk.assess_stop_viability): before a live Futures entry, estimate how far
+    # the account's Binance leverage puts liquidation from entry and refuse the entry when the ATR stop would
+    # not sit safely inside that distance. A stop beyond liquidation can never be placed (the post-entry
+    # liquidation check refuses it), so such an entry only opens and immediately closes. ON by default; set
+    # PROTECTION_PRECHECK_ENABLED=0 to restore the previous behaviour.
+    protection_precheck_enabled: bool = True
+    # Assumed maintenance-margin rate (fraction of notional). Deliberately above Binance's lowest tier.
+    precheck_maint_margin_rate: float = 0.01
+    # The stop must lie within this fraction of the estimated liquidation distance (the rest is the buffer).
+    precheck_stop_safety_fraction: float = 0.75
+    # Repeat-failure limit: this many emergency exits (protective stop could not be placed) for one account and
+    # pair inside the window block new entries on that pair until the oldest failure leaves the window.
+    # 0 disables the limit.
+    protection_fail_limit: int = 2
+    protection_fail_window_hours: float = 24.0
+    # How often the same blocking reason may alert the customer again (in-memory; one alert after a restart).
+    protection_alert_repeat_hours: float = 6.0
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -325,4 +342,10 @@ def load_settings() -> Settings:
         sqlite_wal=_env_bool("SQLITE_WAL", False),
         sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
         trade_telemetry=_env_bool("TRADE_TELEMETRY", False),
+        protection_precheck_enabled=_env_bool("PROTECTION_PRECHECK_ENABLED", True),
+        precheck_maint_margin_rate=min(0.2, max(0.0, _env_float("PRECHECK_MAINT_MARGIN_RATE", 0.01))),
+        precheck_stop_safety_fraction=min(1.0, max(0.1, _env_float("PRECHECK_STOP_SAFETY_FRACTION", 0.75))),
+        protection_fail_limit=max(0, _env_int("PROTECTION_FAIL_LIMIT", 2)),
+        protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
+        protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
     )

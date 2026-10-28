@@ -119,6 +119,9 @@ def _settings(**overrides) -> Settings:
         paystack_amount=0,
         paystack_currency="NGN",
     )
+    # These tests use synthetic candles whose stop is far from any realistic distance; the pre-entry protection
+    # check has its own tests (tests/test_pre_entry_protection.py).
+    defaults.setdefault("protection_precheck_enabled", False)
     defaults.update(overrides)
     return Settings(**defaults)
 

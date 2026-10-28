@@ -423,8 +423,11 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
         try:
             return await _place_and_verify(ctx, trade)
         except Exception as exc:
+            # ProtectionUnavailable carries one of this codebase's own fixed reasons (never exchange text), so it is
+            # safe to log and says which check refused; every other exception logs its type only, as before.
             logger.warning(
-                "account %s: protective stop attempt %d/%d failed (%s)", ctx.account.id, i + 1, attempts, type(exc).__name__
+                "account %s: protective stop attempt %d/%d failed (%s%s)", ctx.account.id, i + 1, attempts,
+                type(exc).__name__, f": {exc}" if isinstance(exc, ProtectionUnavailable) and str(exc) else "",
             )
             # An InsufficientFunds from the exchange means the free balance moved
             # between our read and the order: retrying re-reads it and re-bounds

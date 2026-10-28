@@ -85,6 +85,9 @@ def make_settings(**overrides) -> Settings:
         entry_unknown_void_after_seconds=180,
         spot_stop_limit_buffer_pct=0.5,
         protection_software_grace_pct=0.5,
+        # Synthetic candles here give a stop far from any realistic distance; the pre-entry protection check has
+        # its own tests (tests/test_pre_entry_protection.py) and is switched on there.
+        protection_precheck_enabled=False,
     )
     return dataclasses.replace(base, **overrides)
 

@@ -6,6 +6,7 @@ keeps a string of losses from compounding into an outsized drawdown.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -130,3 +131,83 @@ def apply_margin_ceiling(size: PositionSize, *, entry_price: float, effective_ca
         return size
     capped_notional = effective_capital * leverage
     return _resized(size, quantity=capped_notional / entry_price)
+
+
+@dataclass(frozen=True)
+class StopViability:
+    viable: bool
+    reason: str  # "ok" | "stop_beyond_safe_liquidation_distance" | "protection_check_inputs_invalid"
+    stop_distance_pct: float | None = None
+    liquidation_distance_pct: float | None = None
+    max_allowed_stop_pct: float | None = None
+    margin_mode_assumed: str | None = None
+
+    def detail(self) -> dict:
+        """Small, non-sensitive numbers for the decision log."""
+        return {
+            "stop_distance_pct": self.stop_distance_pct,
+            "est_liquidation_distance_pct": self.liquidation_distance_pct,
+            "max_allowed_stop_pct": self.max_allowed_stop_pct,
+            "margin_mode_assumed": self.margin_mode_assumed,
+        }
+
+
+def assess_stop_viability(
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    quantity: float,
+    leverage: float,
+    effective_capital: float,
+    margin_mode: str | None,
+    maint_margin_rate: float,
+    safety_fraction: float,
+) -> StopViability:
+    """Futures, before an entry order. Can a protective stop sit safely inside the liquidation price?
+
+    Estimated distance from entry to liquidation, as a fraction of entry (long and short are symmetric):
+
+      isolated (also used when the margin mode is unknown):  1/leverage - maintenance_margin_rate
+      cross:   max(isolated, effective_capital / notional - maintenance_margin_rate)
+
+    The entry is allowed only if  |entry - stop| / entry  <=  safety_fraction * distance.  Equality passes.
+    The estimate ignores fees, funding and the tiered maintenance rate at large notionals, which is why the
+    assumed rate defaults above Binance's lowest tier and only `safety_fraction` of the distance may be used.
+    Any input that is missing, non-finite, non-positive, or on the wrong side of entry fails closed.
+    """
+    def invalid() -> StopViability:
+        return StopViability(False, "protection_check_inputs_invalid", margin_mode_assumed=margin_mode)
+
+    nums = (entry_price, stop_price, quantity, leverage, effective_capital, maint_margin_rate, safety_fraction)
+    try:
+        if any(v is None or not math.isfinite(float(v)) for v in nums):
+            return invalid()
+    except (TypeError, ValueError):
+        return invalid()
+    if entry_price <= 0 or stop_price <= 0 or quantity <= 0 or leverage <= 0 or effective_capital <= 0:
+        return invalid()
+    if not (0 <= maint_margin_rate < 0.5) or not (0 < safety_fraction <= 1):
+        return invalid()
+    if side == "long" and stop_price >= entry_price:
+        return invalid()
+    if side == "short" and stop_price <= entry_price:
+        return invalid()
+    if side not in ("long", "short"):
+        return invalid()
+
+    mode = margin_mode if margin_mode in ("isolated", "cross") else "isolated"
+    stop_dist = abs(entry_price - stop_price) / entry_price
+    liq_dist = 1.0 / leverage - maint_margin_rate
+    if mode == "cross":
+        liq_dist = max(liq_dist, effective_capital / (quantity * entry_price) - maint_margin_rate)
+    allowed = max(0.0, safety_fraction * liq_dist)
+    ok = liq_dist > 0 and stop_dist <= allowed
+    return StopViability(
+        ok,
+        "ok" if ok else "stop_beyond_safe_liquidation_distance",
+        stop_distance_pct=round(stop_dist * 100, 4),
+        liquidation_distance_pct=round(liq_dist * 100, 4),
+        max_allowed_stop_pct=round(allowed * 100, 4),
+        margin_mode_assumed=mode,
+    )
