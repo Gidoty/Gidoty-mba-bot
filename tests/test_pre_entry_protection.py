@@ -25,6 +25,7 @@ from mba_bot.db import init_db, session_scope
 from mba_bot.models import DecisionLog, Trade, TradeTelemetry, TradingAccount
 from mba_bot.risk import MaintenanceTier, assess_stop_viability, validate_tiers
 from mba_bot.strategy import SignalType, candles_from_ohlcv, generate_signal
+from mba_bot.venue import ProtectionUnavailable
 
 
 @pytest.fixture
@@ -308,15 +309,35 @@ def test_real_ccxt_parsing_of_symbol_config_gives_leverage_and_margin_mode():
     assert asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(_CcxtStub(config={**SYMBOL_CONFIG, "marginType": "cross"}), "X", side="short"))[1] == "isolated"
 
 
-@pytest.mark.parametrize("bad", [0, 126, -3, True, False, None, "abc", float("nan"), float("inf")])
-def test_the_exchange_reader_rejects_leverage_outside_the_sane_range(bad):
+def _read_leverage(value):
     import asyncio
 
     class Raw:
         async def fetch_leverage(self, pair):
-            return {"marginMode": "isolated", "longLeverage": bad, "shortLeverage": bad}
+            return {"marginMode": "isolated", "longLeverage": value, "shortLeverage": value}
 
-    assert asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(Raw(), "X", side="long"))[0] is None
+    return asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(Raw(), "X", side="long"))[0]
+
+
+@pytest.mark.parametrize("bad", [0, -3, True, False, None, "abc", "", float("nan"), float("inf"), [1], {"a": 1}])
+def test_the_exchange_reader_rejects_values_that_are_not_a_leverage(bad):
+    assert _read_leverage(bad) is None
+
+
+@pytest.mark.parametrize("value, expected", [(1, 1.0), (125, 125.0), ("20", 20.0), (0.5, 0.5), (126, 126.0), (200, 200.0)])
+def test_the_exchange_reader_does_not_apply_the_plausible_range(value, expected):
+    """With the guards off the read behaves as before they existed: any positive finite number comes through. The
+    1..max range is applied by the pre-check only (below)."""
+    assert _read_leverage(value) == expected
+
+
+@pytest.mark.parametrize("lev", [0.5, 126.0, 200.0, 1000.0])
+def test_the_precheck_refuses_an_implausible_leverage_and_the_maximum_is_configurable(lev):
+    r = _check(leverage=lev, stop_price=99.99)
+    assert not r.viable and r.reason == risk.INPUTS_INVALID
+    wide = _check(leverage=lev, stop_price=99.99, max_leverage=1000.0) if lev >= 1.0 else None
+    if wide is not None:
+        assert wide.reason != risk.INPUTS_INVALID  # accepted as plausible once the configured maximum allows it
 
 
 def test_real_ccxt_parsing_of_leverage_brackets_feeds_the_calculation():
@@ -373,12 +394,17 @@ def test_guard_mode_parsing(raw, mode, unrecognised):
 
 def test_shipped_defaults(monkeypatch):
     for var in ("PROTECTION_PRECHECK_MODE", "PROTECTION_FAIL_LIMIT_MODE", "PRECHECK_MIN_MAINT_RATE", "PRECHECK_STOP_SAFETY_FRACTION",
-                "PRECHECK_CROSS_COLLATERAL_FACTOR", "PROTECTION_FAIL_LIMIT", "PROTECTION_FAIL_WINDOW_HOURS", "PROTECTION_ALERT_REPEAT_HOURS"):
+                "PRECHECK_CROSS_COLLATERAL_FACTOR", "PROTECTION_FAIL_LIMIT", "PROTECTION_FAIL_WINDOW_HOURS", "PROTECTION_ALERT_REPEAT_HOURS",
+                "PRECHECK_MAX_LEVERAGE", "PROTECTION_TRANSIENT_LIMIT", "PROTECTION_TRANSIENT_WINDOW_HOURS",
+                "PROTECTION_UNCLASSIFIED_LIMIT", "PROTECTION_UNCLASSIFIED_WINDOW_HOURS"):
         monkeypatch.delenv(var, raising=False)
     s = config_mod.load_settings()
     assert (s.protection_precheck_mode, s.protection_fail_limit_mode) == ("observe", "observe")
     assert (s.precheck_min_maint_rate, s.precheck_stop_safety_fraction, s.precheck_cross_collateral_factor) == (0.005, 0.75, 0.9)
     assert (s.protection_fail_limit, s.protection_fail_window_hours, s.protection_alert_repeat_hours) == (2, 24.0, 6.0)
+    assert (s.protection_transient_limit, s.protection_transient_window_hours) == (3, 6.0)
+    assert (s.protection_unclassified_limit, s.protection_unclassified_window_hours) == (3, 24.0)
+    assert s.precheck_max_leverage == 125.0
 
 
 def test_environment_overrides_and_clamping(monkeypatch):
@@ -387,7 +413,11 @@ def test_environment_overrides_and_clamping(monkeypatch):
     monkeypatch.setenv("PRECHECK_MIN_MAINT_RATE", "9")
     monkeypatch.setenv("PRECHECK_STOP_SAFETY_FRACTION", "0")
     monkeypatch.setenv("PROTECTION_FAIL_LIMIT", "-4")
+    monkeypatch.setenv("PRECHECK_MAX_LEVERAGE", "5000")
+    monkeypatch.setenv("PROTECTION_TRANSIENT_LIMIT", "-1")
+    monkeypatch.setenv("PROTECTION_TRANSIENT_WINDOW_HOURS", "0")
     s = config_mod.load_settings()
+    assert s.precheck_max_leverage == 1000.0 and s.protection_transient_limit == 0 and s.protection_transient_window_hours == 0.1
     assert (s.protection_precheck_mode, s.protection_fail_limit_mode) == ("enforce", "off")
     assert s.precheck_min_maint_rate == 0.2 and s.precheck_stop_safety_fraction == 0.1 and s.protection_fail_limit == 0
 
@@ -748,7 +778,10 @@ def test_off_and_zero_limit_never_block(db, monkeypatch):
 
 
 def test_only_structural_failures_inside_the_window_on_this_pair_count(db, monkeypatch):
-    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2, protection_fail_window_hours=24.0)
+    # The transient and unclassified limits have their own tests below; here they are off so this one isolates the
+    # structural count (transient and unclassified rows are seeded on purpose and must not feed it).
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2, protection_fail_window_hours=24.0,
+                         protection_transient_limit=0, protection_unclassified_limit=0)
     client = _limit_client()
     account_id = _live(db, monkeypatch, settings, client)
     _failed_exit_rows(account_id, 5, ago_hours=30.0)                                        # too old
@@ -797,8 +830,9 @@ def test_the_incident_loop_is_cut_off_after_the_limit_end_to_end(db, monkeypatch
     assert len(_alerts(notifier)) == 1
 
 
-def test_transient_failures_do_not_trip_the_limit_end_to_end(db, monkeypatch):
-    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2)
+def test_transient_failures_do_not_count_toward_the_structural_limit_end_to_end(db, monkeypatch):
+    """Structural limit 1: if transient exits were counted by it, the second round would already be blocked."""
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=1, protection_transient_limit=0)
     client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
     client.fail("create_order", role="stop", exc=ccxt.RequestTimeout("slow"), times=999)
     account_id = _live(db, monkeypatch, settings, client)
@@ -808,8 +842,26 @@ def test_transient_failures_do_not_trip_the_limit_end_to_end(db, monkeypatch):
         notifier = run_cycle(account_id, settings, notifier)
 
     closed = [t for t in all_trades(account_id) if t.close_reason == "protection_transient_emergency_exit"]
-    assert len(closed) >= 3, "the limit never engaged, because none of these were structural"
+    assert len(closed) == 4, "neither limit engaged: the structural one ignores transient exits, the transient one is off"
     assert _alerts(notifier) == []
+
+
+def test_a_transient_loop_is_cut_off_after_its_own_limit_end_to_end(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_transient_limit=3)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client.fail("create_order", role="stop", exc=ccxt.RequestTimeout("slow"), times=999)
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = None
+    for _ in range(7):
+        notifier = run_cycle(account_id, settings, notifier)
+
+    closed = [t for t in all_trades(account_id) if t.close_reason == "protection_transient_emergency_exit"]
+    assert len(closed) == 3 and len(client.market_orders) == 6  # three entries and their three emergency exits
+    alerts = _alerts(notifier)
+    assert len(alerts) == 1 and "not caused by your settings" in alerts[0]
+    assert len(_decisions(telemetry.R_TRANSIENT_FAIL_LIMIT)) >= 1
+    assert _decisions(telemetry.R_PROTECTION_FAIL_LIMIT) == []
 
 
 def test_a_failing_lookup_never_blocks_trading():
@@ -849,3 +901,347 @@ def test_reason_codes_match_between_risk_and_telemetry():
         telemetry.R_STOP_UNVIABLE, telemetry.R_PROTECTION_INPUTS_INVALID, telemetry.R_TIERS_UNAVAILABLE,
         telemetry.R_MARGIN_MODE_UNKNOWN, telemetry.R_CROSS_UNVERIFIABLE)
     assert all(len(c) <= 48 for c in (risk.STOP_UNVIABLE, risk.TIERS_UNAVAILABLE, risk.CROSS_UNVERIFIABLE, risk.MARGIN_MODE_UNKNOWN))
+
+
+# ------------------------------------------------------------------ the transient and unclassified limits
+
+TRANSIENT = "protection_transient_emergency_exit"
+UNCLASSIFIED = "protection_unclassified_emergency_exit"
+STRUCTURAL = "protection_failed_emergency_exit"
+
+
+def _quiet_settings(**over):
+    """Pre-check off and every limit at its default; tests override what they exercise."""
+    return _settings(protection_precheck_mode="off", **over)
+
+
+def test_transient_exits_below_the_limit_do_not_block_and_at_the_limit_do(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 2, reason=TRANSIENT)
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open", "2 transient exits in 6h is below the limit of 3"
+
+
+def test_transient_limit_blocks_with_a_cause_specific_alert(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=TRANSIENT, ago_hours=1.0)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert client.market_orders == []
+    rows = _decisions(telemetry.R_TRANSIENT_FAIL_LIMIT)
+    detail = json.loads(rows[0].detail_json)
+    assert len(rows) == 1 and rows[0].outcome == telemetry.REJECTED
+    assert (detail["kind"], detail["scope"], detail["failures"], detail["limit"], detail["window_hours"]) == ("transient", "account", 3, 3, 6.0)
+    alert = _alerts(notifier)[0]
+    assert "could not be reached reliably" in alert and "resume automatically" in alert and "leverage" not in alert.lower()
+
+
+def test_transient_scope_is_the_whole_account_not_one_pair(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=TRANSIENT, pair="XRP/USDT")  # other pair, same account
+    run_cycle(account_id, settings)
+    assert client.market_orders == [], "an exchange problem is not specific to the pair that happened to be traded"
+
+
+def test_transient_rows_of_another_account_or_paper_or_outside_six_hours_do_not_count(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    other_id = new_account(settings, market_type="futures", email="other@example.com")
+    _failed_exit_rows(other_id, 5, reason=TRANSIENT)                    # another account
+    _failed_exit_rows(account_id, 5, reason=TRANSIENT, paper=True)      # paper
+    _failed_exit_rows(account_id, 5, reason=TRANSIENT, ago_hours=7.0)   # older than the 6h window
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+
+
+def test_the_transient_lockout_ends_by_itself_when_the_oldest_exit_leaves_the_window(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=TRANSIENT, ago_hours=5.9)
+    with session_scope() as session:
+        now = datetime.now(timezone.utc)
+        assert protection_guard.count_failures(session, account_id, reason=TRANSIENT, now=now, window_hours=6.0) == 3
+        assert protection_guard.count_failures(session, account_id, reason=TRANSIENT, now=now + timedelta(hours=1), window_hours=6.0) == 0
+
+
+def test_unclassified_limit_is_per_account_and_pair(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=UNCLASSIFIED, pair="XRP/USDT")  # another pair: must NOT lock out BTC
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+
+    protection_guard.reset_for_tests()
+    client2 = _limit_client()
+    install(monkeypatch, client2)
+    account2 = new_account(settings, market_type="futures", email="second@example.com")
+    _failed_exit_rows(account2, 3, reason=UNCLASSIFIED, pair="BTC/USDT")
+    notifier = run_cycle(account2, settings)
+    assert client2.market_orders == []
+    rows = _decisions(telemetry.R_UNCLASSIFIED_FAIL_LIMIT)
+    assert len(rows) == 1 and json.loads(rows[0].detail_json)["scope"] == "account_pair"
+    assert "could not identify" in _alerts(notifier)[0]
+
+
+def test_two_unclassified_exits_do_not_block(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 2, reason=UNCLASSIFIED)
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+
+
+def test_the_categories_do_not_feed_each_other(db, monkeypatch):
+    """1 structural + 2 transient + 2 unclassified: each is below its own limit, so nothing blocks."""
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 1, reason=STRUCTURAL)
+    _failed_exit_rows(account_id, 2, reason=TRANSIENT)
+    _failed_exit_rows(account_id, 2, reason=UNCLASSIFIED)
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+
+
+def test_when_several_limits_are_reached_the_structural_one_is_reported_first(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 2, reason=STRUCTURAL)
+    _failed_exit_rows(account_id, 3, reason=TRANSIENT)
+    notifier = run_cycle(account_id, settings)
+    assert client.market_orders == [] and "leverage" in _alerts(notifier)[0].lower()
+    assert len(_decisions(telemetry.R_PROTECTION_FAIL_LIMIT)) == 1
+
+
+def test_each_limit_can_be_switched_off_on_its_own(db, monkeypatch):
+    for n, kw in enumerate((dict(protection_transient_limit=0), dict(protection_unclassified_limit=0))):
+        settings = _quiet_settings(**kw)
+        client = _limit_client()
+        install(monkeypatch, client)
+        account_id = new_account(settings, market_type="futures", email=f"sw{n}@example.com")
+        _failed_exit_rows(account_id, 9, reason=TRANSIENT if "protection_transient_limit" in kw else UNCLASSIFIED)
+        run_cycle(account_id, settings)
+        assert the_trade(account_id).status == "open", kw
+
+
+def test_observe_records_every_limit_reached_and_blocks_nothing(db, monkeypatch):
+    settings = _quiet_settings(protection_fail_limit_mode="observe")
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 2, reason=STRUCTURAL)
+    _failed_exit_rows(account_id, 3, reason=TRANSIENT)
+    _failed_exit_rows(account_id, 3, reason=UNCLASSIFIED)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open" and _alerts(notifier) == [] and _last_error(account_id) is None
+    codes = {d.reason_code for d in _decisions() if d.outcome == telemetry.OBSERVED}
+    assert codes == {telemetry.R_PROTECTION_FAIL_LIMIT, telemetry.R_TRANSIENT_FAIL_LIMIT, telemetry.R_UNCLASSIFIED_FAIL_LIMIT}
+
+
+def test_a_broken_lookup_of_one_category_neither_blocks_nor_hides_the_others(db, monkeypatch):
+    settings = _quiet_settings()
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=UNCLASSIFIED)
+    real = protection_guard.count_failures
+
+    def flaky(session, account_id, *, reason, **kw):
+        if reason == TRANSIENT:
+            raise RuntimeError("db hiccup")
+        return real(session, account_id, reason=reason, **kw)
+
+    monkeypatch.setattr(protection_guard, "count_failures", flaky)
+    run_cycle(account_id, settings)
+    assert client.market_orders == [], "the unclassified limit still applied although the transient lookup failed"
+
+
+# ------------------------------------------------------------------ classification is reset per attempt
+
+
+def test_the_failure_classification_is_reset_for_every_attempt_and_call(db, monkeypatch):
+    import asyncio
+
+    settings = make_settings(protection_max_attempts=3)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+    outcomes = []
+
+    async def scripted(ctx, trade):
+        step = outcomes.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+    monkeypatch.setattr(lifecycle, "_place_and_verify", scripted)
+    with session_scope() as session:
+        ctx = live_context(session, account_id, client, settings)
+        trade = Trade(account_id=account_id, side="long", is_paper=False, entry_price=10.0, quantity=1.0, stop_loss_price=9.0,
+                      status="protecting", opened_at=datetime.now(timezone.utc), pair="BTC/USDT")
+        session.add(trade)
+        session.flush()
+
+        ctx.protection_failure_kind = "structural"   # stale value from some earlier call on this context
+        outcomes[:] = [ccxt.RequestTimeout("t"), ccxt.RequestTimeout("t"), ccxt.RequestTimeout("t")]
+        assert asyncio.run(lifecycle.establish_protection(ctx, trade)) == "failed"
+        assert ctx.protection_failure_kind == "transient", "the stale 'structural' must not survive"
+
+        outcomes[:] = [ccxt.RequestTimeout("t"), "protected"]   # a failed attempt followed by a good one
+        assert asyncio.run(lifecycle.establish_protection(ctx, trade)) == "protected"
+        assert ctx.protection_failure_kind is None and ctx.protection_failure_detail is None
+
+        outcomes[:] = [ccxt.RequestTimeout("t"), ProtectionUnavailable("stop is at or beyond the liquidation price")]
+        assert asyncio.run(lifecycle.establish_protection(ctx, trade)) == "failed"
+        assert ctx.protection_failure_kind == "structural"
+        assert ctx.protection_failure_detail == "stop is at or beyond the liquidation price"
+
+        outcomes[:] = [ProtectionUnavailable("x"), ]  # structural stops retrying at once
+        assert asyncio.run(lifecycle.establish_protection(ctx, trade)) == "failed" and ctx.protection_failure_kind == "structural"
+        session.rollback()
+
+
+
+# ------------------------------------------------------------------ the leverage range does not apply with the guards off
+
+
+def _lev_client(lev):
+    return _fut(leverage_by_symbol={"BTC/USDT": lev})
+
+
+def test_with_the_precheck_off_an_unusual_leverage_reads_and_trades_as_before(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit_mode="off")
+    client = _lev_client(200.0)
+    account_id = _live(db, monkeypatch, settings, client)
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open", "no guard runs, so the leverage value is not second-guessed"
+
+
+def test_with_the_precheck_enforced_an_implausible_leverage_is_refused_before_any_order(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="enforce")
+    client = _lev_client(200.0)
+    account_id = _live(db, monkeypatch, settings, client)
+    notifier = run_cycle(account_id, settings)
+    assert client.market_orders == [] and len(_decisions(telemetry.R_PROTECTION_INPUTS_INVALID)) == 1
+    assert len(_alerts(notifier)) == 1
+
+
+def test_with_the_precheck_observing_an_implausible_leverage_is_recorded_and_not_blocked(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="observe")
+    client = _lev_client(200.0)
+    account_id = _live(db, monkeypatch, settings, client)
+    notifier = run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open" and _alerts(notifier) == []
+    assert [d.outcome for d in _decisions(telemetry.R_PROTECTION_INPUTS_INVALID)] == [telemetry.OBSERVED]
+
+
+def test_the_configured_maximum_leverage_is_honoured(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="enforce", precheck_max_leverage=250.0)
+    client = _lev_client(200.0)
+    account_id = _live(db, monkeypatch, settings, client)
+    run_cycle(account_id, settings)
+    assert _decisions(telemetry.R_PROTECTION_INPUTS_INVALID) == []  # accepted as plausible; the stop is then judged on its merits
+
+
+# ------------------------------------------------------------------ observe-mode logging
+
+
+def test_an_observed_refusal_is_journaled_once_per_window_not_every_round(db, monkeypatch, caplog):
+    import logging
+
+    settings = _settings(protection_precheck_mode="observe", trade_telemetry=False)
+    client = _fut()   # 2x leverage on the 52% synthetic stop: would be refused
+    account_id = _live(db, monkeypatch, settings, client)
+
+    with caplog.at_level(logging.INFO, logger="mba_bot.trader"):
+        notifier = None
+        for _ in range(4):
+            notifier = run_cycle(account_id, settings, notifier)
+
+    lines = [r for r in caplog.records if "[observe] protection pre-check would refuse" in r.getMessage()]
+    assert len(lines) == 1, "a persistent would-be refusal must not repeat every round"
+
+
+def test_an_observed_pass_is_journaled_even_without_telemetry_and_only_once_per_entry(db, monkeypatch, caplog):
+    import logging
+
+    settings = _settings(protection_precheck_mode="observe", trade_telemetry=False)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+
+    with caplog.at_level(logging.INFO, logger="mba_bot.trader"):
+        run_cycle(account_id, settings)
+
+    passes = [r.getMessage() for r in caplog.records if "[observe] protection pre-check passes" in r.getMessage()]
+    assert len(passes) == 1 and "at 1x" in passes[0] and "bracket 1" in passes[0] and "isolated margin" in passes[0]
+    assert _decisions() == [], "no telemetry, so the journal line is the only record"
+
+
+def test_enforce_mode_writes_no_pass_line(db, monkeypatch, caplog):
+    import logging
+
+    settings = _settings(protection_precheck_mode="enforce", trade_telemetry=False)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+    with caplog.at_level(logging.INFO, logger="mba_bot.trader"):
+        run_cycle(account_id, settings)
+    assert not [r for r in caplog.records if "[observe]" in r.getMessage()]
+
+
+def test_observed_limit_lines_are_journaled_once_per_window(caplog):
+    """Calls the trader helper the way each round does: only the first line in a window is written."""
+    import logging
+    from types import SimpleNamespace
+
+    from mba_bot import trader
+
+    protection_guard.reset_for_tests()
+    account = SimpleNamespace(id="acc", pair="BTC/USDT")
+    settings = make_settings(protection_alert_repeat_hours=6.0)
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with caplog.at_level(logging.WARNING, logger="mba_bot.trader"):
+        for minutes in (0, 5, 10, 300, 359):
+            trader._observe_line(account, settings, "some_reason", t0 + timedelta(minutes=minutes), "line %s", minutes)
+        trader._observe_line(account, settings, "some_reason", t0 + timedelta(minutes=361), "line %s", 361)
+        trader._observe_line(account, settings, "another_reason", t0, "line other")
+    assert [r.getMessage() for r in caplog.records] == ["line 0", "line 361", "line other"]
+    protection_guard.reset_for_tests()
+
+
+def test_an_observed_limit_is_journaled_on_the_entry_that_follows(db, monkeypatch, caplog):
+    import logging
+
+    settings = _quiet_settings(protection_fail_limit_mode="observe", trade_telemetry=False)
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3, reason=UNCLASSIFIED)
+    with caplog.at_level(logging.INFO, logger="mba_bot.trader"):
+        run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+    assert len([r for r in caplog.records if "[observe] unclassified protection-failure limit reached" in r.getMessage()]) == 1
+
+
+# ------------------------------------------------------------------ frontend labels
+
+
+def test_every_emergency_close_reason_has_an_explicit_customer_label():
+    """frontend/src/constants.js closeReasonLabel falls back to "Signal exit", which would mislabel a safety exit."""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "frontend" / "src" / "constants.js").read_text()
+    body = text[text.index("export function closeReasonLabel"):]
+    cases = set(re.findall(r'case "([a-z_]+)":', body[: body.index("default:")]))
+    for reason in (lifecycle.EMERGENCY_REASON_STRUCTURAL, lifecycle.EMERGENCY_REASON_TRANSIENT, lifecycle.EMERGENCY_REASON_OTHER):
+        assert reason in cases, f"{reason} would be shown to the customer as a signal exit"

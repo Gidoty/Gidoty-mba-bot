@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
 
-from .risk import MaintenanceTier, leverage_is_sane
+from .risk import MaintenanceTier
 
 logger = logging.getLogger(__name__)
 
@@ -404,7 +404,7 @@ async def fetch_symbol_leverage_and_margin_mode(
     every cycle purely to learn what leverage is already configured.
 
     Returns (leverage, margin_mode) from the one read. margin_mode is "isolated", "cross" or
-    None (not reported); the pre-entry protection check treats None as isolated, the conservative case.
+    None (not reported); the pre-entry protection check refuses an entry when it is None (it is never assumed).
 
     A None return means the caller's margin ceiling (risk.
     apply_margin_ceiling) is simply skipped for this entry - never
@@ -422,15 +422,19 @@ async def fetch_symbol_leverage_and_margin_mode(
     mode = leverage.get("marginMode")
     mode = mode if mode in ("isolated", "cross") else None
     value = leverage.get("longLeverage") if side == "long" else leverage.get("shortLeverage")
-    # Binance leverage is 1..125. Booleans, non-finite and out-of-range values are misreads, never a setting.
+    # Not a leverage: booleans, non-numbers, non-finite or non-positive values. The plausible RANGE (1..125) is NOT
+    # applied here, so with the guards off this read behaves as it did before they existed; the pre-check applies it.
     if isinstance(value, str):  # some payloads carry numbers as strings
         try:
             value = float(value)
         except ValueError:
             return None, mode
-    if not leverage_is_sane(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None, mode
-    return float(value), mode
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        return None, mode
+    return value, mode
 
 
 async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:

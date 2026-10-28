@@ -34,7 +34,10 @@ export function closeReasonLabel(reason) {
     case "exchange_stop_triggered":
       return "Stop-loss (at Binance)";
     case "protection_failed_emergency_exit":
+    case "protection_unclassified_emergency_exit":
       return "Safety exit";
+    case "protection_transient_emergency_exit":
+      return "Safety exit (connection issue)";
     case "externally_closed":
       return "Closed on Binance";
     case "dust_unprotectable":

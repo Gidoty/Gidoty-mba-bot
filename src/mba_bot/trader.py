@@ -291,6 +291,49 @@ async def _record_error(notifier: Notifier, account: TradingAccount, message: st
         await _notify_safe(notifier, account, f"MBA Bot hit a problem: {message}")
 
 
+_LIMIT_CODES = {
+    "structural": telemetry.R_PROTECTION_FAIL_LIMIT,
+    "transient": telemetry.R_TRANSIENT_FAIL_LIMIT,
+    "unclassified": telemetry.R_UNCLASSIFIED_FAIL_LIMIT,
+}
+
+# An observed PASS is logged at most this often per account and pair. Passes lead to an entry, so they are rare; this
+# only stops a pass that keeps failing to open (for example a concurrent-trade refusal) from repeating every round.
+_PASS_LOG_REPEAT_HOURS = 1.0
+
+
+def _observe_line(account, settings: Settings, reason: str, now: datetime, message: str, *args) -> None:
+    """One observe-mode journal line, repeated at most once per `protection_alert_repeat_hours` for the same account,
+    pair and reason. The decision-log rows (when telemetry is on) are the complete, per-candle record."""
+    if protection_guard.should_alert(
+        account.id, account.pair, "observe:" + reason, now=now, repeat_hours=settings.protection_alert_repeat_hours
+    ):
+        logger.warning(message, *args)
+
+
+def _limit_message(account: TradingAccount, hit) -> str:
+    pair = account.pair
+    if hit.kind == "transient":
+        return (
+            f"Binance could not be reached reliably enough to place a protective stop {hit.failures} times in the last "
+            f"{hit.window_hours:g} hours, and each position was closed again straight away. New trades are paused for "
+            "now and resume automatically when the connection to Binance has been stable. This is not caused by your "
+            "settings."
+        )
+    if hit.kind == "unclassified":
+        return (
+            f"on {pair}, a protective stop could not be confirmed on Binance {hit.failures} times in the last "
+            f"{hit.window_hours:g} hours, for a reason the bot could not identify, and each position was closed again "
+            "straight away. New trades on this pair are paused for now."
+        )
+    return (
+        f"on {pair}, Binance would not accept a protective stop {hit.failures} times in the last "
+        f"{hit.window_hours:g} hours, and each position was closed again straight away. "
+        "New trades on this pair are paused for now. Please check your Binance leverage and margin mode for "
+        "this pair (a lower leverage usually fixes it)."
+    )
+
+
 async def _block_entry(
     notifier: Notifier, account: TradingAccount, settings: Settings, reason: str, message: str, *, now: datetime
 ) -> None:
@@ -318,6 +361,7 @@ async def _precheck_entry(client, venue, settings: Settings, *, side, entry_pric
             other_open_positions=other_positions, min_maint_rate=settings.precheck_min_maint_rate,
             safety_fraction=settings.precheck_stop_safety_fraction,
             cross_collateral_factor=settings.precheck_cross_collateral_factor,
+            max_leverage=settings.precheck_max_leverage,
         )
     except Exception:  # noqa: BLE001
         logger.exception("protection pre-check failed unexpectedly; refusing the entry")
@@ -547,36 +591,29 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         if account.withdrawal_blocked_at is not None:
             _tlog(telemetry.REJECTED, telemetry.R_WITHDRAWAL_BLOCKED)
             return
-        failures = (
-            None
+        hits = (
+            []
             if settings.protection_fail_limit_mode == "off"
-            else protection_guard.limit_reached(
-                session, account.id, account.pair, now=now,
-                limit=settings.protection_fail_limit, window_hours=settings.protection_fail_window_hours,
+            else protection_guard.limit_hits(
+                session, account.id, account.pair, now=now, settings=settings, codes=_LIMIT_CODES
             )
         )
-        if failures is not None:
-            # The protective stop could not be placed on this pair `failures` times inside the window (structural
-            # failures only, each ending in an emergency exit). Stop re-entering until the oldest leaves the window.
+        for hit in hits:
+            # A protective stop could not be established `hit.failures` times inside the window (see
+            # protection_guard for the categories and scopes). Stop re-entering until the oldest leaves the window.
             limit_detail = dict(
-                failures=failures, limit=settings.protection_fail_limit, window_hours=settings.protection_fail_window_hours
+                kind=hit.kind, failures=hit.failures, limit=hit.limit, window_hours=hit.window_hours, scope=hit.scope
             )
             if settings.protection_fail_limit_mode == "observe":
-                _tlog(telemetry.OBSERVED, telemetry.R_PROTECTION_FAIL_LIMIT, mode="observe", would_block=True, **limit_detail)
-                logger.warning(
-                    "account %s: [observe] %s has %d structural protection failures in %gh (limit %d); entry NOT blocked",
-                    account.id, account.pair, failures, settings.protection_fail_window_hours, settings.protection_fail_limit,
+                _tlog(telemetry.OBSERVED, hit.reason_code, mode="observe", would_block=True, **limit_detail)
+                _observe_line(
+                    account, settings, hit.reason_code, now,
+                    "account %s: [observe] %s protection-failure limit reached on %s (%d in %gh, limit %d); entry NOT blocked",
+                    account.id, hit.kind, account.pair, hit.failures, hit.window_hours, hit.limit,
                 )
             else:
-                _tlog(telemetry.REJECTED, telemetry.R_PROTECTION_FAIL_LIMIT, mode="enforce", **limit_detail)
-                await _block_entry(
-                    notifier, account, settings, telemetry.R_PROTECTION_FAIL_LIMIT,
-                    f"on {account.pair}, Binance would not accept a protective stop {failures} times in the last "
-                    f"{settings.protection_fail_window_hours:g} hours, and each position was closed again straight away. "
-                    "New trades on this pair are paused for now. Please check your Binance leverage and margin mode for "
-                    "this pair (a lower leverage usually fixes it).",
-                    now=now,
-                )
+                _tlog(telemetry.REJECTED, hit.reason_code, mode="enforce", **limit_detail)
+                await _block_entry(notifier, account, settings, hit.reason_code, _limit_message(account, hit), now=now)
                 return
         try:
             await exchange.assert_trade_only(client)
@@ -720,7 +757,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 )
                 if settings.protection_precheck_mode == "observe":
                     _tlog(telemetry.OBSERVED, check.reason, would_block=True, **detail)
-                    logger.warning(
+                    _observe_line(
+                        account, settings, check.reason, now,
                         "account %s: [observe] protection pre-check would refuse %s %s (%s) %s; entry NOT blocked",
                         account.id, side, account.pair, check.reason, precheck_detail,
                     )
@@ -729,6 +767,17 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     logger.warning("account %s: protection pre-check refused (%s) %s", account.id, check.reason, precheck_detail)
                     await _block_entry(notifier, account, settings, check.reason, _precheck_message(account, check, leverage), now=now)
                     return
+            elif settings.protection_precheck_mode == "observe" and protection_guard.should_alert(
+                account.id, account.pair, "observe:pass", now=now, repeat_hours=_PASS_LOG_REPEAT_HOURS
+            ):
+                # Journal record of a PASS (the decision log carries it on the accepted row when telemetry is on), so
+                # observe mode is measurable without telemetry. One line per entry, not per round.
+                logger.info(
+                    "account %s: [observe] protection pre-check passes %s %s at %gx: stop %.3f%% of entry, allowed "
+                    "%.3f%%, bracket %s (effective maintenance rate %.3f%%), %s margin",
+                    account.id, side, account.pair, leverage, check.stop_distance_frac * 100,
+                    check.max_allowed_stop_frac * 100, check.tier, check.effective_maint_rate * 100, check.margin_basis,
+                )
         risk_amount = quantity * size.stop_distance
         opened = await lifecycle.open_live_trade(
             ctx,

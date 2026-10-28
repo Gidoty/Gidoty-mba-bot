@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from cryptography.fernet import Fernet
 
 from mba_bot import exchange
@@ -297,11 +298,20 @@ def test_exposure_ceiling_trims_an_oversized_live_order(tmp_path, monkeypatch):
     assert quantity * entry_price <= 1_000.0 * 0.01 + 1e-6
 
 
-def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, monkeypatch):
+# The shared BULLISH_OHLCV puts the stop ~52% from entry, so a 1% risk budget sizes a position far BELOW any margin
+# ceiling and the ceiling can never bind. Shifting every price up by 10,000 keeps the EMA crossover and the ATR (23.5)
+# identical but makes the stop 47 away from a ~10,090 entry (0.47%): the risk budget (1% of 1,000 = 10) then asks for
+# a ~2,139 notional, which is above 1x and 2x of the 1,000 allocated and below 10x, so the ceiling binds exactly where
+# it should and nowhere else.
+_TIGHT_STOP_OHLCV = [[t, o + 10_000.0, h + 10_000.0, l + 10_000.0, c + 10_000.0, v] for t, o, h, l, c, v in BULLISH_OHLCV]
+
+
+@pytest.mark.parametrize("leverage, expected", [(1.0, "capped"), (2.0, "capped"), (10.0, "uncapped")])
+def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, monkeypatch, leverage, expected):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=100.0)  # isolate the margin ceiling from the notional one
-    client = FakeClient(market_type="futures", 
-        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 1.0}
+    client = FakeClient(market_type="futures",
+        ohlcv_by_pair={"BTC/USDT": _TIGHT_STOP_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": leverage}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
@@ -321,9 +331,18 @@ def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, mo
     assert client.fetch_leverage_calls == ["BTC/USDT:USDT"]  # the ccxt USD-M symbol; read, never set_leverage (no such method exists on FakeClient)
     assert len(client.market_orders) == 1
     _, _, quantity = client.market_orders[0]
-    entry_price = BULLISH_OHLCV[-1][4]
-    # required margin = notional / leverage must not exceed effective_capital (1,000)
-    assert (quantity * entry_price) / 2.0 <= 1_000.0 + 1e-6
+    entry_price = _TIGHT_STOP_OHLCV[-1][4]
+    notional = quantity * entry_price
+    one_step = entry_price * 0.001  # the fake's quantity step
+    risk_sized = 10.0 / 47.0 * entry_price  # 1% of 1,000 over a 47 stop distance, before any ceiling
+    ceiling = 1_000.0 * leverage  # margin required (notional / leverage) must not exceed the 1,000 allocated
+    if expected == "capped":
+        assert notional <= ceiling + 1e-6, "required margin must never exceed the allocated capital"
+        assert notional >= ceiling - one_step - 1e-6, "and the ceiling must be what limited it, not something else"
+        assert notional < risk_sized - one_step, "the risk budget alone would have asked for more"
+    else:
+        assert notional == pytest.approx(risk_sized, abs=one_step + 1e-6), "a high enough leverage leaves the risk-sized quantity alone"
+        assert notional > 2_000.0 and notional <= ceiling
 
 
 def test_spot_account_never_queries_leverage_at_all(tmp_path, monkeypatch):

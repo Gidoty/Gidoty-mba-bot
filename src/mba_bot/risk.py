@@ -146,11 +146,12 @@ MARGIN_MODE_UNKNOWN = "margin_mode_unknown"
 CROSS_UNVERIFIABLE = "cross_margin_unverifiable"
 
 
-def leverage_is_sane(value) -> bool:
+def leverage_is_sane(value, max_leverage: float = LEVERAGE_MAX) -> bool:
+    """A real number from LEVERAGE_MIN to `max_leverage`. Booleans, strings and non-finite values are not leverage."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     v = float(value)
-    return math.isfinite(v) and LEVERAGE_MIN <= v <= LEVERAGE_MAX
+    return math.isfinite(v) and LEVERAGE_MIN <= v <= max_leverage
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,7 @@ def assess_stop_viability(
     min_maint_rate: float,
     safety_fraction: float,
     cross_collateral_factor: float,
+    max_leverage: float = LEVERAGE_MAX,
 ) -> StopViability:
     """Futures, before an entry order. Can a protective stop sit safely inside the liquidation price?
 
@@ -247,7 +249,7 @@ def assess_stop_viability(
     Fees, funding and the liquidation clearance fee are ignored: `safety_fraction` and `min_maint_rate` are the margin.
 
     Fails closed (viable=False, with a specific reason) when anything needed is missing or implausible: prices,
-    quantity, leverage outside 1..125, the margin mode (unknown is NOT assumed), the bracket table or a bracket for
+    quantity, leverage outside 1..max_leverage (default 125), the margin mode (unknown is NOT assumed), the bracket table or a bracket for
     N, and, in cross margin, any other open position on the account or an unknown position count.
     """
     def fail(reason: str, **kw) -> StopViability:
@@ -261,7 +263,7 @@ def assess_stop_viability(
         return fail(INPUTS_INVALID)
     if entry_price <= 0 or stop_price <= 0 or quantity <= 0 or effective_capital <= 0:
         return fail(INPUTS_INVALID)
-    if not leverage_is_sane(leverage):
+    if not leverage_is_sane(leverage, max_leverage):
         return fail(INPUTS_INVALID)
     if not (0 <= min_maint_rate < 0.5) or not (0 < safety_fraction <= 1) or not (0 < cross_collateral_factor <= 1):
         return fail(INPUTS_INVALID)

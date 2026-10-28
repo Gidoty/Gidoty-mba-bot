@@ -359,9 +359,8 @@ PROTECTION_STRUCTURAL = "structural"
 PROTECTION_TRANSIENT = "transient"
 PROTECTION_OTHER = "other"
 
-EMERGENCY_REASON_STRUCTURAL = "protection_failed_emergency_exit"  # unchanged: historical rows carry it
-EMERGENCY_REASON_TRANSIENT = "protection_transient_emergency_exit"
-EMERGENCY_REASON_OTHER = "protection_unclassified_emergency_exit"
+# The close_reason strings live in protection_guard (which counts them); imported here so there is one source.
+from .protection_guard import EMERGENCY_REASON_OTHER, EMERGENCY_REASON_STRUCTURAL, EMERGENCY_REASON_TRANSIENT  # noqa: E402
 
 _STRUCTURAL_REJECTIONS = tuple(
     getattr(ccxt_async, name) for name in ("InvalidOrder", "BadRequest", "NotSupported") if hasattr(ccxt_async, name)
@@ -449,6 +448,10 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
     retrying immediately."""
     attempts = max(1, ctx.settings.protection_max_attempts)
     for i in range(attempts):
+        # Each attempt starts with no classification, so the one used for the emergency exit can only come from the
+        # attempt that actually failed last (never from an earlier attempt, trade or call on this context).
+        ctx.protection_failure_kind = None
+        ctx.protection_failure_detail = None
         try:
             return await _place_and_verify(ctx, trade)
         except Exception as exc:

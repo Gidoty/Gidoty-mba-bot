@@ -247,13 +247,25 @@ class Settings:
     precheck_stop_safety_fraction: float = 0.75
     # Cross margin only: the share of the allocated/free capital counted as collateral for this position.
     precheck_cross_collateral_factor: float = 0.9
-    # Repeat-failure limit: this many STRUCTURAL protective-stop failures (the stop cannot be placed: unavailable,
-    # beyond liquidation, or rejected by Binance) for one account and pair inside the window block new entries on
-    # that pair until the oldest leaves the window. Transient exchange/API failures are not counted.
-    # Same three modes. protection_fail_limit 0 disables it whatever the mode.
+    # Highest leverage the pre-check accepts as plausible (Binance's current maximum is 125). Only the pre-check
+    # applies the 1..max range; the leverage READ accepts any positive finite number, exactly as before the guards.
+    precheck_max_leverage: float = 125.0
+    # Repeat-failure limits (one mode switch for all three; a limit of 0 disables that limit whatever the mode).
+    # Each counts live emergency exits caused by a protective stop that could not be established, by category:
+    #   structural    the stop cannot be placed (unavailable, beyond liquidation, rejected by Binance). Repeats
+    #                 identically, so: 2 per account AND pair per 24 h.
+    #   transient     exchange/API trouble (timeouts, 5xx, rate limits). Not pair-specific, so: 3 per ACCOUNT (any
+    #                 pair) per 6 h. A single exit already means three failed attempts in a row.
+    #   unclassified  anything else, often an unmapped Binance rejection that is specific to one symbol, so: 3 per
+    #                 account AND pair per 24 h.
+    # When a limit is reached, new entries in its scope are blocked until the oldest counted exit leaves its window.
     protection_fail_limit_mode: str = "observe"
     protection_fail_limit: int = 2
     protection_fail_window_hours: float = 24.0
+    protection_transient_limit: int = 3
+    protection_transient_window_hours: float = 6.0
+    protection_unclassified_limit: int = 3
+    protection_unclassified_window_hours: float = 24.0
     # How often the same blocking reason may alert the customer again (in memory; one alert after a restart).
     protection_alert_repeat_hours: float = 6.0
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
@@ -378,4 +390,9 @@ def load_settings() -> Settings:
         protection_fail_limit=max(0, _env_int("PROTECTION_FAIL_LIMIT", 2)),
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
+        precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
+        protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
+        protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),
+        protection_unclassified_limit=max(0, _env_int("PROTECTION_UNCLASSIFIED_LIMIT", 3)),
+        protection_unclassified_window_hours=max(0.1, _env_float("PROTECTION_UNCLASSIFIED_WINDOW_HOURS", 24.0)),
     )
