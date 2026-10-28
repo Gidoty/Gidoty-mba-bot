@@ -60,9 +60,9 @@ def _multi_market(client, min_notional_by_pair):
 
 
 def _fut(pair="BTC/USDT", **kw):
-    """A Futures fake where the account has a (2x) leverage setting for THIS symbol, as a real account does.
+    """A Futures fake where the account has a (1x) leverage setting for THIS symbol, as a real account does.
     (The bot fails closed when it cannot read the leverage, which is itself asserted elsewhere.)"""
-    kw.setdefault("leverage_by_symbol", {p: 2.0 for p in ALL10})
+    kw.setdefault("leverage_by_symbol", {p: 1.0 for p in ALL10})
     return futures_client(pair=pair, **kw)
 
 

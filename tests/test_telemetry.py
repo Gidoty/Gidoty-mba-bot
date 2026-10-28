@@ -141,7 +141,7 @@ def test_live_entry_records_context_and_decisions(db, monkeypatch):
     assert row.atr and row.atr > 0 and row.atr_pct and row.stop_price == pytest.approx(trade.stop_loss_price, rel=0.05)
     assert row.effective_capital == pytest.approx(1000.0)
     assert row.planned_risk_amount == pytest.approx(trade.quantity * abs(trade.entry_price - trade.stop_loss_price))
-    assert row.planned_quantity == trade.quantity and row.account_leverage == 2.0
+    assert row.planned_quantity == trade.quantity and row.account_leverage == 1.0
     assert row.auto_rank is None
     feats = json.loads(row.features_json)
     assert feats["atr"] and "ema_gap_atr" in feats and feats["feature_version"] == 1
@@ -281,7 +281,7 @@ def test_a_telemetry_failure_cannot_stop_or_change_a_trade(db, monkeypatch):
 
 def test_auto_scan_collector_observes_without_changing_the_result(db, monkeypatch):
     settings = make_settings(futures_pair_expansion=True)
-    client = futures_client(leverage_by_symbol={p: 2.0 for p in SUPPORTED_PAIRS})
+    client = futures_client(leverage_by_symbol={p: 1.0 for p in SUPPORTED_PAIRS})
     install(monkeypatch, client)
     account_id = new_account(settings, market_type="futures")
 
@@ -451,7 +451,7 @@ def test_a_telemetry_row_that_cannot_be_written_never_costs_the_paper_trade(db, 
 
 def test_an_auto_entry_records_its_rank_score_and_the_scan_decisions(db, monkeypatch):
     settings = make_settings(max_notional_multiplier=100.0, trade_telemetry=True)
-    client = futures_client(leverage_by_symbol={p: 2.0 for p in SUPPORTED_PAIRS})
+    client = futures_client(leverage_by_symbol={p: 1.0 for p in SUPPORTED_PAIRS})
     install(monkeypatch, client)
     account_id = new_account(settings, market_type="futures")
     with session_scope() as session:

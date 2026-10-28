@@ -122,9 +122,9 @@ def _settings(**overrides) -> Settings:
         paystack_amount=0,
         paystack_currency="NGN",
     )
-    # These tests use synthetic candles whose stop is far from any realistic distance; the pre-entry protection
-    # check has its own tests (tests/test_pre_entry_protection.py).
-    defaults.setdefault("protection_precheck_enabled", False)
+    # Guards run enforced here too (see helpers_live.make_settings); the synthetic stop (~52%) needs 1x leverage.
+    defaults.setdefault("protection_precheck_mode", "enforce")
+    defaults.setdefault("protection_fail_limit_mode", "enforce")
     defaults.update(overrides)
     return Settings(**defaults)
 

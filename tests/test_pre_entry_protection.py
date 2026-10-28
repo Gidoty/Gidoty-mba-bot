@@ -1,23 +1,30 @@
-"""Pre-entry protection check and the repeat-failure limit.
+"""Pre-entry protection check (real Binance maintenance-margin brackets), the three guard modes, failure
+classification and the repeat-failure limit.
 
-Background: an account at 100x leverage on XRP opened and immediately emergency-closed the same kind of
-trade 23 times in under two hours, because the 2x ATR stop sat beyond the liquidation price and Binance
-cannot hold a stop there. These tests pin: (1) the calculation, (2) that an unviable entry is refused
-BEFORE any order, with a decision-log row and one alert, (3) that a viable entry is untouched, (4) that
-unreliable inputs fail closed, and (5) that repeated protection failures stop further entries.
+Background: an account at 100x leverage on XRP opened and immediately emergency-closed the same kind of trade 23 times
+in under two hours, because the 2x ATR stop sat beyond the liquidation price and Binance cannot hold a stop there.
+
+These tests do NOT claim the liquidation formula is verified against an official Binance page; they pin what this
+code does with the inputs it is given, and that every missing or implausible input fails closed.
 """
 from __future__ import annotations
 
-import dataclasses
+import json
+import os
 from datetime import datetime, timedelta, timezone
 
+import ccxt.async_support as ccxt
 import pytest
+from fake_binance import FakeBinance
 from helpers_live import *  # noqa: F401,F403
 
-from mba_bot import protection_guard, scheduler, telemetry
+from mba_bot import config as config_mod
+from mba_bot import exchange, lifecycle, protection_guard, risk, scheduler, telemetry
+from mba_bot.config import guard_mode_is_unrecognised, parse_guard_mode
 from mba_bot.db import init_db, session_scope
-from mba_bot.models import DecisionLog, Trade, TradingAccount
-from mba_bot.risk import assess_stop_viability
+from mba_bot.models import DecisionLog, Trade, TradeTelemetry, TradingAccount
+from mba_bot.risk import MaintenanceTier, assess_stop_viability, validate_tiers
+from mba_bot.strategy import SignalType, candles_from_ohlcv, generate_signal
 
 
 @pytest.fixture
@@ -32,10 +39,21 @@ def db(tmp_path):
     protection_guard.reset_for_tests()
 
 
+# A plausible multi-bracket table in the shape Binance's leverageBracket returns. The numbers are illustrative (they
+# are continuous: cum_k = cum_{k-1} + floor_k * (rate_k - rate_{k-1})), NOT a copy of any live contract's table.
+TIERS = [
+    MaintenanceTier(1, 0.0, 50_000.0, 0.004, 0.0),
+    MaintenanceTier(2, 50_000.0, 250_000.0, 0.005, 50.0),
+    MaintenanceTier(3, 250_000.0, 1_000_000.0, 0.01, 1_300.0),
+]
+FLAT_TIER = [MaintenanceTier(1, 0.0, 1e9, 0.004, 0.0)]
+
+
 def _check(**over):
     kw = dict(
         side="long", entry_price=100.0, stop_price=98.0, quantity=1.0, leverage=10.0, effective_capital=100.0,
-        margin_mode="isolated", maint_margin_rate=0.01, safety_fraction=0.75,
+        margin_mode="isolated", tiers=FLAT_TIER, other_open_positions=0, min_maint_rate=0.005, safety_fraction=0.75,
+        cross_collateral_factor=0.9,
     )
     kw.update(over)
     return assess_stop_viability(**kw)
@@ -46,87 +64,345 @@ def _check(**over):
 
 def test_the_incident_100x_with_a_2_percent_stop_is_refused():
     r = _check(leverage=100.0, stop_price=98.0)
-    assert not r.viable and r.reason == "stop_beyond_safe_liquidation_distance"
-    assert r.liquidation_distance_pct == pytest.approx(0.0)  # 1/100 - 1% maintenance margin
+    assert not r.viable and r.reason == risk.STOP_UNVIABLE
+    assert r.liquidation_distance_frac == pytest.approx(0.005)  # 1/100 - 0.5% effective rate
+    assert r.max_allowed_stop_frac == pytest.approx(0.00375) and r.stop_distance_frac == pytest.approx(0.02)
 
 
 def test_5x_with_a_1_percent_stop_is_allowed_like_the_protected_bnb_trades():
     r = _check(leverage=5.0, stop_price=99.0)
-    assert r.viable and r.reason == "ok"
-    assert r.liquidation_distance_pct == pytest.approx(19.0) and r.max_allowed_stop_pct == pytest.approx(14.25)
+    assert r.viable and r.reason == risk.OK
+    assert r.liquidation_distance_frac == pytest.approx(0.195)
 
 
 @pytest.mark.parametrize(
-    "leverage, stop_pct, viable",
+    "leverage, stop_frac, viable",
     [
-        (20.0, 3.0, True),    # allowed = 0.75 * (5% - 1%) = 3.0% exactly: equality passes
-        (20.0, 3.01, False),  # just past the boundary
-        (25.0, 2.0, True),    # allowed = 0.75 * 3% = 2.25%
-        (30.0, 2.0, False),   # allowed = 0.75 * 2.33% = 1.75%
-        (50.0, 2.0, False),
-        (10.0, 6.75, True),   # allowed = 0.75 * 9% = 6.75% exactly
+        (20.0, 0.03, True),      # allowed = 0.75 * (5% - 0.5%) = 3.375%
+        (20.0, 0.03375, True),   # exactly the limit: equality passes
+        (20.0, 0.0338, False),   # just past it
+        (20.0, 0.0375, False),
+        (50.0, 0.01, True),      # allowed = 0.75 * (2% - 0.5%) = 1.125%
+        (50.0, 0.0113, False),
     ],
 )
-def test_boundaries(leverage, stop_pct, viable):
-    stop = 100.0 * (1 - stop_pct / 100.0)
+def test_boundaries_flat_tier(leverage, stop_frac, viable):
+    stop = 100.0 * (1 - stop_frac)
     assert _check(leverage=leverage, stop_price=stop).viable is viable
 
 
-def test_short_is_symmetric_with_long():
+def test_short_uses_the_short_denominator_and_is_otherwise_symmetric():
+    long_r = _check(side="long", leverage=20.0, stop_price=97.0)
+    short_r = _check(side="short", leverage=20.0, stop_price=103.0)
+    assert short_r.liquidation_distance_frac == pytest.approx(long_r.liquidation_distance_frac / 1.004, abs=1e-5)
     assert not _check(side="short", leverage=100.0, stop_price=102.0).viable
     assert _check(side="short", leverage=5.0, stop_price=101.0).viable
-    assert _check(side="short", leverage=20.0, stop_price=103.0).viable
-    assert not _check(side="short", leverage=20.0, stop_price=103.01).viable
 
 
 def test_leverage_so_high_that_no_liquidation_distance_remains_is_refused():
-    for lev in (100.0, 125.0, 500.0):
-        assert not _check(leverage=lev, stop_price=99.9).viable
+    for lev in (100.0, 125.0):
+        assert not _check(leverage=lev, stop_price=99.0).viable  # a 1% stop
 
 
-def test_unknown_margin_mode_is_treated_as_isolated_the_conservative_case():
-    r = _check(margin_mode=None, leverage=100.0)
-    assert not r.viable and r.margin_mode_assumed == "isolated"
+# ---- maintenance brackets: tier selection and the maintenance amount (cum)
 
 
-def test_cross_margin_uses_the_collateral_not_just_the_leverage_setting():
-    # 100x set, but a cross account holding 100 against a 100-notional position is liquidated ~99% away.
-    r = _check(margin_mode="cross", leverage=100.0, quantity=1.0, entry_price=100.0, effective_capital=100.0)
-    assert r.viable and r.liquidation_distance_pct == pytest.approx(99.0)
-    # Same leverage, collateral only just above the margin: cross cannot help, stays refused.
-    assert not _check(margin_mode="cross", leverage=100.0, quantity=10.0, effective_capital=11.0).viable
-    # Cross never reports a smaller distance than isolated would.
-    assert _check(margin_mode="cross", leverage=5.0).liquidation_distance_pct >= _check(margin_mode="isolated", leverage=5.0).liquidation_distance_pct
+def test_the_bracket_for_the_order_notional_is_used():
+    small = _check(tiers=TIERS, quantity=1.0)                         # notional 100       -> tier 1
+    mid = _check(tiers=TIERS, quantity=1_000.0, effective_capital=1e9)  # notional 100,000  -> tier 2
+    big = _check(tiers=TIERS, quantity=5_000.0, effective_capital=1e9)  # notional 500,000  -> tier 3
+    assert (small.tier, mid.tier, big.tier) == (1, 2, 3)
+    assert (small.tier_rate, mid.tier_rate, big.tier_rate) == (0.004, 0.005, 0.01)
+
+
+def test_the_maintenance_amount_lowers_the_effective_rate():
+    mid = _check(tiers=TIERS, quantity=1_000.0, effective_capital=1e9, min_maint_rate=0.0)
+    assert mid.effective_maint_rate == pytest.approx(0.005 - 50.0 / 100_000.0)  # 0.45%, not the bracket's 0.5%
+    big = _check(tiers=TIERS, quantity=5_000.0, effective_capital=1e9, min_maint_rate=0.0)
+    assert big.effective_maint_rate == pytest.approx(0.01 - 1_300.0 / 500_000.0)  # 0.74%, not 1%
+    # Ignoring cum would have used the full bracket rate and been over-conservative here; with cum it is exact.
+    no_cum = [MaintenanceTier(t.tier, t.floor, t.cap, t.rate, 0.0) for t in TIERS]
+    assert _check(tiers=no_cum, quantity=5_000.0, effective_capital=1e9, min_maint_rate=0.0).effective_maint_rate == pytest.approx(0.01)
+
+
+def test_the_configured_floor_wins_when_the_bracket_rate_is_lower():
+    r = _check(tiers=FLAT_TIER, min_maint_rate=0.02, leverage=20.0, stop_price=99.0)
+    assert r.effective_maint_rate == pytest.approx(0.02)
+    assert r.liquidation_distance_frac == pytest.approx(0.05 - 0.02)
+
+
+def test_a_higher_bracket_rate_makes_a_previously_fine_stop_unviable():
+    # 20x, 3% stop: fine at 0.4%, not at a 2.5% contract.
+    assert _check(tiers=FLAT_TIER, leverage=20.0, stop_price=97.0).viable
+    high = [MaintenanceTier(1, 0.0, 1e9, 0.025, 0.0)]
+    assert not _check(tiers=high, leverage=20.0, stop_price=97.0).viable
+
+
+def test_a_notional_exactly_on_a_bracket_boundary_takes_the_worse_bracket():
+    r = _check(tiers=TIERS, quantity=500.0, effective_capital=1e9, min_maint_rate=0.0)  # notional 50,000 exactly
+    assert r.notional == 50_000.0 and r.effective_maint_rate == pytest.approx(0.004)  # both give 0.4%: continuous
+    discontinuous = [MaintenanceTier(1, 0.0, 50_000.0, 0.004, 0.0), MaintenanceTier(2, 50_000.0, 250_000.0, 0.01, 0.0)]
+    r2 = _check(tiers=discontinuous, quantity=500.0, effective_capital=1e9, min_maint_rate=0.0)
+    assert r2.tier == 2 and r2.effective_maint_rate == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize(
+    "tiers",
+    [
+        None, [],
+        [MaintenanceTier(1, 0.0, 1e9, 0.6, 0.0)],                                   # implausible rate
+        [MaintenanceTier(1, 0.0, 1e9, -0.01, 0.0)],
+        [MaintenanceTier(1, 0.0, 1e9, 0.004, -5.0)],                                # negative cum
+        [MaintenanceTier(1, 0.0, 1e9, float("nan"), 0.0)],
+        [MaintenanceTier(1, 0.0, 1e9, 0.004, float("inf"))],
+        [MaintenanceTier(1, 100.0, 1e9, 0.004, 0.0)],                               # does not start at 0
+        [MaintenanceTier(1, 0.0, 0.0, 0.004, 0.0)],                                 # empty range
+        [MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 5000.0, 1e9, 0.005, 0.0)],   # gap
+        [MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 500.0, 1e9, 0.005, 0.0)],    # overlap
+        [MaintenanceTier(1, 0.0, 1000.0, 0.01, 0.0), MaintenanceTier(2, 1000.0, 1e9, 0.005, 0.0)],    # rate falls with size
+        [MaintenanceTier(1, 0.0, 50.0, 0.004, 0.0)],                                # notional (100) above the last cap
+        ["not a tier"],
+    ],
+)
+def test_missing_invalid_or_unmatchable_brackets_fail_closed(tiers):
+    r = _check(tiers=tiers)
+    assert not r.viable and r.reason == risk.TIERS_UNAVAILABLE
+
+
+def test_validate_tiers_accepts_a_real_looking_table_and_sorts_it():
+    assert [t.tier for t in validate_tiers(list(reversed(TIERS)))] == [1, 2, 3]
+
+
+# ---- margin mode and cross margin
+
+
+@pytest.mark.parametrize("mode", [None, "", "portfolio", "CROSS", 1])
+def test_an_unknown_margin_mode_is_refused_not_assumed(mode):
+    r = _check(margin_mode=mode)
+    assert not r.viable and r.reason == risk.MARGIN_MODE_UNKNOWN
+
+
+def test_cross_margin_with_a_clean_account_uses_the_collateral():
+    # 100x set, but 100 of collateral (x0.9) against a 100-notional position: liquidation is far away.
+    r = _check(margin_mode="cross", leverage=100.0, quantity=1.0, effective_capital=100.0)
+    assert r.viable and r.margin_basis == "cross"
+    assert r.liquidation_distance_frac == pytest.approx(0.9 * 100 / 100 - 0.005)
+    # Isolated with the same inputs is refused: only the margin mode differs.
+    assert not _check(margin_mode="isolated", leverage=100.0, quantity=1.0, effective_capital=100.0).viable
+
+
+def test_cross_margin_never_reports_less_than_the_isolated_estimate():
+    iso = _check(margin_mode="isolated", leverage=5.0)
+    cross = _check(margin_mode="cross", leverage=5.0)
+    assert cross.liquidation_distance_frac >= iso.liquidation_distance_frac
+
+
+@pytest.mark.parametrize("others", [1, 2, 7, None, True, -1, 0.5])
+def test_cross_margin_is_refused_when_other_positions_exist_or_the_count_is_unreliable(others):
+    r = _check(margin_mode="cross", other_open_positions=others, leverage=2.0, stop_price=99.9)
+    assert not r.viable and r.reason == risk.CROSS_UNVERIFIABLE
+
+
+def test_the_collateral_haircut_reduces_the_cross_estimate():
+    full = _check(margin_mode="cross", leverage=125.0, quantity=1.0, effective_capital=10.0, cross_collateral_factor=1.0)
+    cut = _check(margin_mode="cross", leverage=125.0, quantity=1.0, effective_capital=10.0, cross_collateral_factor=0.5)
+    assert full.liquidation_distance_frac > cut.liquidation_distance_frac
+
+
+# ---- leverage range and other invalid inputs
+
+
+@pytest.mark.parametrize("lev", [0.0, 0.5, -5.0, 125.01, 1000.0, float("nan"), float("inf"), None, True, "10", "abc"])
+def test_leverage_outside_1_to_125_or_not_a_number_is_invalid(lev):
+    r = _check(leverage=lev)
+    assert not r.viable and r.reason in (risk.INPUTS_INVALID,)
+
+
+@pytest.mark.parametrize("lev", [1.0, 2.0, 125.0])
+def test_leverage_bounds_are_inclusive(lev):
+    assert risk.leverage_is_sane(lev)
+    assert _check(leverage=lev, stop_price=99.99).reason in (risk.OK, risk.STOP_UNVIABLE)
 
 
 @pytest.mark.parametrize(
     "over",
     [
-        dict(leverage=0.0), dict(leverage=-5.0), dict(leverage=float("nan")), dict(leverage=float("inf")),
-        dict(leverage=None), dict(entry_price=0.0), dict(entry_price=float("nan")), dict(stop_price=0.0),
-        dict(stop_price=None), dict(quantity=0.0), dict(effective_capital=0.0),
+        dict(entry_price=0.0), dict(entry_price=float("nan")), dict(entry_price=None), dict(stop_price=0.0), dict(stop_price=None),
+        dict(quantity=0.0), dict(quantity=-1.0), dict(effective_capital=0.0), dict(effective_capital=float("inf")),
         dict(stop_price=101.0),               # long with the stop above entry
         dict(side="short", stop_price=99.0),  # short with the stop below entry
-        dict(side="sideways"), dict(maint_margin_rate=0.6), dict(maint_margin_rate=-0.1),
-        dict(safety_fraction=0.0), dict(safety_fraction=1.5),
+        dict(stop_price=100.0),               # no distance at all
+        dict(side="sideways"), dict(min_maint_rate=0.6), dict(min_maint_rate=-0.1), dict(safety_fraction=0.0),
+        dict(safety_fraction=1.5), dict(cross_collateral_factor=0.0), dict(cross_collateral_factor=2.0),
     ],
 )
-def test_missing_or_unreliable_inputs_fail_closed(over):
+def test_missing_or_unreliable_numeric_inputs_fail_closed(over):
     r = _check(**over)
-    assert not r.viable and r.reason == "protection_check_inputs_invalid"
+    assert not r.viable and r.reason == risk.INPUTS_INVALID
 
 
-def test_a_lower_assumed_maintenance_rate_is_less_conservative_so_the_default_matters():
-    assert not _check(leverage=50.0, stop_price=99.0, maint_margin_rate=0.01).viable    # 0.75*1% = 0.75% < 1%
-    assert _check(leverage=50.0, stop_price=99.0, maint_margin_rate=0.005).viable       # 0.75*1.5% = 1.125% >= 1%
+def test_detail_uses_fractions_and_contains_no_secrets():
+    d = _check(leverage=100.0).detail()
+    assert {"stop_distance_frac", "liquidation_distance_frac", "max_allowed_stop_frac", "tier", "effective_maint_rate"} <= set(d)
+    assert "pct" not in " ".join(d)
+    json.dumps(d)  # serialisable
+
+
+# ------------------------------------------------------------------ realistic ccxt payloads
+
+
+def _ccxt():
+    return ccxt.binanceusdm()
+
+
+# Shapes as documented in the pinned ccxt (4.5.88) sources for Binance's symbolConfig and leverageBracket endpoints.
+SYMBOL_CONFIG = {"symbol": "XRPUSDT", "marginType": "CROSSED", "isAutoAddMargin": "false", "leverage": 100, "maxNotionalValue": "INF"}
+BRACKETS = {
+    "symbol": "XRPUSDT",
+    "brackets": [
+        {"bracket": 1, "initialLeverage": 75, "notionalCap": 10000, "notionalFloor": 0, "maintMarginRatio": 0.005, "cum": 0.0},
+        {"bracket": 2, "initialLeverage": 50, "notionalCap": 50000, "notionalFloor": 10000, "maintMarginRatio": 0.01, "cum": 50.0},
+        {"bracket": 3, "initialLeverage": 25, "notionalCap": 250000, "notionalFloor": 50000, "maintMarginRatio": 0.025, "cum": 800.0},
+    ],
+}
+
+
+class _CcxtStub:
+    """Feeds real ccxt parsing with Binance-shaped payloads, offline."""
+
+    def __init__(self, config=None, brackets=None, positions=None, raises=()):
+        self.ex = _ccxt()
+        self.config, self.brackets, self.positions, self.raises = config, brackets, positions, raises
+        self.tier_params = None
+
+    def market(self, pair):
+        return {"id": "XRPUSDT"}
+
+    async def fetch_leverage(self, pair):
+        if "leverage" in self.raises:
+            raise ccxt.NetworkError("down")
+        return self.ex.parse_leverage(self.config)
+
+    async def fetch_leverage_tiers(self, symbols, params=None):
+        self.tier_params = params
+        if "tiers" in self.raises:
+            raise ccxt.RequestTimeout("slow")
+        return {symbols[0]: self.ex.parse_market_leverage_tiers(self.brackets)}
+
+    async def fetch_positions(self, symbols=None):
+        if "positions" in self.raises:
+            raise ccxt.NetworkError("down")
+        return self.positions
+
+
+def test_real_ccxt_parsing_of_symbol_config_gives_leverage_and_margin_mode():
+    import asyncio
+
+    for raw_mode, expected in (("CROSSED", "cross"), ("ISOLATED", "isolated")):
+        stub = _CcxtStub(config={**SYMBOL_CONFIG, "marginType": raw_mode})
+        lev, mode = asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(stub, "XRP/USDT:USDT", side="long"))
+        assert (lev, mode) == (100.0, expected)
+    # Not reported -> unknown (and the check then refuses); a lowercase positionRisk-style word is read as isolated.
+    no_mode = {k: v for k, v in SYMBOL_CONFIG.items() if k != "marginType"}
+    assert asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(_CcxtStub(config=no_mode), "X", side="long")) == (100.0, None)
+    assert asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(_CcxtStub(config={**SYMBOL_CONFIG, "marginType": "cross"}), "X", side="short"))[1] == "isolated"
+
+
+@pytest.mark.parametrize("bad", [0, 126, -3, True, False, None, "abc", float("nan"), float("inf")])
+def test_the_exchange_reader_rejects_leverage_outside_the_sane_range(bad):
+    import asyncio
+
+    class Raw:
+        async def fetch_leverage(self, pair):
+            return {"marginMode": "isolated", "longLeverage": bad, "shortLeverage": bad}
+
+    assert asyncio.run(exchange.fetch_symbol_leverage_and_margin_mode(Raw(), "X", side="long"))[0] is None
+
+
+def test_real_ccxt_parsing_of_leverage_brackets_feeds_the_calculation():
+    import asyncio
+
+    stub = _CcxtStub(brackets=BRACKETS)
+    tiers = asyncio.run(exchange.fetch_maintenance_tiers(stub, "XRP/USDT:USDT"))
+    assert stub.tier_params == {"symbol": "XRPUSDT"}  # asks for the one symbol, not the whole exchange
+    assert [(t.tier, t.floor, t.cap, t.rate, t.cum) for t in tiers] == [
+        (1, 0.0, 10000.0, 0.005, 0.0), (2, 10000.0, 50000.0, 0.01, 50.0), (3, 50000.0, 250000.0, 0.025, 800.0)]
+    r = _check(tiers=tiers, entry_price=2.0, stop_price=1.96, quantity=15_000.0, leverage=20.0, effective_capital=1_000.0)
+    assert r.tier == 2 and r.notional == 30_000.0
+    assert r.effective_maint_rate == pytest.approx(0.01 - 50.0 / 30_000.0, abs=1e-6)
+
+
+def test_a_failing_or_incomplete_bracket_read_is_none():
+    import asyncio
+
+    assert asyncio.run(exchange.fetch_maintenance_tiers(_CcxtStub(brackets=BRACKETS, raises=("tiers",)), "X")) is None
+    no_cum = {"symbol": "XRPUSDT", "brackets": [{k: v for k, v in b.items() if k != "cum"} for b in BRACKETS["brackets"]]}
+    assert asyncio.run(exchange.fetch_maintenance_tiers(_CcxtStub(brackets=no_cum), "X")) is None
+    empty = {"symbol": "XRPUSDT", "brackets": []}
+    assert asyncio.run(exchange.fetch_maintenance_tiers(_CcxtStub(brackets=empty), "X")) is None
+
+
+def test_open_position_count_is_reliable_or_none():
+    import asyncio
+
+    flat = [{"symbol": "A", "contracts": 0.0, "info": {"positionAmt": "0"}}, {"symbol": "B", "contracts": None, "info": {"positionAmt": "0.0"}}]
+    assert asyncio.run(exchange.fetch_open_position_count(_CcxtStub(positions=flat))) == 0
+    two = flat + [{"symbol": "C", "contracts": 3.0}, {"symbol": "D", "contracts": None, "info": {"positionAmt": "-2"}}]
+    assert asyncio.run(exchange.fetch_open_position_count(_CcxtStub(positions=two))) == 2
+    for bad in (None, "x", [None], [{"symbol": "A"}], [{"symbol": "A", "contracts": "abc"}], [{"symbol": "A", "contracts": float("nan")}]):
+        assert asyncio.run(exchange.fetch_open_position_count(_CcxtStub(positions=bad))) is None
+    assert asyncio.run(exchange.fetch_open_position_count(_CcxtStub(positions=flat, raises=("positions",)))) is None
+
+
+# ------------------------------------------------------------------ configuration
+
+
+@pytest.mark.parametrize(
+    "raw, mode, unrecognised",
+    [
+        (None, "observe", False), ("", "observe", False), ("observe", "observe", False), ("OBSERVE", "observe", False),
+        ("off", "off", False), ("0", "off", False), ("false", "off", False), ("no", "off", False),
+        ("enforce", "enforce", False), ("1", "enforce", False), ("true", "enforce", False), ("on", "enforce", False),
+        ("enforced", "observe", True), ("yes please", "observe", True), ("2", "observe", True),
+    ],
+)
+def test_guard_mode_parsing(raw, mode, unrecognised):
+    assert parse_guard_mode(raw) == mode
+    assert guard_mode_is_unrecognised(raw) is unrecognised
+
+
+def test_shipped_defaults(monkeypatch):
+    for var in ("PROTECTION_PRECHECK_MODE", "PROTECTION_FAIL_LIMIT_MODE", "PRECHECK_MIN_MAINT_RATE", "PRECHECK_STOP_SAFETY_FRACTION",
+                "PRECHECK_CROSS_COLLATERAL_FACTOR", "PROTECTION_FAIL_LIMIT", "PROTECTION_FAIL_WINDOW_HOURS", "PROTECTION_ALERT_REPEAT_HOURS"):
+        monkeypatch.delenv(var, raising=False)
+    s = config_mod.load_settings()
+    assert (s.protection_precheck_mode, s.protection_fail_limit_mode) == ("observe", "observe")
+    assert (s.precheck_min_maint_rate, s.precheck_stop_safety_fraction, s.precheck_cross_collateral_factor) == (0.005, 0.75, 0.9)
+    assert (s.protection_fail_limit, s.protection_fail_window_hours, s.protection_alert_repeat_hours) == (2, 24.0, 6.0)
+
+
+def test_environment_overrides_and_clamping(monkeypatch):
+    monkeypatch.setenv("PROTECTION_PRECHECK_MODE", "enforce")
+    monkeypatch.setenv("PROTECTION_FAIL_LIMIT_MODE", "off")
+    monkeypatch.setenv("PRECHECK_MIN_MAINT_RATE", "9")
+    monkeypatch.setenv("PRECHECK_STOP_SAFETY_FRACTION", "0")
+    monkeypatch.setenv("PROTECTION_FAIL_LIMIT", "-4")
+    s = config_mod.load_settings()
+    assert (s.protection_precheck_mode, s.protection_fail_limit_mode) == ("enforce", "off")
+    assert s.precheck_min_maint_rate == 0.2 and s.precheck_stop_safety_fraction == 0.1 and s.protection_fail_limit == 0
+
+
+def test_the_fixtures_run_the_guards_enforced():
+    s = make_settings()
+    assert (s.protection_precheck_mode, s.protection_fail_limit_mode) == ("enforce", "enforce")
 
 
 # ------------------------------------------------------------------ in the entry path
-# helpers_live's synthetic candles give a stop about 52% from entry: viable at 1x (allowed ~74%), refused at 2x (~37%).
+# helpers_live's synthetic candles put the stop ~52% from entry: fine at 1x, refused at 2x (allowed ~36%).
 
 
 def _settings(**over):
-    base = dict(max_notional_multiplier=100.0, protection_precheck_enabled=True, trade_telemetry=True)
+    base = dict(max_notional_multiplier=100.0, trade_telemetry=True)
     base.update(over)
     return make_settings(**base)
 
@@ -135,57 +411,108 @@ def _alerts(notifier):
     return [t for t in notifier.texts if t.startswith("MBA Bot did not open a trade")]
 
 
-def _decisions():
+def _decisions(reason=None):
     with session_scope() as session:
-        return session.query(DecisionLog).all()
+        rows = session.query(DecisionLog).all()
+    return [d for d in rows if reason is None or d.reason_code == reason]
 
 
-def test_an_unviable_entry_is_refused_before_any_order_with_a_decision_row_and_one_alert(db, monkeypatch):
-    settings = _settings()
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 2.0})
+def _last_error(account_id):
+    with session_scope() as session:
+        return session.get(TradingAccount, account_id).last_error
+
+
+def _fut(**kw):
+    kw.setdefault("leverage_by_symbol", {"BTC/USDT": 2.0})
+    return futures_client(**kw)
+
+
+def _live(db_, monkeypatch, settings, client):
     install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+    return new_account(settings, market_type="futures")
+
+
+def test_enforce_refuses_before_any_order_with_a_decision_row_and_one_alert(db, monkeypatch):
+    settings = _settings()
+    client = _fut()
+    account_id = _live(db, monkeypatch, settings, client)
 
     notifier = run_cycle(account_id, settings)
 
     assert client.market_orders == [] and all_trades(account_id) == []
-    rows = [d for d in _decisions() if d.reason_code == telemetry.R_STOP_UNVIABLE]
+    rows = _decisions(telemetry.R_STOP_UNVIABLE)
     assert len(rows) == 1 and rows[0].outcome == telemetry.REJECTED and rows[0].stage == telemetry.STAGE_ENTRY
-    detail = rows[0].detail_json
-    for key in ("leverage", "stop_distance_pct", "est_liquidation_distance_pct", "max_allowed_stop_pct", "margin_mode_assumed"):
-        assert key in detail
-    assert "secret" not in detail.lower() and "api_key" not in detail.lower()
+    detail = json.loads(rows[0].detail_json)
+    for key in ("leverage", "stop_distance_frac", "liquidation_distance_frac", "max_allowed_stop_frac", "margin_mode", "tier",
+                "tier_rate", "tier_cum", "notional", "effective_maint_rate", "mode", "min_maint_rate", "safety_fraction"):
+        assert key in detail, key
+    assert detail["mode"] == "enforce" and 0 < detail["stop_distance_frac"] < 1  # a fraction, not percent
+    assert "secret" not in rows[0].detail_json.lower() and "api_key" not in rows[0].detail_json.lower()
     assert len(_alerts(notifier)) == 1 and "leverage" in _alerts(notifier)[0].lower()
-    with session_scope() as session:
-        assert "leverage" in session.get(TradingAccount, account_id).last_error.lower()
-
-    # The same condition next round: no order, the dashboard message stays, and the customer is not alerted again.
+    assert "leverage" in _last_error(account_id).lower()
     notifier2 = run_cycle(account_id, settings, notifier)
     assert client.market_orders == [] and len(_alerts(notifier2)) == 1
 
 
-def test_a_viable_entry_is_not_touched_by_the_check(db, monkeypatch):
+def test_a_viable_entry_is_untouched_and_its_accepted_row_carries_the_check_numbers(db, monkeypatch):
     settings = _settings()
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
 
     run_cycle(account_id, settings)
 
     trade = the_trade(account_id)
     assert trade.status == "open" and trade.protection_status == "protected"
-    assert [d for d in _decisions() if d.reason_code == telemetry.R_STOP_UNVIABLE] == []
+    assert _decisions(telemetry.R_STOP_UNVIABLE) == []
+    accepted = _decisions(telemetry.R_ENTRY_SUBMITTED)[0]
+    pre = json.loads(accepted.detail_json)["precheck"]
+    assert pre["margin_basis"] == "isolated" and pre["tier"] == 1
+    # Units: the same fraction in the decision log and in trade_telemetry.
+    with session_scope() as session:
+        tt = session.query(TradeTelemetry).one()
+        assert tt.stop_distance_pct == pytest.approx(pre["stop_distance_frac"], rel=1e-3)
 
 
-def test_the_check_can_be_switched_off_and_then_behaves_exactly_as_before(db, monkeypatch):
-    settings = _settings(protection_precheck_enabled=False)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 2.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+def test_observe_records_the_would_be_refusal_and_blocks_nothing(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="observe")
+    client = _fut()
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open", "observe never blocks the entry"
+    rows = _decisions(telemetry.R_STOP_UNVIABLE)
+    assert len(rows) == 1 and rows[0].outcome == telemetry.OBSERVED
+    detail = json.loads(rows[0].detail_json)
+    assert detail["would_block"] is True and detail["mode"] == "observe"
+    assert _alerts(notifier) == [], "observe sends no customer alert"
+    assert _last_error(account_id) is None, "observe sets no dashboard error"
+
+
+def test_observe_logs_to_the_journal_even_without_telemetry(db, monkeypatch, caplog):
+    import logging
+
+    settings = _settings(protection_precheck_mode="observe", trade_telemetry=False)
+    client = _fut()
+    account_id = _live(db, monkeypatch, settings, client)
+
+    with caplog.at_level(logging.WARNING, logger="mba_bot.trader"):
+        run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open" and _decisions() == []
+    assert any("[observe] protection pre-check would refuse" in r.getMessage() for r in caplog.records)
+
+
+def test_off_evaluates_and_reads_nothing(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit_mode="off")
+    client = _fut()
+    account_id = _live(db, monkeypatch, settings, client)
 
     run_cycle(account_id, settings)
 
     assert the_trade(account_id).status == "open"
+    assert not [c for c in client.calls if c[0] == "fetch_leverage_tiers"]
+    assert _decisions(telemetry.R_STOP_UNVIABLE) == []
 
 
 def test_spot_is_never_subject_to_the_check(db, monkeypatch):
@@ -197,112 +524,292 @@ def test_spot_is_never_subject_to_the_check(db, monkeypatch):
     run_cycle(account_id, settings)
 
     assert the_trade(account_id).status == "open"
+    assert not [c for c in client.calls if c[0] in ("fetch_leverage_tiers", "fetch_leverage")]
 
 
-def test_the_refusal_works_without_telemetry_but_then_writes_no_decision_row(db, monkeypatch):
-    settings = _settings(trade_telemetry=False)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 2.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+@pytest.mark.parametrize(
+    "client_kw, reason",
+    [
+        (dict(maintenance_tiers=[]), telemetry.R_TIERS_UNAVAILABLE),                         # no brackets for the symbol
+        (dict(maintenance_tiers=[{"bracket": 1, "initialLeverage": 5, "notionalCap": 10, "notionalFloor": 0,
+                                  "maintMarginRatio": 0.004, "cum": 0.0}]), telemetry.R_TIERS_UNAVAILABLE),  # notional beyond the last cap
+        (dict(maintenance_tiers=[{"bracket": 1, "notionalCap": 1e9, "notionalFloor": 0, "maintMarginRatio": 0.004}]), telemetry.R_TIERS_UNAVAILABLE),  # no cum
+        (dict(margin_mode=None), telemetry.R_MARGIN_MODE_UNKNOWN),
+    ],
+)
+def test_unreadable_exchange_inputs_refuse_before_any_order(db, monkeypatch, client_kw, reason):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0}, **client_kw)
+    account_id = _live(db, monkeypatch, settings, client)
 
     notifier = run_cycle(account_id, settings)
 
-    assert client.market_orders == [] and len(_alerts(notifier)) == 1
+    assert client.market_orders == [] and all_trades(account_id) == []
+    assert len(_decisions(reason)) == 1 and len(_alerts(notifier)) == 1
+
+
+def test_a_failing_bracket_read_refuses_before_any_order(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+
+    run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_UNAVAILABLE)) == 1
+
+
+def test_an_unexpected_error_inside_the_check_refuses_the_entry(db, monkeypatch):
+    from mba_bot import trader
+
+    def boom(**kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(trader, "assess_stop_viability", boom)
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+
+    run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and all_trades(account_id) == []
+    assert len(_decisions(telemetry.R_PROTECTION_INPUTS_INVALID)) == 1
+
+
+def test_cross_margin_with_other_open_positions_is_refused_before_any_order(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0}, margin_mode="cross",
+                  other_positions=[{"symbol": "ETH/USDT:USDT", "contracts": 0.5, "info": {"positionAmt": "0.5"}}])
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_CROSS_UNVERIFIABLE)) == 1
+    assert "cross margin" in _alerts(notifier)[0]
+
+
+def test_cross_margin_on_a_clean_account_is_allowed_and_reads_the_account_positions(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0}, margin_mode="cross")
+    account_id = _live(db, monkeypatch, settings, client)
+
+    run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open"
+    assert ("fetch_positions", ()) in client.calls  # the account-wide read, with no symbol filter
+
+
+def test_isolated_margin_never_reads_account_positions(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+
+    run_cycle(account_id, settings)
+
+    assert ("fetch_positions", ()) not in client.calls
+
+
+def _short_series():
+    """The bullish fixture mirrored (price -> 200 - price): a bearish crossover on its last candle (entry 110, ATR
+    23.5, stop 157 = ~43% above entry)."""
+    up = [100, 95, 90, 85, 80, 75, 70, 65, 60, 58, 90]
+    return [[i, 200 - c, 200 - c + 5.0, 200 - c - 5.0, 200 - c, 1.0] for i, c in enumerate(up)]
+
+
+def test_the_short_fixture_really_is_a_bearish_crossover():
+    sig = generate_signal(
+        candles_from_ohlcv(_short_series()), ema_fast_period=STRATEGY_KWARGS["ema_fast_period"],
+        ema_slow_period=STRATEGY_KWARGS["ema_slow_period"], atr_period=STRATEGY_KWARGS["atr_period"],
+        atr_flat_threshold=STRATEGY_KWARGS["atr_flat_threshold"], atr_rolling_window=STRATEGY_KWARGS["atr_rolling_window"],
+    )
+    assert sig.signal == SignalType.BEARISH_CROSSOVER
+
+
+def test_a_short_entry_goes_through_the_same_check(db, monkeypatch):
+    settings = _settings()
+    refused = _fut(ohlcv=_short_series(), leverage_by_symbol={"BTC/USDT": 125.0})
+    account_id = _live(db, monkeypatch, settings, refused)
+    run_cycle(account_id, settings)
+    assert refused.market_orders == [] and len(_decisions(telemetry.R_STOP_UNVIABLE)) == 1
+    assert json.loads(_decisions(telemetry.R_STOP_UNVIABLE)[0].detail_json)["side"] == "short"
+
+
+def test_a_viable_short_entry_opens_and_is_protected(db, monkeypatch):
+    settings = _settings()
+    client = _fut(ohlcv=_short_series(), leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
+    run_cycle(account_id, settings)
+    trade = the_trade(account_id)
+    assert trade.side == "short" and trade.status == "open" and trade.protection_status == "protected"
+
+
+# ------------------------------------------------------------------ failure classification
+
+
+def _stop_failure_client(**kw):
+    return _fut(leverage_by_symbol={"BTC/USDT": 1.0}, **kw)
+
+
+def _close_reason(account_id):
+    return the_trade(account_id).close_reason
+
+
+@pytest.mark.parametrize(
+    "exc, kind, reason, phrase",
+    [
+        (ccxt.RequestTimeout("t"), "transient", "protection_transient_emergency_exit", "temporary"),
+        (ccxt.ExchangeNotAvailable("down"), "transient", "protection_transient_emergency_exit", "temporary"),
+        (ccxt.InvalidOrder("-2021 would immediately trigger"), "structural", "protection_failed_emergency_exit", "cannot hold a protective stop"),
+        (ccxt.BadRequest("bad"), "structural", "protection_failed_emergency_exit", "cannot hold a protective stop"),
+        (RuntimeError("something odd"), "other", "protection_unclassified_emergency_exit", "could not be confirmed"),
+    ],
+)
+def test_failures_are_classified_and_the_exit_message_names_the_cause(db, monkeypatch, exc, kind, reason, phrase):
+    settings = _settings(protection_fail_limit_mode="off")
+    client = _stop_failure_client()
+    client.fail("create_order", role="stop", exc=exc, times=99)
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert _close_reason(account_id) == reason
+    assert any(phrase in t for t in notifier.texts), notifier.texts
+    assert lifecycle.classify_protection_failure(exc) == kind
+
+
+def test_a_stop_beyond_liquidation_is_structural_and_names_the_check(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit_mode="off")
+    client = _stop_failure_client(liquidation_price=60.0)
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert _close_reason(account_id) == "protection_failed_emergency_exit"
+    assert any("liquidation price" in t for t in notifier.texts)
 
 
 # ------------------------------------------------------------------ repeated failures
 
 
-def _failed_exit_rows(account_id, count, *, closed_ago_hours=1.0, pair="BTC/USDT", reason="protection_failed_emergency_exit"):
+def _failed_exit_rows(account_id, count, *, ago_hours=1.0, pair="BTC/USDT", reason="protection_failed_emergency_exit", paper=False):
     now = datetime.now(timezone.utc)
     with session_scope() as session:
         for i in range(count):
-            t = now - timedelta(hours=closed_ago_hours, minutes=i)
-            session.add(
-                Trade(
-                    account_id=account_id, side="long", is_paper=False, entry_price=10.0, quantity=1.0,
-                    stop_loss_price=9.0, status="closed", opened_at=t, closed_at=t, pair=pair, close_reason=reason,
-                )
-            )
+            t = now - timedelta(hours=ago_hours, minutes=i)
+            session.add(Trade(account_id=account_id, side="long", is_paper=paper, entry_price=10.0, quantity=1.0, stop_loss_price=9.0,
+                              status="closed", opened_at=t, closed_at=t, pair=pair, close_reason=reason))
 
 
-def test_repeated_protection_failures_block_further_entries_with_a_decision_row_and_one_alert(db, monkeypatch):
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=2)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+def _limit_client():
+    return _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+
+
+def test_enforce_blocks_after_the_limit_with_a_decision_row_and_one_alert(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2)
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
     _failed_exit_rows(account_id, 2)
 
     notifier = run_cycle(account_id, settings)
 
     assert client.market_orders == []
-    rows = [d for d in _decisions() if d.reason_code == telemetry.R_PROTECTION_FAIL_LIMIT]
-    assert len(rows) == 1 and "failures" in rows[0].detail_json
+    rows = _decisions(telemetry.R_PROTECTION_FAIL_LIMIT)
+    assert len(rows) == 1 and rows[0].outcome == telemetry.REJECTED and "failures" in rows[0].detail_json
     assert len(_alerts(notifier)) == 1 and "paused" in _alerts(notifier)[0].lower()
-    assert len(all_trades(account_id)) == 2  # only the seeded ones: nothing new was opened
-
+    assert len(all_trades(account_id)) == 2
     notifier2 = run_cycle(account_id, settings, notifier)
     assert client.market_orders == [] and len(_alerts(notifier2)) == 1
 
 
-def test_below_the_limit_trading_continues(db, monkeypatch):
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=2)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+def test_observe_records_the_limit_and_blocks_nothing(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2, protection_fail_limit_mode="observe")
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 3)
+
+    notifier = run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open"
+    rows = _decisions(telemetry.R_PROTECTION_FAIL_LIMIT)
+    assert len(rows) == 1 and rows[0].outcome == telemetry.OBSERVED
+    assert json.loads(rows[0].detail_json)["would_block"] is True
+    assert _alerts(notifier) == [] and _last_error(account_id) is None
+
+
+def test_off_and_zero_limit_never_block(db, monkeypatch):
+    for n, kw in enumerate((dict(protection_fail_limit_mode="off"), dict(protection_fail_limit=0))):
+        settings = _settings(protection_precheck_mode="off", **kw)
+        client = _limit_client()
+        install(monkeypatch, client)
+        account_id = new_account(settings, market_type="futures", email=f"limit{n}@example.com")
+        _failed_exit_rows(account_id, 10)
+        run_cycle(account_id, settings)
+        assert the_trade(account_id).status == "open", kw
+
+
+def test_only_structural_failures_inside_the_window_on_this_pair_count(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2, protection_fail_window_hours=24.0)
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 5, ago_hours=30.0)                                        # too old
+    _failed_exit_rows(account_id, 5, pair="XRP/USDT")                                       # another pair
+    _failed_exit_rows(account_id, 5, reason="crossover_exit")                               # not a protection failure
+    _failed_exit_rows(account_id, 5, reason="protection_transient_emergency_exit")          # transient exchange trouble
+    _failed_exit_rows(account_id, 5, reason="protection_unclassified_emergency_exit")       # unclassified
+    _failed_exit_rows(account_id, 5, paper=True)                                            # paper
+    run_cycle(account_id, settings)
+    assert the_trade(account_id).status == "open"
+
+
+def test_one_failure_below_the_limit_does_not_block(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2)
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
     _failed_exit_rows(account_id, 1)
-
     run_cycle(account_id, settings)
-
     assert the_trade(account_id).status == "open"
 
 
-def test_failures_outside_the_window_other_pairs_other_reasons_and_paper_do_not_count(db, monkeypatch):
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=2, protection_fail_window_hours=24.0)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
-    _failed_exit_rows(account_id, 5, closed_ago_hours=30.0)                      # too old
-    _failed_exit_rows(account_id, 5, pair="XRP/USDT")                            # another pair
-    _failed_exit_rows(account_id, 5, reason="crossover_exit")                    # not a protection failure
+def test_the_failure_ages_out_of_the_window(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2, protection_fail_window_hours=24.0)
+    client = _limit_client()
+    account_id = _live(db, monkeypatch, settings, client)
+    _failed_exit_rows(account_id, 2, ago_hours=23.9)
     with session_scope() as session:
-        now = datetime.now(timezone.utc)
-        session.add(Trade(account_id=account_id, side="long", is_paper=True, entry_price=1.0, quantity=1.0, stop_loss_price=0.9,
-                          status="closed", opened_at=now, closed_at=now, pair="BTC/USDT", close_reason="protection_failed_emergency_exit"))
-
-    run_cycle(account_id, settings)
-
-    assert the_trade(account_id).status == "open"
-
-
-def test_the_limit_can_be_disabled(db, monkeypatch):
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=0)
-    client = futures_client(leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
-    _failed_exit_rows(account_id, 10)
-
-    run_cycle(account_id, settings)
-
-    assert the_trade(account_id).status == "open"
+        assert protection_guard.recent_protection_failures(session, account_id, "BTC/USDT", now=datetime.now(timezone.utc), window_hours=24.0) == 2
+        later = datetime.now(timezone.utc) + timedelta(hours=1)
+        assert protection_guard.recent_protection_failures(session, account_id, "BTC/USDT", now=later, window_hours=24.0) == 0
 
 
 def test_the_incident_loop_is_cut_off_after_the_limit_end_to_end(db, monkeypatch):
-    """No pre-entry check (the old behaviour); the stop is beyond liquidation every time. The first two entries
-    open and are emergency-closed, then the limit stops the loop instead of a 23-trade run."""
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=2, protection_alert_repeat_hours=6.0)
-    client = futures_client(liquidation_price=60.0, leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+    """Pre-check off (the old behaviour); the stop is beyond liquidation every time. Two entries open and are
+    emergency-closed, then the limit stops the loop instead of a 23-trade run."""
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2)
+    client = _fut(liquidation_price=60.0, leverage_by_symbol={"BTC/USDT": 1.0})
+    account_id = _live(db, monkeypatch, settings, client)
 
     notifier = None
     for _ in range(6):
         notifier = run_cycle(account_id, settings, notifier)
 
-    emergency = [t for t in all_trades(account_id) if t.close_reason == "protection_failed_emergency_exit"]
-    assert len(emergency) == 2
-    assert len(client.market_orders) == 4  # two entries and their two emergency exits, nothing after
+    structural = [t for t in all_trades(account_id) if t.close_reason == "protection_failed_emergency_exit"]
+    assert len(structural) == 2 and len(client.market_orders) == 4
     assert len(_alerts(notifier)) == 1
+
+
+def test_transient_failures_do_not_trip_the_limit_end_to_end(db, monkeypatch):
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit=2)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client.fail("create_order", role="stop", exc=ccxt.RequestTimeout("slow"), times=999)
+    account_id = _live(db, monkeypatch, settings, client)
+
+    notifier = None
+    for _ in range(4):
+        notifier = run_cycle(account_id, settings, notifier)
+
+    closed = [t for t in all_trades(account_id) if t.close_reason == "protection_transient_emergency_exit"]
+    assert len(closed) >= 3, "the limit never engaged, because none of these were structural"
+    assert _alerts(notifier) == []
 
 
 def test_a_failing_lookup_never_blocks_trading():
@@ -310,9 +817,7 @@ def test_a_failing_lookup_never_blocks_trading():
         def execute(self, *a, **k):
             raise RuntimeError("db down")
 
-    assert protection_guard.limit_reached(
-        Boom(), "a", "BTC/USDT", now=datetime.now(timezone.utc), limit=2, window_hours=24.0
-    ) is None
+    assert protection_guard.limit_reached(Boom(), "a", "BTC/USDT", now=datetime.now(timezone.utc), limit=2, window_hours=24.0) is None
 
 
 def test_alert_repeat_window():
@@ -321,19 +826,26 @@ def test_alert_repeat_window():
     assert protection_guard.should_alert("a", "BTC/USDT", "r", now=t0, repeat_hours=6)
     assert not protection_guard.should_alert("a", "BTC/USDT", "r", now=t0 + timedelta(hours=5), repeat_hours=6)
     assert protection_guard.should_alert("a", "BTC/USDT", "r", now=t0 + timedelta(hours=6, minutes=1), repeat_hours=6)
-    assert protection_guard.should_alert("a", "XRP/USDT", "r", now=t0, repeat_hours=6)  # another pair is independent
+    assert protection_guard.should_alert("a", "XRP/USDT", "r", now=t0, repeat_hours=6)
     protection_guard.reset_for_tests()
 
 
-def test_the_journal_names_the_refusing_check_for_a_protection_failure(db, monkeypatch, caplog):
+def test_the_journal_names_the_refusing_check_and_the_category(db, monkeypatch, caplog):
     import logging
 
-    settings = _settings(protection_precheck_enabled=False, protection_fail_limit=0)
-    client = futures_client(liquidation_price=60.0, leverage_by_symbol={"BTC/USDT": 1.0})
-    install(monkeypatch, client)
-    account_id = new_account(settings, market_type="futures")
+    settings = _settings(protection_precheck_mode="off", protection_fail_limit_mode="off")
+    client = _stop_failure_client(liquidation_price=60.0)
+    account_id = _live(db, monkeypatch, settings, client)
 
     with caplog.at_level(logging.WARNING, logger="mba_bot.lifecycle"):
         run_cycle(account_id, settings)
 
-    assert any("failed (ProtectionUnavailable: stop is at or beyond the liquidation price)" in r.getMessage() for r in caplog.records)
+    assert any("failed (ProtectionUnavailable: stop is at or beyond the liquidation price) [structural]" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_reason_codes_match_between_risk_and_telemetry():
+    assert (risk.STOP_UNVIABLE, risk.INPUTS_INVALID, risk.TIERS_UNAVAILABLE, risk.MARGIN_MODE_UNKNOWN, risk.CROSS_UNVERIFIABLE) == (
+        telemetry.R_STOP_UNVIABLE, telemetry.R_PROTECTION_INPUTS_INVALID, telemetry.R_TIERS_UNAVAILABLE,
+        telemetry.R_MARGIN_MODE_UNKNOWN, telemetry.R_CROSS_UNVERIFIABLE)
+    assert all(len(c) <= 48 for c in (risk.STOP_UNVIABLE, risk.TIERS_UNAVAILABLE, risk.CROSS_UNVERIFIABLE, risk.MARGIN_MODE_UNKNOWN))

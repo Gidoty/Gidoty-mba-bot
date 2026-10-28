@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..config import load_settings, verify_mode_is_unrecognised, warn_about_legacy_futures_testnet_env
+from ..config import guard_mode_is_unrecognised, load_settings, verify_mode_is_unrecognised, warn_about_legacy_futures_testnet_env
 from ..db import init_db
 from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
@@ -65,6 +65,9 @@ async def lifespan(app: FastAPI):
     warn_about_legacy_futures_testnet_env(logger)
     if verify_mode_is_unrecognised(os.environ.get("PAYSTACK_STRICT_VERIFY")):
         logger.warning("PAYSTACK_STRICT_VERIFY has an unrecognised value; treating it as OFF. Use off, log or enforce.")
+    for var in ("PROTECTION_PRECHECK_MODE", "PROTECTION_FAIL_LIMIT_MODE"):
+        if guard_mode_is_unrecognised(os.environ.get(var)):
+            logger.warning("%s has an unrecognised value; treating it as OBSERVE (nothing is blocked). Use off, observe or enforce.", var)
     install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
     lock_handle = None
     if settings.api_single_instance_lock:

@@ -15,6 +15,9 @@ from sqlalchemy import func, select
 
 from mba_bot.models import Trade
 
+# Only the STRUCTURAL category (lifecycle.EMERGENCY_REASON_STRUCTURAL): the stop cannot be placed (unavailable, beyond
+# liquidation, rejected by Binance). Transient exchange/API failures and unclassified ones close with different
+# reasons and are deliberately not counted.
 EMERGENCY_EXIT_REASON = "protection_failed_emergency_exit"
 
 _ALERTED: dict[tuple[str, str, str], datetime] = {}

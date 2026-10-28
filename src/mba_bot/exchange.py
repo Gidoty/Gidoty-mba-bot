@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
+
+from .risk import MaintenanceTier, leverage_is_sane
 
 logger = logging.getLogger(__name__)
 
@@ -419,18 +422,83 @@ async def fetch_symbol_leverage_and_margin_mode(
     mode = leverage.get("marginMode")
     mode = mode if mode in ("isolated", "cross") else None
     value = leverage.get("longLeverage") if side == "long" else leverage.get("shortLeverage")
-    if value is None:
+    # Binance leverage is 1..125. Booleans, non-finite and out-of-range values are misreads, never a setting.
+    if isinstance(value, str):  # some payloads carry numbers as strings
+        try:
+            value = float(value)
+        except ValueError:
+            return None, mode
+    if not leverage_is_sane(value):
         return None, mode
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None, mode
-    return (value if value > 0 else None), mode
+    return float(value), mode
 
 
 async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
     """Leverage only; see fetch_symbol_leverage_and_margin_mode (same single read-only call)."""
     return (await fetch_symbol_leverage_and_margin_mode(client, pair, side=side))[0]
+
+
+async def fetch_maintenance_tiers(client: ccxt_async.Exchange, pair: str) -> list[MaintenanceTier] | None:
+    """Read-only. The symbol's Binance leverage brackets (notional range, maintenance-margin rate, maintenance
+    amount `cum`), fetched fresh on every call (never cached here, so never stale by more than this call), or None
+    when they cannot be read or are incomplete. The caller treats None as "cannot prove the stop is safe"."""
+    try:
+        params = {}
+        try:
+            params = {"symbol": client.market(pair)["id"]}  # one symbol instead of the whole exchange
+        except Exception:  # noqa: BLE001
+            params = {}
+        response = await client.fetch_leverage_tiers([pair], params)
+        raw = response.get(pair) if isinstance(response, dict) else None
+        if not isinstance(raw, list) or not raw:
+            return None
+        out: list[MaintenanceTier] = []
+        for item in raw:
+            info = item.get("info") if isinstance(item, dict) else None
+            if not isinstance(info, dict) or info.get("cum") is None:
+                return None  # without the maintenance amount the rate alone would be wrong
+            out.append(
+                MaintenanceTier(
+                    tier=item.get("tier"),
+                    floor=float(item["minNotional"]),
+                    cap=float(item["maxNotional"]),
+                    rate=float(item["maintenanceMarginRate"]),
+                    cum=float(info["cum"]),
+                )
+            )
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def fetch_open_position_count(client: ccxt_async.Exchange) -> int | None:
+    """Read-only. How many positions the whole account holds right now (any symbol), or None when the answer is
+    not reliable (the call failed, or any entry could not be read). Used only to decide whether a cross-margin
+    liquidation estimate for ONE position is defensible: other positions share the same collateral."""
+    try:
+        positions = await client.fetch_positions()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(positions, list):
+        return None
+    count = 0
+    for pos in positions:
+        if not isinstance(pos, dict):
+            return None
+        raw = pos.get("contracts")
+        if raw is None and isinstance(pos.get("info"), dict):
+            raw = pos["info"].get("positionAmt")
+        if raw is None:
+            return None
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(amount):
+            return None
+        if amount != 0:
+            count += 1
+    return count
 
 
 async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) -> float:

@@ -119,9 +119,9 @@ def _settings(**overrides) -> Settings:
         paystack_amount=0,
         paystack_currency="NGN",
     )
-    # These tests use synthetic candles whose stop is far from any realistic distance; the pre-entry protection
-    # check has its own tests (tests/test_pre_entry_protection.py).
-    defaults.setdefault("protection_precheck_enabled", False)
+    # Guards run enforced here too (see helpers_live.make_settings); the synthetic stop (~52%) needs 1x leverage.
+    defaults.setdefault("protection_precheck_mode", "enforce")
+    defaults.setdefault("protection_fail_limit_mode", "enforce")
     defaults.update(overrides)
     return Settings(**defaults)
 
@@ -301,7 +301,7 @@ def test_margin_ceiling_uses_the_real_read_only_leverage_on_futures(tmp_path, mo
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=100.0)  # isolate the margin ceiling from the notional one
     client = FakeClient(market_type="futures", 
-        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 2.0}
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 1.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
@@ -357,7 +357,7 @@ def test_futures_entry_proceeds_when_leverage_is_valid(tmp_path, monkeypatch):
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=100.0)
     client = FakeClient(market_type="futures", 
-        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 2.0}
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 1.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
@@ -507,11 +507,12 @@ def test_futures_leverage_read_failure_never_blocks_managing_an_already_open_pos
 def test_futures_notional_ceiling_still_enforced_independently_of_the_margin_ceiling(tmp_path, monkeypatch):
     """Even with perfectly valid leverage, the separate notional ceiling
     must still bind on its own - the margin fail-closed rule is an
-    ADDITIONAL check, never a replacement for it."""
+    ADDITIONAL check, never a replacement for it. (1x: the synthetic stop is ~52% from entry, which the
+    pre-entry protection guard, enforced in this file's settings, only accepts at very low leverage.)"""
     init_db(f"sqlite:///{tmp_path}/test.db")
     settings = _settings(max_notional_multiplier=0.01)  # deliberately tiny
     client = FakeClient(market_type="futures", 
-        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 50.0}
+        ohlcv_by_pair={"BTC/USDT": BULLISH_OHLCV}, free_balance={"USDT": 50_000.0}, leverage_by_symbol={"BTC/USDT": 1.0}
     )
     monkeypatch.setattr(exchange, "build_exchange_client", lambda **kwargs: client)
 
