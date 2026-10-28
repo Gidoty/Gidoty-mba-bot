@@ -1243,5 +1243,10 @@ def test_every_emergency_close_reason_has_an_explicit_customer_label():
     text = (Path(__file__).resolve().parent.parent / "frontend" / "src" / "constants.js").read_text()
     body = text[text.index("export function closeReasonLabel"):]
     cases = set(re.findall(r'case "([a-z_]+)":', body[: body.index("default:")]))
-    for reason in (lifecycle.EMERGENCY_REASON_STRUCTURAL, lifecycle.EMERGENCY_REASON_TRANSIENT, lifecycle.EMERGENCY_REASON_OTHER):
+    # Every reason lifecycle.py can pass to emergency_close, found in the source so a new one cannot be forgotten.
+    source = (Path(lifecycle.__file__)).read_text()
+    literal = set(re.findall(r'emergency_close\(\s*ctx, trade, reason="([a-z_]+)"', source))
+    assert "quantity_unverifiable" in literal, "the source scan found nothing; the pattern needs updating"
+    reasons = {lifecycle.EMERGENCY_REASON_STRUCTURAL, lifecycle.EMERGENCY_REASON_TRANSIENT, lifecycle.EMERGENCY_REASON_OTHER} | literal
+    for reason in reasons:
         assert reason in cases, f"{reason} would be shown to the customer as a signal exit"

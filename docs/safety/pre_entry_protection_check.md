@@ -192,7 +192,7 @@ back to "Signal exit". The two new reasons now have explicit labels (`protection
 exit (connection issue)", `protection_unclassified_emergency_exit` shows "Safety exit"), and a test fails if any
 emergency-close reason lacks one. `frontend/dist/` is not tracked in git, so the change reaches customers only after the
 frontend is rebuilt on the server (`cd frontend && npm run build`) as part of deployment; the Python service restart alone
-does not update it. (`quantity_unverifiable`, an older emergency-close reason, still shows "Signal exit"; not changed here.)
+does not update it. `quantity_unverifiable`, an older emergency-close reason that used to fall through to "Signal exit", is now labelled "Safety exit" too.
 
 ## Verification gates that remain OPEN
 

@@ -35,6 +35,7 @@ export function closeReasonLabel(reason) {
       return "Stop-loss (at Binance)";
     case "protection_failed_emergency_exit":
     case "protection_unclassified_emergency_exit":
+    case "quantity_unverifiable":
       return "Safety exit";
     case "protection_transient_emergency_exit":
       return "Safety exit (connection issue)";
