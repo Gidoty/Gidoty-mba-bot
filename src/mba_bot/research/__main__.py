@@ -8,6 +8,7 @@
   phase1     the pre-registered Phase 1 experiments (plan | run | lockbox)
   phase2     the pre-registered Phase 2 confirmation (plan | resources | download | run | report)
   risk       1% versus 2% per-trade risk: Monte Carlo drawdown/ruin and an exact engine grid (development range only)
+  ledger     what real trades actually cost and returned (reads a sanitised bundle; no credentials, no network)
   telemetry-check  read-only health check of the telemetry tables (deployment runbook)
   registry   show the experiment ledger
   synthetic  write a SYNTHETIC store for trying the tooling without market access
@@ -103,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     rk.add_argument("--pairs", help="default: the four development pairs")
     rk.add_argument("--horizon-trades", type=int, default=150)
     rk.add_argument("--sims", type=int, default=5000)
+
+    lg = sub.add_parser("ledger", help="analyse a sanitised ledger bundle (fills, fees, funding) from the owner-run export")
+    lg.add_argument("--bundle", required=True, help="the JSON bundle written by mba_bot.ledger_export")
+    lg.add_argument("--prereg", default="docs/research/phase3_ledger_preregistration.md", help="the registration; the verdict is withheld unless it says 'Owner agreement: AGREED'")
+    lg.add_argument("--out", default="research_out/ledger")
 
     tc = sub.add_parser("telemetry-check", help="read-only telemetry health check")
     tc.add_argument("--database", required=True)
@@ -304,6 +310,22 @@ def main(argv: list[str] | None = None) -> int:
         (out_dir / "risk_results.json").write_text(json.dumps({"monte_carlo": mc, "grids": grids, "development_range": [start_ts, end_ts], "n_trades": len(base_trades)}, indent=1, default=str))
         (out_dir / "risk_report.md").write_text(RS.render(mc, grids))
         print(f"report: {out_dir / 'risk_report.md'}")
+        return 0
+
+    if args.cmd == "ledger":
+        from . import ledger as LG, ledger_report as LR
+
+        try:
+            trades, fills, income, meta = LG.load_bundle(Path(args.bundle).read_text(encoding="utf-8"))
+        except LG.BundleError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        rows = LG.build_ledger(trades, fills, income)
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "ledger_report.md").write_text(LR.render(rows, meta, prereg_path=args.prereg), encoding="utf-8")
+        (out_dir / "ledger_trades.csv").write_text(LR.csv_rows(rows), encoding="utf-8")
+        print((out_dir / "ledger_report.md").read_text(encoding="utf-8"))
         return 0
 
     if args.cmd == "telemetry-check":
