@@ -79,6 +79,27 @@ def verify_mode_is_unrecognised(raw: str | None) -> bool:
     return value not in _VERIFY_ENFORCE + _VERIFY_OFF + ("log",)
 
 
+_GUARD_ENFORCE = ("1", "true", "yes", "on", "enforce")
+_GUARD_OFF = ("0", "false", "no", "off")
+GUARD_MODES = ("off", "observe", "enforce")
+
+
+def parse_guard_mode(raw: str | None) -> str:
+    """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
+    value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
+    value = (raw or "").strip().lower()
+    if value in _GUARD_ENFORCE:
+        return "enforce"
+    if value in _GUARD_OFF:
+        return "off"
+    return "observe"
+
+
+def guard_mode_is_unrecognised(raw: str | None) -> bool:
+    value = (raw or "").strip().lower()
+    return value not in ("", "observe") + _GUARD_ENFORCE + _GUARD_OFF
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -211,6 +232,42 @@ class Settings:
     # written to two separate tables and never read by the trading path. OFF by
     # default: with it off no telemetry code runs and behaviour is unchanged.
     trade_telemetry: bool = False
+    # Pre-entry protection check (risk.assess_stop_viability): before a live Futures entry, estimate from the symbol's
+    # Binance leverage brackets how far liquidation is from entry and refuse the entry when the ATR stop would not
+    # sit safely inside that distance (a stop beyond liquidation can never be placed, so such an entry only opens
+    # and immediately closes). Three modes, each for its own guard:
+    #   off      do nothing
+    #   observe  evaluate and record what WOULD be refused (decision log + journal); never block, alert or set an error
+    #   enforce  refuse the entry, record it, alert once per window
+    # Default observe. An unrecognised value is treated as observe (and logged at startup), never as enforce or off.
+    protection_precheck_mode: str = "observe"
+    # Lower bound on the effective maintenance-margin rate used by the check, whatever the bracket data says.
+    precheck_min_maint_rate: float = 0.005
+    # The stop must lie within this fraction of the estimated liquidation distance (the rest is the buffer).
+    precheck_stop_safety_fraction: float = 0.75
+    # Cross margin only: the share of the allocated/free capital counted as collateral for this position.
+    precheck_cross_collateral_factor: float = 0.9
+    # Highest leverage the pre-check accepts as plausible (Binance's current maximum is 125). Only the pre-check
+    # applies the 1..max range; the leverage READ accepts any positive finite number, exactly as before the guards.
+    precheck_max_leverage: float = 125.0
+    # Repeat-failure limits (one mode switch for all three; a limit of 0 disables that limit whatever the mode).
+    # Each counts live emergency exits caused by a protective stop that could not be established, by category:
+    #   structural    the stop cannot be placed (unavailable, beyond liquidation, rejected by Binance). Repeats
+    #                 identically, so: 2 per account AND pair per 24 h.
+    #   transient     exchange/API trouble (timeouts, 5xx, rate limits). Not pair-specific, so: 3 per ACCOUNT (any
+    #                 pair) per 6 h. A single exit already means three failed attempts in a row.
+    #   unclassified  anything else, often an unmapped Binance rejection that is specific to one symbol, so: 3 per
+    #                 account AND pair per 24 h.
+    # When a limit is reached, new entries in its scope are blocked until the oldest counted exit leaves its window.
+    protection_fail_limit_mode: str = "observe"
+    protection_fail_limit: int = 2
+    protection_fail_window_hours: float = 24.0
+    protection_transient_limit: int = 3
+    protection_transient_window_hours: float = 6.0
+    protection_unclassified_limit: int = 3
+    protection_unclassified_window_hours: float = 24.0
+    # How often the same blocking reason may alert the customer again (in memory; one alert after a restart).
+    protection_alert_repeat_hours: float = 6.0
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -325,4 +382,17 @@ def load_settings() -> Settings:
         sqlite_wal=_env_bool("SQLITE_WAL", False),
         sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
         trade_telemetry=_env_bool("TRADE_TELEMETRY", False),
+        protection_precheck_mode=parse_guard_mode(os.environ.get("PROTECTION_PRECHECK_MODE")),
+        precheck_min_maint_rate=min(0.2, max(0.0, _env_float("PRECHECK_MIN_MAINT_RATE", 0.005))),
+        precheck_stop_safety_fraction=min(1.0, max(0.1, _env_float("PRECHECK_STOP_SAFETY_FRACTION", 0.75))),
+        precheck_cross_collateral_factor=min(1.0, max(0.1, _env_float("PRECHECK_CROSS_COLLATERAL_FACTOR", 0.9))),
+        protection_fail_limit_mode=parse_guard_mode(os.environ.get("PROTECTION_FAIL_LIMIT_MODE")),
+        protection_fail_limit=max(0, _env_int("PROTECTION_FAIL_LIMIT", 2)),
+        protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
+        protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
+        precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
+        protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
+        protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),
+        protection_unclassified_limit=max(0, _env_int("PROTECTION_UNCLASSIFIED_LIMIT", 3)),
+        protection_unclassified_window_hours=max(0.1, _env_float("PROTECTION_UNCLASSIFIED_WINDOW_HOURS", 24.0)),
     )

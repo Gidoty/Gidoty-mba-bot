@@ -91,7 +91,9 @@ def test_persistent_transient_stop_failures_end_in_emergency_close(db, monkeypat
     run_cycle(account_id, settings)
 
     assert len(_stop_calls(client)) == settings.protection_max_attempts
-    assert the_trade(account_id).close_reason == "protection_failed_emergency_exit"
+    # A transient exchange failure closes the trade for safety but is NOT a structural protection failure: it gets
+    # its own close reason, which the repeat-failure limit does not count (see test_pre_entry_protection.py).
+    assert the_trade(account_id).close_reason == "protection_transient_emergency_exit"
 
 
 def test_lost_stop_response_does_not_create_a_second_stop(db, monkeypatch):

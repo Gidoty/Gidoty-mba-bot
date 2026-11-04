@@ -6,6 +6,7 @@ keeps a string of losses from compounding into an outsized drawdown.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -130,3 +131,178 @@ def apply_margin_ceiling(size: PositionSize, *, entry_price: float, effective_ca
         return size
     capped_notional = effective_capital * leverage
     return _resized(size, quantity=capped_notional / entry_price)
+
+
+# Binance USDⓈ-M leverage is an integer from 1 to 125. Anything outside is a misread, not a setting.
+LEVERAGE_MIN = 1.0
+LEVERAGE_MAX = 125.0
+
+# Reason codes (also the decision-log reason codes).
+OK = "ok"
+STOP_UNVIABLE = "stop_beyond_safe_liquidation_distance"
+INPUTS_INVALID = "protection_check_inputs_invalid"
+TIERS_UNAVAILABLE = "maintenance_tiers_unavailable"
+MARGIN_MODE_UNKNOWN = "margin_mode_unknown"
+CROSS_UNVERIFIABLE = "cross_margin_unverifiable"
+
+
+def leverage_is_sane(value, max_leverage: float = LEVERAGE_MAX) -> bool:
+    """A real number from LEVERAGE_MIN to `max_leverage`. Booleans, strings and non-finite values are not leverage."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    v = float(value)
+    return math.isfinite(v) and LEVERAGE_MIN <= v <= max_leverage
+
+
+@dataclass(frozen=True)
+class MaintenanceTier:
+    """One Binance leverage bracket: the notional range [floor, cap], its maintenance-margin rate and the
+    maintenance amount (`cum`). Maintenance margin at notional N is  N * rate - cum."""
+
+    tier: int | None
+    floor: float
+    cap: float
+    rate: float
+    cum: float
+
+
+def validate_tiers(tiers) -> list[MaintenanceTier] | None:
+    """The tiers sorted by floor if they form a plausible, contiguous bracket table, else None (fail closed)."""
+    if not tiers:
+        return None
+    try:
+        if not all(isinstance(t, MaintenanceTier) for t in tiers):
+            return None
+        out = sorted(tiers, key=lambda t: t.floor)
+        for t in out:
+            vals = (t.floor, t.cap, t.rate, t.cum)
+            if any(isinstance(v, bool) or not math.isfinite(float(v)) for v in vals):
+                return None
+            if t.floor < 0 or t.cap <= t.floor or not (0 <= t.rate < 0.5) or t.cum < 0:
+                return None
+        if out[0].floor != 0:
+            return None
+        for a, b in zip(out, out[1:]):
+            if abs(b.floor - a.cap) > 1e-6 * max(1.0, a.cap):  # a gap or an overlap
+                return None
+            if b.rate < a.rate:  # rates only rise with size
+                return None
+        return out
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+@dataclass(frozen=True)
+class StopViability:
+    viable: bool
+    reason: str
+    # All distances are FRACTIONS of the entry price (0.02 = 2%), the same unit as trade_telemetry.stop_distance_pct.
+    stop_distance_frac: float | None = None
+    liquidation_distance_frac: float | None = None
+    max_allowed_stop_frac: float | None = None
+    margin_mode: str | None = None
+    tier: int | None = None
+    tier_rate: float | None = None
+    tier_cum: float | None = None
+    notional: float | None = None
+    effective_maint_rate: float | None = None
+    margin_basis: str | None = None  # "isolated" | "cross"
+
+    def detail(self) -> dict:
+        """Small, non-sensitive numbers for the decision log (fractions, not percent)."""
+        keys = (
+            "stop_distance_frac", "liquidation_distance_frac", "max_allowed_stop_frac", "margin_mode", "tier",
+            "tier_rate", "tier_cum", "notional", "effective_maint_rate", "margin_basis",
+        )
+        return {k: getattr(self, k) for k in keys}
+
+
+def assess_stop_viability(
+    *,
+    side: str,
+    entry_price: float,
+    stop_price: float,
+    quantity: float,
+    leverage: float,
+    effective_capital: float,
+    margin_mode: str | None,
+    tiers,
+    other_open_positions: int | None,
+    min_maint_rate: float,
+    safety_fraction: float,
+    cross_collateral_factor: float,
+    max_leverage: float = LEVERAGE_MAX,
+) -> StopViability:
+    """Futures, before an entry order. Can a protective stop sit safely inside the liquidation price?
+
+    Single position, one-way mode, USDT-margined. With N = quantity * entry, the matched Binance bracket
+    (rate, cum) and the effective maintenance rate  t = max(rate - cum / N, min_maint_rate):
+
+      margin ratio m:  isolated  1 / leverage
+                       cross     max(1 / leverage, cross_collateral_factor * effective_capital / N)
+      distance to liquidation:  long  (m - t);   short  (m - t) / (1 + rate)
+      enter only if  distance > 0  and  |entry - stop| / entry  <=  safety_fraction * distance   (equality passes)
+
+    This is the standard isolated-margin liquidation formula for one position, derived from the maintenance-margin
+    model (MM = N * rate - cum); it has NOT been checked against an official Binance page by this code's authors.
+    For a long the exact denominator would be (1 - rate); it is dropped, which makes the distance smaller (safer).
+    Fees, funding and the liquidation clearance fee are ignored: `safety_fraction` and `min_maint_rate` are the margin.
+
+    Fails closed (viable=False, with a specific reason) when anything needed is missing or implausible: prices,
+    quantity, leverage outside 1..max_leverage (default 125), the margin mode (unknown is NOT assumed), the bracket table or a bracket for
+    N, and, in cross margin, any other open position on the account or an unknown position count.
+    """
+    def fail(reason: str, **kw) -> StopViability:
+        return StopViability(False, reason, margin_mode=margin_mode if margin_mode in ("isolated", "cross") else None, **kw)
+
+    try:
+        nums = (entry_price, stop_price, quantity, effective_capital, min_maint_rate, safety_fraction, cross_collateral_factor)
+        if any(isinstance(v, bool) or v is None or not math.isfinite(float(v)) for v in nums):
+            return fail(INPUTS_INVALID)
+    except (TypeError, ValueError):
+        return fail(INPUTS_INVALID)
+    if entry_price <= 0 or stop_price <= 0 or quantity <= 0 or effective_capital <= 0:
+        return fail(INPUTS_INVALID)
+    if not leverage_is_sane(leverage, max_leverage):
+        return fail(INPUTS_INVALID)
+    if not (0 <= min_maint_rate < 0.5) or not (0 < safety_fraction <= 1) or not (0 < cross_collateral_factor <= 1):
+        return fail(INPUTS_INVALID)
+    if side not in ("long", "short"):
+        return fail(INPUTS_INVALID)
+    if side == "long" and stop_price >= entry_price:
+        return fail(INPUTS_INVALID)
+    if side == "short" and stop_price <= entry_price:
+        return fail(INPUTS_INVALID)
+    if margin_mode not in ("isolated", "cross"):
+        return fail(MARGIN_MODE_UNKNOWN)
+
+    table = validate_tiers(tiers)
+    notional = quantity * entry_price
+    if table is None:
+        return fail(TIERS_UNAVAILABLE, notional=notional)
+    matches = [t for t in table if t.floor <= notional <= t.cap]  # at a boundary both brackets match: take the worse
+    if not matches:
+        return fail(TIERS_UNAVAILABLE, notional=notional)
+    tier = max(matches, key=lambda t: t.rate - t.cum / notional)
+    t_eff = max(tier.rate - tier.cum / notional, min_maint_rate)
+
+    m = 1.0 / leverage
+    basis = "isolated"
+    if margin_mode == "cross":
+        if other_open_positions is None or isinstance(other_open_positions, bool) or other_open_positions != 0:
+            return fail(CROSS_UNVERIFIABLE, notional=notional, tier=tier.tier, tier_rate=tier.rate, tier_cum=tier.cum)
+        m = max(m, cross_collateral_factor * effective_capital / notional)
+        basis = "cross"
+
+    dist = m - t_eff
+    if side == "short":
+        dist /= 1.0 + tier.rate
+    stop_dist = abs(entry_price - stop_price) / entry_price
+    allowed = max(0.0, safety_fraction * dist)
+    ok = dist > 0 and stop_dist <= allowed
+    return StopViability(
+        ok, OK if ok else STOP_UNVIABLE,
+        stop_distance_frac=round(stop_dist, 6), liquidation_distance_frac=round(dist, 6),
+        max_allowed_stop_frac=round(allowed, 6), margin_mode=margin_mode, tier=tier.tier, tier_rate=tier.rate,
+        tier_cum=tier.cum, notional=round(notional, 4), effective_maint_rate=round(t_eff, 6), margin_basis=basis,
+    )

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
+
+from .risk import MaintenanceTier
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +388,9 @@ def safe_error_message(exc: Exception) -> str:
     return "An unexpected error occurred while checking the market for this account."
 
 
-async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
+async def fetch_symbol_leverage_and_margin_mode(
+    client: ccxt_async.Exchange, pair: str, *, side: str
+) -> tuple[float | None, str | None]:
     """Read-only. Returns the account's currently configured leverage for
     `pair`/`side` ("long" or "short"), or None if it can't be determined.
 
@@ -398,6 +403,9 @@ async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side:
     onto Binance's symbol-config/account-info endpoints) - safe to call
     every cycle purely to learn what leverage is already configured.
 
+    Returns (leverage, margin_mode) from the one read. margin_mode is "isolated", "cross" or
+    None (not reported); the pre-entry protection check refuses an entry when it is None (it is never assumed).
+
     A None return means the caller's margin ceiling (risk.
     apply_margin_ceiling) is simply skipped for this entry - never
     treated as "assume some leverage" or "assume no leverage". The
@@ -408,17 +416,93 @@ async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side:
     try:
         leverage = await client.fetch_leverage(pair)
     except Exception:
-        return None
+        return None, None
     if not isinstance(leverage, dict):
-        return None
+        return None, None
+    mode = leverage.get("marginMode")
+    mode = mode if mode in ("isolated", "cross") else None
     value = leverage.get("longLeverage") if side == "long" else leverage.get("shortLeverage")
-    if value is None:
-        return None
+    # Not a leverage: booleans, non-numbers, non-finite or non-positive values. The plausible RANGE (1..125) is NOT
+    # applied here, so with the guards off this read behaves as it did before they existed; the pre-check applies it.
+    if isinstance(value, str):  # some payloads carry numbers as strings
+        try:
+            value = float(value)
+        except ValueError:
+            return None, mode
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, mode
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        return None, mode
+    return value, mode
+
+
+async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side: str) -> float | None:
+    """Leverage only; see fetch_symbol_leverage_and_margin_mode (same single read-only call)."""
+    return (await fetch_symbol_leverage_and_margin_mode(client, pair, side=side))[0]
+
+
+async def fetch_maintenance_tiers(client: ccxt_async.Exchange, pair: str) -> list[MaintenanceTier] | None:
+    """Read-only. The symbol's Binance leverage brackets (notional range, maintenance-margin rate, maintenance
+    amount `cum`), fetched fresh on every call (never cached here, so never stale by more than this call), or None
+    when they cannot be read or are incomplete. The caller treats None as "cannot prove the stop is safe"."""
     try:
-        value = float(value)
-    except (TypeError, ValueError):
+        params = {}
+        try:
+            params = {"symbol": client.market(pair)["id"]}  # one symbol instead of the whole exchange
+        except Exception:  # noqa: BLE001
+            params = {}
+        response = await client.fetch_leverage_tiers([pair], params)
+        raw = response.get(pair) if isinstance(response, dict) else None
+        if not isinstance(raw, list) or not raw:
+            return None
+        out: list[MaintenanceTier] = []
+        for item in raw:
+            info = item.get("info") if isinstance(item, dict) else None
+            if not isinstance(info, dict) or info.get("cum") is None:
+                return None  # without the maintenance amount the rate alone would be wrong
+            out.append(
+                MaintenanceTier(
+                    tier=item.get("tier"),
+                    floor=float(item["minNotional"]),
+                    cap=float(item["maxNotional"]),
+                    rate=float(item["maintenanceMarginRate"]),
+                    cum=float(info["cum"]),
+                )
+            )
+        return out
+    except Exception:  # noqa: BLE001
         return None
-    return value if value > 0 else None
+
+
+async def fetch_open_position_count(client: ccxt_async.Exchange) -> int | None:
+    """Read-only. How many positions the whole account holds right now (any symbol), or None when the answer is
+    not reliable (the call failed, or any entry could not be read). Used only to decide whether a cross-margin
+    liquidation estimate for ONE position is defensible: other positions share the same collateral."""
+    try:
+        positions = await client.fetch_positions()
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(positions, list):
+        return None
+    count = 0
+    for pos in positions:
+        if not isinstance(pos, dict):
+            return None
+        raw = pos.get("contracts")
+        if raw is None and isinstance(pos.get("info"), dict):
+            raw = pos["info"].get("positionAmt")
+        if raw is None:
+            return None
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(amount):
+            return None
+        if amount != 0:
+            count += 1
+    return count
 
 
 async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) -> float:

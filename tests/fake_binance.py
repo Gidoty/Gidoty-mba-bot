@@ -64,6 +64,9 @@ class FakeBinance:
         trades_fee_info: bool = True,
         liquidation_price: float | None = None,
         reject_close_position: bool = False,
+        margin_mode: str | None = "isolated",
+        maintenance_tiers=None,
+        other_positions=None,
         can_withdraw: bool = False,
         api_key: str | None = None,
         sandbox: bool = False,
@@ -90,6 +93,14 @@ class FakeBinance:
         self.before_hooks: dict = {}  # role -> callable(fake) run just before that order is processed
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
+        self._tiers_raise = False
+        self.margin_mode = margin_mode  # what symbolConfig reports ("isolated" | "cross"); None = not reported
+        # Binance leverageBracket-shaped brackets (notionalFloor/Cap, maintMarginRatio, cum). Default: a single wide,
+        # low-rate bracket so tests that are not about margin tiers behave as before.
+        self.maintenance_tiers = maintenance_tiers if maintenance_tiers is not None else [
+            {"bracket": 1, "initialLeverage": 125, "notionalCap": 1_000_000_000, "notionalFloor": 0, "maintMarginRatio": 0.004, "cum": 0.0}
+        ]
+        self.other_positions = list(other_positions or [])  # extra open positions on other symbols (account-wide)
         self.can_withdraw = can_withdraw  # the API KEY has withdrawal permission (key-level `enableWithdrawals`)
         # What GET /sapi/v1/account/apiRestrictions returns instead of the normal object, to model an
         # unreadable / malformed answer (None = behave normally). Network-style failures use fail("api_restrictions", ...).
@@ -217,7 +228,34 @@ class FakeBinance:
             value = self._leverage_by_symbol.get(symbol.split(":")[0])
         if value is None:
             return None
-        return {"symbol": symbol, "longLeverage": value, "shortLeverage": value}
+        out = {"symbol": symbol, "longLeverage": value, "shortLeverage": value}
+        if self.margin_mode is not None:
+            out["marginMode"] = self.margin_mode
+        return out
+
+    def market(self, symbol):
+        return {"id": symbol.split("/")[0] + symbol.split("/")[1].split(":")[0], "symbol": symbol}
+
+    async def fetch_leverage_tiers(self, symbols=None, params=None):
+        self._record("fetch_leverage_tiers", tuple(symbols or ()))
+        if self._tiers_raise:
+            raise RuntimeError("simulated leverageBracket failure")
+        if self.maintenance_tiers is None:
+            return {}
+        # Same normalisation ccxt applies (parse_market_leverage_tiers), kept in the fake so tests stay offline.
+        tiers = [
+            {
+                "tier": b.get("bracket"), "symbol": s, "currency": "USDT",
+                "minNotional": b.get("notionalFloor"), "maxNotional": b.get("notionalCap"),
+                "maintenanceMarginRate": b.get("maintMarginRatio"), "maxLeverage": b.get("initialLeverage"), "info": b,
+            }
+            for s in (symbols or [self.symbol])
+            for b in self.maintenance_tiers
+        ]
+        out = {}
+        for t in tiers:
+            out.setdefault(t["symbol"], []).append(t)
+        return out
 
     async def fetch_position_mode(self, symbol=None):
         self._record("fetch_position_mode")
@@ -239,15 +277,16 @@ class FakeBinance:
         self._record("fetch_positions", tuple(symbols or ()))
         if self.market_type != "futures":
             raise ccxt.NotSupported("spot has no positions")
-        return [
-            {
-                "symbol": self.symbol,
-                "contracts": abs(self.position),
-                "side": "long" if self.position > 0 else ("short" if self.position < 0 else None),
-                "liquidationPrice": self.liquidation_price,
-                "info": {"positionAmt": str(self.position), "positionSide": "BOTH"},
-            }
-        ]
+        own = {
+            "symbol": self.symbol,
+            "contracts": abs(self.position),
+            "side": "long" if self.position > 0 else ("short" if self.position < 0 else None),
+            "liquidationPrice": self.liquidation_price,
+            "info": {"positionAmt": str(self.position), "positionSide": "BOTH"},
+        }
+        if symbols:
+            return [own]
+        return [own] + [dict(p) for p in self.other_positions]  # account-wide, like the real call
 
     async def fetch_my_trades(self, symbol=None, since=None, limit=None, params=None):
         self._record("fetch_my_trades")

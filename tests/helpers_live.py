@@ -85,6 +85,11 @@ def make_settings(**overrides) -> Settings:
         entry_unknown_void_after_seconds=180,
         spot_stop_limit_buffer_pct=0.5,
         protection_software_grace_pct=0.5,
+        # The protection guards run ENFORCED in every live-path test, so a regression that wrongly blocks (or fails
+        # to block) a normal entry shows up everywhere. The synthetic candles here put the stop ~52% from entry, which
+        # is safe only at 1x leverage: that is the fixtures' leverage (futures_client below).
+        protection_precheck_mode="enforce",
+        protection_fail_limit_mode="enforce",
     )
     return dataclasses.replace(base, **overrides)
 
@@ -200,7 +205,7 @@ def futures_client(**kw) -> "FakeBinance":
 
     kw.setdefault("ohlcv", BULLISH_OHLCV)
     kw.setdefault("min_notional", 5.0)
-    kw.setdefault("leverage_by_symbol", {"BTC/USDT": 2.0})
+    kw.setdefault("leverage_by_symbol", {"BTC/USDT": 1.0})
     return FakeBinance(market_type="futures", **kw)
 
 

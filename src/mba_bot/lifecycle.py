@@ -103,6 +103,9 @@ class LiveContext:
     settings: Settings
     notifier: Notifier
     now: datetime
+    # Set by establish_protection when it gives up: "structural" | "transient" | "other" (see classify_protection_failure)
+    protection_failure_kind: str | None = None
+    protection_failure_detail: str | None = None
 
 
 # --- ids / small helpers --------------------------------------------------------
@@ -349,6 +352,31 @@ def _is_transient(exc: BaseException) -> bool:
     return not is_definitive_rejection(exc)
 
 
+# Why a protective stop could not be established. Only STRUCTURAL failures feed the repeat-failure limit
+# (protection_guard): they repeat identically until something about the account or contract changes. TRANSIENT ones
+# are exchange/API trouble and say nothing about this pair; OTHER is anything we cannot classify.
+PROTECTION_STRUCTURAL = "structural"
+PROTECTION_TRANSIENT = "transient"
+PROTECTION_OTHER = "other"
+
+# The close_reason strings live in protection_guard (which counts them); imported here so there is one source.
+from .protection_guard import EMERGENCY_REASON_OTHER, EMERGENCY_REASON_STRUCTURAL, EMERGENCY_REASON_TRANSIENT  # noqa: E402
+
+_STRUCTURAL_REJECTIONS = tuple(
+    getattr(ccxt_async, name) for name in ("InvalidOrder", "BadRequest", "NotSupported") if hasattr(ccxt_async, name)
+)
+
+
+def classify_protection_failure(exc: BaseException) -> str:
+    if isinstance(exc, ProtectionUnavailable):
+        return PROTECTION_STRUCTURAL
+    if isinstance(exc, ccxt_async.NetworkError):  # includes timeouts, 5xx/unavailable, rate limits
+        return PROTECTION_TRANSIENT
+    if isinstance(exc, _STRUCTURAL_REJECTIONS):
+        return PROTECTION_STRUCTURAL
+    return PROTECTION_OTHER
+
+
 async def _place_and_verify(ctx: LiveContext, trade: Trade) -> str:
     """One protection attempt. Returns 'protected' or 'executed' (the stop
     already fired). Raises on any failure."""
@@ -420,11 +448,21 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
     retrying immediately."""
     attempts = max(1, ctx.settings.protection_max_attempts)
     for i in range(attempts):
+        # Each attempt starts with no classification, so the one used for the emergency exit can only come from the
+        # attempt that actually failed last (never from an earlier attempt, trade or call on this context).
+        ctx.protection_failure_kind = None
+        ctx.protection_failure_detail = None
         try:
             return await _place_and_verify(ctx, trade)
         except Exception as exc:
+            # ProtectionUnavailable carries one of this codebase's own fixed reasons (never exchange text), so it is
+            # safe to log and says which check refused; every other exception logs its type only, as before.
+            kind = classify_protection_failure(exc)
+            ctx.protection_failure_kind = kind
+            ctx.protection_failure_detail = str(exc) if isinstance(exc, ProtectionUnavailable) and str(exc) else None
             logger.warning(
-                "account %s: protective stop attempt %d/%d failed (%s)", ctx.account.id, i + 1, attempts, type(exc).__name__
+                "account %s: protective stop attempt %d/%d failed (%s%s) [%s]", ctx.account.id, i + 1, attempts,
+                type(exc).__name__, f": {exc}" if isinstance(exc, ProtectionUnavailable) and str(exc) else "", kind,
             )
             # An InsufficientFunds from the exchange means the free balance moved
             # between our read and the order: retrying re-reads it and re-bounds
@@ -478,7 +516,22 @@ async def _protect_or_emergency(
     if outcome == "executed":
         await finalize_exchange_close(ctx, trade, reason="exchange_stop_triggered")
         return trade
-    return await emergency_close(ctx, trade)
+    kind = ctx.protection_failure_kind or PROTECTION_OTHER
+    if kind == PROTECTION_STRUCTURAL:
+        detail = f" ({ctx.protection_failure_detail})" if ctx.protection_failure_detail else ""
+        return await emergency_close(
+            ctx, trade, reason=EMERGENCY_REASON_STRUCTURAL,
+            why=f"Binance cannot hold a protective stop for this trade{detail}",
+        )
+    if kind == PROTECTION_TRANSIENT:
+        return await emergency_close(
+            ctx, trade, reason=EMERGENCY_REASON_TRANSIENT,
+            why="Binance could not be reached reliably enough to place the protective stop (a temporary connection "
+            "or exchange problem, not a problem with your settings)",
+        )
+    return await emergency_close(
+        ctx, trade, reason=EMERGENCY_REASON_OTHER, why="the protective stop could not be confirmed on Binance",
+    )
 
 
 async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
@@ -509,7 +562,7 @@ async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
 
 
 async def emergency_close(
-    ctx: LiveContext, trade: Trade, *, reason: str = "protection_failed_emergency_exit", why: str | None = None
+    ctx: LiveContext, trade: Trade, *, reason: str = EMERGENCY_REASON_STRUCTURAL, why: str | None = None
 ) -> Trade:
     """Protection could not be established. Close the exposure now rather
     than leave it unprotected; if even that cannot be verified, go to
