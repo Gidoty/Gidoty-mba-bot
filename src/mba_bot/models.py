@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -472,3 +472,32 @@ class DecisionLog(Base):
     candle_ts: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     trade_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class KillSwitch(Base):
+    """The operator kill switch (docs/safety/kill_switch.md): ONE row, id 1. `engaged` stops NEW live entries on every
+    account; open positions keep being managed. Written only by `python -m mba_bot.killswitch` (and the first-run seed);
+    read fresh by the scheduler. Absent, unreadable or malformed counts as engaged (fail closed)."""
+
+    __tablename__ = "kill_switch"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_kill_switch_single_row"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    engaged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(String(60), nullable=True)
+
+
+class KillSwitchEvent(Base):
+    """Append-only audit of every kill switch change. Never updated or deleted by the application."""
+
+    __tablename__ = "kill_switch_events"
+    __table_args__ = (Index("ix_kill_switch_events_at", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    action: Mapped[str] = mapped_column(String(12), nullable=False)  # engage | release | seed
+    actor: Mapped[str] = mapped_column(String(60), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    prev_engaged: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
