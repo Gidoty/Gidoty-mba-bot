@@ -1,4 +1,4 @@
-"""Owner-run, read-only export of the trade ledger bundle (design 4). NOT approved to run until the reviewer has reviewed it.
+r"""Owner-run, read-only export of the trade ledger bundle (design 4). NOT approved to run until the reviewer has reviewed it.
 
 What it does: reads the bot's own trades for ONE account from the database (opened `mode=ro`), reads that account's fills
 (userTrades) and commission and funding income from Binance through the SAME read-only boundary as `readonly_audit`
@@ -13,10 +13,24 @@ nowhere); the bundle holds prices, quantities, fees, funding and times only. The
 and for both credential values before it is written; the file is created new (never overwritten) with mode 600. The command
 prints counts and the file's SHA-256, never the account id or any value from the bundle.
 
-Run by the owner, as the app user, once the reviewer has approved this file and its checksum:
+Whose account: the OWNER'S OWN trading account only. It reads that account's trades and fills, using that account's stored
+credential. Do not point it at a customer's account (their key is not the owner's to use, and their trades are not the owner's
+to export).
 
-    ENCRYPTION_KEY=... python -m mba_bot.ledger_export --database /opt/mba-bot/mba_bot.db --account-id <id or bot code> \
+Run by the owner, as the app user, from the app directory, once the reviewer has approved this file and its checksum.
+The encryption key is never typed, never put on the command line and never printed. This module does not read the app's .env
+itself, so the shell supplies the key to this one command only, read from .env by the same parser the app uses:
+
+    cd /opt/mba-bot
+    ENCRYPTION_KEY="$(.venv/bin/python -c 'from dotenv import dotenv_values; print(dotenv_values(".env")["ENCRYPTION_KEY"])')" \
+        .venv/bin/python -m mba_bot.ledger_export --database /opt/mba-bot/mba_bot.db --account-id <id or bot code> \
         --days 90 --out /home/botops/ledger_bundle.json
+
+* The key exists only in this command's environment. The shell history keeps the command text above, not the key.
+* Do not run it with `set -x`, `bash -x` or any tracing, do not `echo` the variable, and do not paste the command output of
+  the dotenv one-liner anywhere. To check that the key was found without showing it, run the same one-liner as
+  `test -n "$(...)" && echo found`.
+* The same applies to any other secret in .env: none is needed here.
 """
 from __future__ import annotations
 

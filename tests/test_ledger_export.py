@@ -232,3 +232,13 @@ def test_a_credential_value_anywhere_in_the_data_stops_the_export_and_nothing_is
     captured = capsys.readouterr()
     assert code == 1 and not out.exists()
     assert API_KEY not in captured.out and API_KEY not in captured.err
+
+
+def test_the_documented_command_never_shows_the_encryption_key_and_names_the_own_account_rule():
+    doc = ast.get_docstring(ast.parse(SRC.read_text()), clean=False)
+    assert doc is not None
+    assert "OWNER'S OWN trading account only" in doc and "customer's account" in doc
+    # the key is only ever read from .env inside a command substitution, never written out as a value
+    assert not re.search(r'ENCRYPTION_KEY=(?!"\$\()\S', doc), "a literal ENCRYPTION_KEY value or assignment appears in the docstring"
+    assert 'ENCRYPTION_KEY="$(' in doc and "dotenv_values" in doc
+    assert "--encryption-key" not in doc and "ENCRYPTION_KEY=..." not in doc
