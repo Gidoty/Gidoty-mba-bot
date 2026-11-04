@@ -160,6 +160,31 @@ def test_facts_cover_every_known_pair_and_are_cached(monkeypatch):
     assert client.loads == 1 and len(built) == 1 and client.closed
 
 
+@pytest.mark.parametrize("uptime", [0.0, 45.0, 119.0])
+def test_a_freshly_started_machine_still_reads_the_catalog(monkeypatch, uptime):
+    """time.monotonic() counts from boot. With less than the retry window of uptime, a never-failed cache must not look
+    like a recent failure (this made test_facts_cover... and test_a_symbol_missing... fail on freshly started machines)."""
+    client = _CatalogClient({"BTC/USDT": 100.0})
+    built = _install(monkeypatch, client)
+    monkeypatch.setattr(pair_catalog.time, "monotonic", lambda: uptime)
+    facts = asyncio.run(pair_catalog.futures_pair_facts())
+    assert facts is not None and facts["BTC/USDT"].min_notional == 100.0 and len(built) == 1
+
+
+def test_a_failure_at_clock_zero_still_blocks_an_immediate_retry(monkeypatch):
+    first, second = _CatalogClient({}, fail=True), _CatalogClient({}, fail=True)
+    _install(monkeypatch, first, second)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(pair_catalog.time, "monotonic", lambda: clock["t"])
+    assert asyncio.run(pair_catalog.futures_pair_facts()) is None
+    clock["t"] = 10.0
+    assert asyncio.run(pair_catalog.futures_pair_facts()) is None
+    assert first.loads == 1 and second.loads == 0  # inside the window: no second attempt, even though the failure was at clock 0
+    clock["t"] = pair_catalog.RETRY_AFTER_FAILURE_SECONDS + 1
+    asyncio.run(pair_catalog.futures_pair_facts())
+    assert second.loads == 1  # after the window it tries again
+
+
 def test_the_cache_expires(monkeypatch):
     c1, c2 = _CatalogClient({"BTC/USDT": 100.0}), _CatalogClient({"BTC/USDT": 50.0})
     _install(monkeypatch, c1, c2)
