@@ -54,6 +54,10 @@ def init_db(database_url: str, *, wal: bool = False, busy_timeout_ms: int = 1500
             cur.close()
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+    # First run only: give the kill switch its RELEASED row (see kill_switch.ensure_state_row). Never raises.
+    from . import kill_switch
+
+    kill_switch.ensure_state_row(_engine)
 
 
 @contextmanager

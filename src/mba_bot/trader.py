@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, lifecycle, pair_catalog, protection_guard, telemetry
+from . import exchange, kill_switch, lifecycle, pair_catalog, protection_guard, telemetry
 from . import risk as risk_module
 from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
@@ -62,6 +62,13 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         now=now,
     )
     is_paper = trial_state.mode == TradingMode.PAPER
+
+    if not is_paper:
+        # Visibility only (a forgotten kill switch must not stay on silently): one journal line per repeat window while
+        # engaged, and one when a read needed retries. The entry paths below read the switch again themselves.
+        ks = await kill_switch.acheck(session, settings)
+        if ks.engaged or ks.attempts > 1:
+            kill_switch.log_decision(ks, scope=account.id, now=now, repeat_hours=settings.protection_alert_repeat_hours)
 
     if not is_paper and account.live_notified_at is None:
         account.live_notified_at = now
@@ -334,6 +341,32 @@ def _limit_message(account: TradingAccount, hit) -> str:
     )
 
 
+async def _kill_switch_blocks(session, settings: Settings, notifier: Notifier, account: TradingAccount, tlog, *, now: datetime, stage: str) -> bool:
+    """True if the operator kill switch stops a NEW live entry here (and the refusal has been recorded). `stage` says which
+    of the checks fired. Reads are retried for a few seconds before the fail-closed rule applies (see kill_switch)."""
+    decision = await kill_switch.acheck(session, settings)
+    if not decision.engaged:
+        if decision.attempts > 1:  # the answer was right, but the read needed retries: say so
+            kill_switch.log_decision(decision, scope=account.id, now=now, repeat_hours=settings.protection_alert_repeat_hours)
+        return False
+    await _kill_switch_refuse(notifier, account, settings, decision, tlog, now=now, stage=stage)
+    return True
+
+
+async def _kill_switch_refuse(notifier: Notifier, account: TradingAccount, settings: Settings, decision, tlog, *, now: datetime, stage: str) -> None:
+    """A refusal because of the kill switch is NOT a fault: it does not touch last_error. The customer is told at most once
+    per `protection_alert_repeat_hours` for this account and pair, in fixed wording that never contains the operator's reason."""
+    tlog(telemetry.REJECTED, telemetry.R_KILL_SWITCH, path=decision.path, check=stage, attempts=decision.attempts)
+    logger.warning(
+        "account %s: new %s entry refused (kill switch, path=%s, check=%s, attempts=%d)",
+        account.id, account.pair, decision.path, stage, decision.attempts,
+    )
+    if protection_guard.should_alert(
+        account.id, account.pair, "kill_switch", now=now, repeat_hours=settings.protection_alert_repeat_hours
+    ):
+        await _notify_safe(notifier, account, kill_switch.CUSTOMER_MESSAGE)
+
+
 async def _block_entry(
     notifier: Notifier, account: TradingAccount, settings: Settings, reason: str, message: str, *, now: datetime
 ) -> None:
@@ -562,6 +595,9 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             is_paper=is_paper, ctx=tctx, now=now, detail=detail or None,
         )
 
+    if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
+        return
+
     if account.pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
         # Fail closed: never open a NEW position on a pair that is not currently selectable for
         # this market (e.g. an extra Futures pair after the expansion was switched off). Managing
@@ -778,15 +814,22 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     account.id, side, account.pair, leverage, check.stop_distance_frac * 100,
                     check.max_allowed_stop_frac * 100, check.tier, check.effective_maint_rate * 100, check.margin_basis,
                 )
+        # The steps above made several exchange calls: read the kill switch again right before the order.
+        if await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="before_order"):
+            return
         risk_amount = quantity * size.stop_distance
-        opened = await lifecycle.open_live_trade(
-            ctx,
-            side=side,
-            quantity=quantity,
-            signal_price=current_price,
-            stop_price=stop_price,
-            risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
-        )
+        try:
+            opened = await lifecycle.open_live_trade(
+                ctx,
+                side=side,
+                quantity=quantity,
+                signal_price=current_price,
+                stop_price=stop_price,
+                risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
+            )
+        except kill_switch.EntryPaused as paused:
+            await _kill_switch_refuse(notifier, account, settings, paused.decision, _tlog, now=now, stage="in_lifecycle")
+            return
         if opened is None:
             _tlog(telemetry.REJECTED, telemetry.R_CONCURRENT_TRADE)
         elif telemetry.enabled(settings):

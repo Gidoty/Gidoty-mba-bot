@@ -292,6 +292,12 @@ class Settings:
     # WAL + busy timeout for SQLite. PREPARED ONLY: do not enable without the runbook.
     sqlite_wal: bool = False
     sqlite_busy_timeout_ms: int = 15000
+    # Operator kill switch (docs/safety/kill_switch.md). The switch itself defaults to RELEASED, so shipping this
+    # changes nothing until the owner engages it. The break-glass file, if it exists, also engages it.
+    kill_switch_file: str = "./KILL_SWITCH"
+    # A failed read (locked database, filesystem error) is retried for this long before the fail-closed rule applies.
+    kill_switch_read_retry_seconds: float = 3.0
+    kill_switch_read_retry_interval_seconds: float = 0.5
 
     @property
     def paystack_strict_verify(self) -> bool:
@@ -381,6 +387,10 @@ def load_settings() -> Settings:
         disable_api_docs=_env_bool("DISABLE_API_DOCS", False),
         sqlite_wal=_env_bool("SQLITE_WAL", False),
         sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
+        kill_switch_file=os.environ.get("KILL_SWITCH_FILE")
+        or os.path.join(os.path.dirname(os.path.abspath(os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"))), "KILL_SWITCH"),
+        kill_switch_read_retry_seconds=min(30.0, max(0.0, _env_float("KILL_SWITCH_READ_RETRY_SECONDS", 3.0))),
+        kill_switch_read_retry_interval_seconds=min(5.0, max(0.05, _env_float("KILL_SWITCH_READ_RETRY_INTERVAL_SECONDS", 0.5))),
         trade_telemetry=_env_bool("TRADE_TELEMETRY", False),
         protection_precheck_mode=parse_guard_mode(os.environ.get("PROTECTION_PRECHECK_MODE")),
         precheck_min_maint_rate=min(0.2, max(0.0, _env_float("PRECHECK_MIN_MAINT_RATE", 0.005))),

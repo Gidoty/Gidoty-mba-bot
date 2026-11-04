@@ -42,6 +42,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import kill_switch
 from . import venue as venue_mod
 from .config import Settings
 from .models import (
@@ -245,6 +246,11 @@ async def open_live_trade(
     session, account, venue = ctx.session, ctx.account, ctx.venue
     if not venue.entries_allowed:
         raise venue_mod.EntryForbidden("open_live_trade requires an entry-capable venue")
+    # Last line of defence for the operator kill switch: BEFORE the write-ahead row and before any order. The trader
+    # stops an entry earlier; this makes the guarantee hold for any other caller. Protection and exits are not gated.
+    paused = await kill_switch.acheck(session, ctx.settings)
+    if paused.engaged:
+        raise kill_switch.EntryPaused(paused)
     stop = venue.round_stop(stop_price, side=side)
     trade = Trade(
         account_id=account.id,
