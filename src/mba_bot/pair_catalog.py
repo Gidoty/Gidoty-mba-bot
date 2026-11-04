@@ -88,7 +88,10 @@ def assess_pair(pair: str, facts: PairFacts | None, *, allocated_capital: float 
     return PairStatus(pair, True, None)
 
 
-_cache: dict = {"facts": None, "at": 0.0, "failed_at": 0.0}
+# `failed_at` is None until a read has actually failed. It must not default to 0.0: the clock is time.monotonic(), which
+# counts from boot, so on a machine up for less than RETRY_AFTER_FAILURE_SECONDS "0.0" looked like "failed a moment ago"
+# and the first reads were skipped (and two tests failed, depending on how long the machine had been up).
+_cache: dict = {"facts": None, "at": 0.0, "failed_at": None}
 
 
 async def futures_pair_facts() -> dict[str, PairFacts] | None:
@@ -97,7 +100,7 @@ async def futures_pair_facts() -> dict[str, PairFacts] | None:
     now = time.monotonic()
     if _cache["facts"] is not None and now - _cache["at"] < CACHE_SECONDS:
         return _cache["facts"]
-    if now - _cache["failed_at"] < RETRY_AFTER_FAILURE_SECONDS:
+    if _cache["failed_at"] is not None and now - _cache["failed_at"] < RETRY_AFTER_FAILURE_SECONDS:
         return _cache["facts"]  # the last good answer (possibly stale) or None
     client = None
     try:
@@ -120,4 +123,4 @@ async def futures_pair_facts() -> dict[str, PairFacts] | None:
 
 
 def reset_cache() -> None:  # tests
-    _cache.update(facts=None, at=0.0, failed_at=0.0)
+    _cache.update(facts=None, at=0.0, failed_at=None)
