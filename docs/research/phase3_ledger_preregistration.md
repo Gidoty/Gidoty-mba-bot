@@ -1,8 +1,10 @@
 # Phase 3 registration: measured costs and the real trade ledger
 
-Owner agreement: PENDING
+Owner agreement: AGREED 2026-11-06
 
-Status: DRAFT. Written before any real ledger data has been exported or looked at. The report command withholds its verdict while the line above says PENDING; the owner changes it to AGREED (and the date) only after agreeing section 5. Any later edit to sections 2 to 5 is a new registration with a new hash.
+Status: REGISTERED on 2026-11-06, before any real ledger data has been exported or looked at. The agreement was recorded on the reviewer's recommendation, relayed in the owner's message of that date ("Owner agrees registration section 5 as written"). Sections 2 to 5 are unchanged from the DRAFT written before the agreement.
+Rules hash (sections 2 to 5): 22ccc8e2aba3ff5ff6356cada08a63f8b54849be01c7a915223246a0f39ebccb
+The hash is the SHA-256 of the text from the heading "2. Definitions" up to (not including) the heading "6. Procedure", trimmed. The report recomputes it; if the text differs, the agreement no longer applies and the verdict is withheld. Any later edit to sections 2 to 5 is a new registration with a new hash and a new agreement.
 
 ## 1. Question
 After fees, slippage and funding that the exchange actually recorded, does the live EMA 20/50 + ATR strategy have a positive expectancy per trade? And do the research backtester's assumed costs match what real trades paid? A negative answer to either is an acceptable result.
@@ -38,7 +40,7 @@ Mean net R with a 95% bootstrap interval (trades treated as independent; stated 
 Whatever the outcome, the incident trades are reported as a separate cost, and the report never claims an edge it cannot support.
 
 ## 6. Procedure
-1. The owner agrees section 5 (changes the line at the top to `Owner agreement: AGREED` with the date). Until then nobody runs the analysis on real data.
+1. The owner agrees section 5 (the line at the top reads `Owner agreement: AGREED` with the date). DONE 2026-11-06, before any real data was analysed. Editing sections 2 to 5 afterwards changes the rules hash and withholds the verdict.
 2. The reviewer approves `ledger_export.py` and its checksum. The owner runs it as one supervised session; the bundle contains prices, quantities, fees, funding and times only. The owner checks the file's SHA-256 against the printed value and sends it.
 3. `python -m mba_bot.research ledger --bundle <file>` writes `ledger_report.md` and `ledger_trades.csv`.
 4. The report is read as written, including WITHHELD, INSUFFICIENT SAMPLE and NEGATIVE.

@@ -17,14 +17,21 @@ Whose account: the OWNER'S OWN trading account only. It reads that account's tra
 credential. Do not point it at a customer's account (their key is not the owner's to use, and their trades are not the owner's
 to export).
 
-Run by the owner, as the app user, from the app directory, once the reviewer has approved this file and its checksum.
+Run by the owner, as the app user, once the reviewer has approved this file and its checksum. The code is NOT in the production
+checkout: it lives on the research branch, so run it from a separate read-only checkout of the reviewed commit (never from
+/opt/mba-bot), and tell Python where that code is, because it is not installed in the virtual environment (without PYTHONPATH
+Python says "No module named mba_bot"). The production virtual environment supplies the libraries (ccxt, cryptography,
+python-dotenv). Check first: `git -C "$CODE" rev-parse HEAD` is the commit the reviewer named, and `sha256sum` of this file
+matches the reviewer's value.
+
 The encryption key is never typed, never put on the command line and never printed. This module does not read the app's .env
 itself, so the shell supplies the key to this one command only, read from .env by the same parser the app uses:
 
-    cd /opt/mba-bot
+    CODE=/home/botops/mba-research/code        # a checkout of the reviewed commit; NOT inside /opt/mba-bot
+    cd /opt/mba-bot                            # only so that ".env" below is found
     ENCRYPTION_KEY="$(.venv/bin/python -c 'from dotenv import dotenv_values; print(dotenv_values(".env")["ENCRYPTION_KEY"])')" \
-        .venv/bin/python -m mba_bot.ledger_export --database /opt/mba-bot/mba_bot.db --account-id <id or bot code> \
-        --days 90 --out /home/botops/ledger_bundle.json
+        PYTHONPATH="$CODE/src" .venv/bin/python -m mba_bot.ledger_export \
+        --database /opt/mba-bot/mba_bot.db --account-id <id or bot code> --days 90 --out /home/botops/ledger_bundle.json
 
 * The key exists only in this command's environment. The shell history keeps the command text above, not the key.
 * Do not run it with `set -x`, `bash -x` or any tracing, do not `echo` the variable, and do not paste the command output of

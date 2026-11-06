@@ -241,4 +241,8 @@ def test_the_documented_command_never_shows_the_encryption_key_and_names_the_own
     # the key is only ever read from .env inside a command substitution, never written out as a value
     assert not re.search(r'ENCRYPTION_KEY=(?!"\$\()\S', doc), "a literal ENCRYPTION_KEY value or assignment appears in the docstring"
     assert 'ENCRYPTION_KEY="$(' in doc and "dotenv_values" in doc
+    # the code is not in the production checkout and is not installed: the documented command must say where it is
+    assert 'PYTHONPATH="$CODE/src"' in doc and "never from\n/opt/mba-bot" in doc and "No module named mba_bot" in doc
+    assert "PYTHONPATH=/opt/mba-bot/src" not in doc  # that would run unreviewed research code from the production tree
+    assert "rev-parse HEAD" in doc and "sha256sum" in doc
     assert "--encryption-key" not in doc and "ENCRYPTION_KEY=..." not in doc

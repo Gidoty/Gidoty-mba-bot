@@ -22,14 +22,35 @@ AGREED_RE = re.compile(r"^Owner agreement:\s*AGREED\b", re.M)
 PENDING_RE = re.compile(r"^Owner agreement:\s*PENDING\b", re.M)
 
 
+RULES_HASH_RE = re.compile(r"^Rules hash \(sections 2 to 5\):\s*([0-9a-f]{64})\s*$", re.M)
+
+
+def rules_hash(text: str) -> str | None:
+    """SHA-256 of the registration's frozen rules: from the heading '## 2. Definitions' up to '## 6. Procedure', trimmed."""
+    try:
+        region = text[text.index("## 2. Definitions"):text.index("## 6. Procedure")]
+    except ValueError:
+        return None
+    return hashlib.sha256(region.strip().encode("utf-8")).hexdigest()
+
+
 def prereg_status(path: str | Path | None) -> tuple[str, str | None]:
-    """('AGREED'|'PENDING'|'MISSING'|'UNCLEAR', sha256 of the file). Anything but AGREED withholds the verdict."""
+    """('AGREED'|'PENDING'|'MISSING'|'UNCLEAR'|'CHANGED', sha256 of the file). Anything but AGREED withholds the verdict.
+    AGREED needs the agreement line AND a rules hash that matches the rules text now in the file; if the rules were edited
+    after the agreement, the answer is CHANGED."""
     if not path or not Path(path).is_file():
         return "MISSING", None
     text = Path(path).read_text(encoding="utf-8")
     sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
     agreed, pending = bool(AGREED_RE.search(text)), bool(PENDING_RE.search(text))
-    return ("AGREED" if agreed and not pending else "PENDING" if pending and not agreed else "UNCLEAR"), sha
+    if pending and not agreed:
+        return "PENDING", sha
+    if not agreed or pending:
+        return "UNCLEAR", sha
+    recorded = RULES_HASH_RE.search(text)
+    if recorded is None or recorded.group(1) != rules_hash(text):
+        return "CHANGED", sha
+    return "AGREED", sha
 
 
 def verdict(r_values: list[float], status: str) -> dict:
@@ -37,7 +58,8 @@ def verdict(r_values: list[float], status: str) -> dict:
     if n < N_MIN_VERDICT:
         return {"label": "INSUFFICIENT SAMPLE", "text": f"{n} reconciled live normal trades, below the registered minimum of {N_MIN_VERDICT}. Descriptive numbers only; no statement about edge is made."}
     if status != "AGREED":
-        return {"label": "WITHHELD", "text": f"The owner's agreement on the action rules is {status} in the registration file, so no verdict is issued. The numbers above stand."}
+        why = ("the rules text no longer matches the hash that was agreed" if status == "CHANGED" else f"the owner's agreement on the action rules is {status} in the registration file")
+        return {"label": "WITHHELD", "text": f"{why[0].upper()}{why[1:]}, so no verdict is issued. The numbers above stand."}
     ci = bootstrap_mean_ci(r_values)
     if ci is None:
         return {"label": "INSUFFICIENT SAMPLE", "text": "the interval could not be computed"}

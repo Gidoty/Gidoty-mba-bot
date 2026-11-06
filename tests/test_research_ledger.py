@@ -203,9 +203,16 @@ def test_time_ordered_validation_never_claims_what_it_cannot_support():
 # ------------------------------------------------------------------ report and verdict
 
 
-def write_prereg(tmp_path, line):
+RULES = "## 2. Definitions (frozen)\nrules text\n\n## 3. Registered constants\nN_MIN_VERDICT = 30\n\n## 5. Actions\nPOSITIVE means keep going\n\n"
+
+
+def write_prereg(tmp_path, line, *, with_hash=True, rules=RULES, hash_of=RULES):
+    import hashlib
+
+    h = hashlib.sha256(hash_of.strip().encode()).hexdigest()
+    hash_line = f"Rules hash (sections 2 to 5): {h}\n" if with_hash else ""
     p = tmp_path / "prereg.md"
-    p.write_text(f"# x\n\n{line}\n")
+    p.write_text(f"# x\n\n{line}\n\n{hash_line}\n{rules}## 6. Procedure\nsteps\n")
     return p
 
 
@@ -216,9 +223,25 @@ def test_prereg_status_parsing(tmp_path, line, status):
     assert lr.prereg_status(tmp_path / "missing.md")[0] == "MISSING"
 
 
-def test_the_shipped_registration_is_pending_and_its_constants_match_the_code():
-    assert lr.prereg_status(PREREG)[0] == "PENDING"
+def test_an_agreement_without_a_matching_rules_hash_is_not_an_agreement(tmp_path):
+    agreed = "Owner agreement: AGREED 2026-11-06"
+    assert lr.prereg_status(write_prereg(tmp_path, agreed))[0] == "AGREED"
+    assert lr.prereg_status(write_prereg(tmp_path, agreed, with_hash=False))[0] == "CHANGED"
+    edited = RULES.replace("keep going", "stop everything")  # the action rules edited after the hash was recorded
+    assert lr.prereg_status(write_prereg(tmp_path, agreed, rules=edited))[0] == "CHANGED"
+    v = lr.verdict([1.0, 0.5, 0.8] * 12, "CHANGED")
+    assert v["label"] == "WITHHELD" and "no longer matches" in v["text"]
+    edited_outside = write_prereg(tmp_path, agreed)
+    edited_outside.write_text(edited_outside.read_text().replace("steps", "other steps"))  # procedure text is outside the hashed rules
+    assert lr.prereg_status(edited_outside)[0] == "AGREED"
+
+
+def test_the_shipped_registration_is_agreed_with_a_matching_hash_and_its_constants_match_the_code():
+    status, _ = lr.prereg_status(PREREG)
+    assert status == "AGREED", status
     text = PREREG.read_text()
+    assert re.search(r"^Owner agreement: AGREED 2026-11-06$", text, re.M)
+    assert lr.RULES_HASH_RE.search(text).group(1) == lr.rules_hash(text)
     block = dict(re.findall(r"^([A-Z_]+) = ([0-9.]+)$", text, re.M))
     assert float(block["N_MIN_VERDICT"]) == lr.N_MIN_VERDICT
     assert float(block["MIN_OBS_COST"]) == cc.MIN_OBS_COST
@@ -272,7 +295,7 @@ def test_cli_writes_the_report_and_refuses_a_bundle_with_forbidden_fields(tmp_pa
     good = tmp_path / "b.json"
     good.write_text(bundle_text(parts))
     assert research_main(["ledger", "--bundle", str(good), "--prereg", str(PREREG), "--out", str(tmp_path / "out")]) == 0
-    assert (tmp_path / "out" / "ledger_report.md").read_text().count("WITHHELD") >= 1
+    assert "owner agreement: AGREED" in (tmp_path / "out" / "ledger_report.md").read_text()  # the shipped registration is agreed; 35 trades give a verdict, not WITHHELD
     assert (tmp_path / "out" / "ledger_trades.csv").read_text().startswith("trade_ref,")
     bad = tmp_path / "bad.json"
     bad.write_text(bundle_text(parts, account_id="x"))
