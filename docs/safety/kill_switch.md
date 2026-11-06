@@ -34,15 +34,18 @@ Plus a visibility line in `process_account`: while engaged, one warning per live
 A refusal logs a decision row (`kill_switch_engaged`, with `path`, `check`, `attempts`) when telemetry is on, does NOT set `last_error` (it is not a fault), and tells the customer at most once per repeat window, in fixed words that never contain the operator's reason.
 Worst case after a flip: an entry whose first order is already in flight completes and is then protected.
 
-## Operating it (the owner, over SSH, as the app user, from the app directory)
+## Operating it (the owner, over SSH, as the app user, FROM THE APP DIRECTORY)
+The package is not installed in the server's virtual environment, so Python must be told where the code is. A bare `python -m mba_bot.killswitch` fails there with `No module named 'mba_bot'` (seen on the first deploy). Use this form, from `/opt/mba-bot` (the database path in `DATABASE_URL` is relative to the directory you run it from):
 ```
-python -m mba_bot.killswitch status
-python -m mba_bot.killswitch engage  --reason "why"
-python -m mba_bot.killswitch release --reason "why" --confirm RELEASE
+cd /opt/mba-bot
+PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch status
+PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch engage  --reason "why"
+PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch release --reason "why" --confirm RELEASE
 ```
-* `engage` is one step. It prints the exact release command.
+* `engage` is one step. It prints the exact release and status commands for the interpreter and folder it ran from, ready to copy, plus the directory to run them in.
 * `release` needs a reason and the typed word `RELEASE`; it warns if the break-glass file still exists.
 * If the database write fails (for example a lock that does not clear), the command says FAILED, exits 1 and prints the `touch` command. It never reports success for a write that did not happen.
+* If the SQLite file named by `DATABASE_URL` does not exist from where you ran it (usually the wrong directory), the command says so and stops, without creating an empty database.
 * The command never creates tables, never prints secrets, and only the owner can run it. There is no web route: the app has no admin role.
 
 ## Restarts, deploys and rollback
@@ -54,7 +57,7 @@ python -m mba_bot.killswitch release --reason "why" --confirm RELEASE
 ## Rollout (the owner runs every step; nothing is applied by this PR)
 1. Back up the database. Merge after the reviewer approves.
 2. Deploy and restart. `init_db` creates the tables and the RELEASED row at startup; the Alembic migration `e5b9c2d7f1a4` (idempotent, additive, same result) can be applied afterwards or not at all. Applying it to production needs the owner's approval.
-3. `python -m mba_bot.killswitch status` shows RELEASED, path `released`.
+3. `status` (the command in the section above) shows RELEASED, path `released`.
 4. Drill: `engage --reason "drill"`, wait one scheduler cycle (up to 5 minutes), look for the warning line per live account in the journal, then `release`. This proves the flag is read; the tests prove entries are refused.
 5. Frontend: no change.
 
