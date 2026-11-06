@@ -22,10 +22,13 @@ import asyncio
 import logging
 import os
 import re
+import shlex
+import sys
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import Integer, func, insert, select, type_coerce, update
 
@@ -49,12 +52,22 @@ PATH_FC_FILE = "fail_closed_file_error"
 CUSTOMER_MESSAGE = "MBA Bot did not open a trade: new trades are paused by the operator. Any open position stays protected."
 
 REASON_MAX = 200
-_RELEASE_COMMAND = 'python -m mba_bot.killswitch release --reason "<why>" --confirm RELEASE'
+def command(subcommand: str) -> str:
+    """The exact shell command that runs this tool from where it is running now. The source folder is on PYTHONPATH and the
+    interpreter is the one in use, because on the server the package is not installed in the virtual environment: a bare
+    `python -m mba_bot.killswitch` fails there with "No module named mba_bot". Run it from the same directory (the database
+    path in DATABASE_URL is relative to it)."""
+    src = str(Path(__file__).resolve().parent.parent)
+    return f"PYTHONPATH={shlex.quote(src)} {shlex.quote(sys.executable)} -m mba_bot.killswitch {subcommand}"
 
 
 def release_command() -> str:
     """The exact command that releases the switch (printed by `engage`)."""
-    return _RELEASE_COMMAND
+    return command('release --reason "<why>" --confirm RELEASE')
+
+
+def status_command() -> str:
+    return command("status")
 
 
 @dataclass(frozen=True)

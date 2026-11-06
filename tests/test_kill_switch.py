@@ -11,7 +11,10 @@ import importlib.util
 import json
 import logging
 import os
+import shlex
 import sqlite3
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -509,12 +512,51 @@ def test_cli_status_is_read_only(cli_env, capsys):
 def test_cli_engage_writes_the_row_and_one_event_and_prints_the_exact_release_command(cli_env, capsys):
     code, out = _run(capsys, "engage", "--reason", "XRP loop")
     assert code == 0 and "ENGAGED" in out
-    assert kill_switch.release_command() in out
-    assert 'python -m mba_bot.killswitch release --reason "<why>" --confirm RELEASE' in out
+    assert kill_switch.release_command() in out and kill_switch.status_command() in out
+    assert kill_switch.release_command().endswith(' -m mba_bot.killswitch release --reason "<why>" --confirm RELEASE')
+    assert "Run those from this same directory: " + os.getcwd() in out
     events = _events()
     assert [e.action for e in events] == ["seed", "engage"]
     assert events[-1].actor.startswith("cli:") and events[-1].reason == "XRP loop" and events[-1].prev_engaged is False
     assert kill_switch.check(_engine(), config_mod.load_settings()).engaged
+
+
+def _clean_env(cli_env):
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    return env
+
+
+def test_the_printed_commands_work_from_any_directory_without_the_package_installed(cli_env, tmp_path):
+    """The first deploy failed with 'No module named mba_bot': the code is in src/ and not installed in the virtual
+    environment. The commands the tool prints carry the interpreter and the source folder, so pasting them works."""
+    env, elsewhere = _clean_env(cli_env), tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    status = subprocess.run(kill_switch.status_command(), shell=True, cwd=elsewhere, env=env, capture_output=True, text=True)
+    assert status.returncode == 0 and "kill switch: RELEASED" in status.stdout, status.stderr
+    engage = subprocess.run(kill_switch.command('engage --reason "drill"'), shell=True, cwd=elsewhere, env=env, capture_output=True, text=True)
+    assert engage.returncode == 0 and "ENGAGED" in engage.stdout, engage.stderr
+    printed = [l for l in engage.stdout.splitlines() if l.startswith("To release it:")][0].split("To release it:", 1)[1].strip()
+    release = subprocess.run(printed.replace("<why>", "drill done"), shell=True, cwd=elsewhere, env=env, capture_output=True, text=True)
+    assert release.returncode == 0 and "released" in release.stdout.lower(), release.stderr
+    assert not kill_switch.check(_engine(), config_mod.load_settings()).engaged
+
+
+@pytest.mark.skipif(importlib.util.find_spec("mba_bot") is not None and "site-packages" in (importlib.util.find_spec("mba_bot").origin or ""),
+                    reason="the package is installed in this interpreter, so the bare form cannot fail here")
+def test_the_bare_form_fails_the_way_it_did_on_the_server(cli_env, tmp_path):
+    out = subprocess.run(f"{shlex.quote(sys.executable)} -m mba_bot.killswitch status", shell=True, cwd=tmp_path, env=_clean_env(cli_env),
+                         capture_output=True, text=True)
+    assert out.returncode != 0 and "No module named" in out.stderr  # this is why the tool now prints the full form
+
+
+def test_a_missing_sqlite_file_is_refused_without_creating_an_empty_database(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///./not_here.db")
+    monkeypatch.setenv("KILL_SWITCH_FILE", str(tmp_path / "KILL_SWITCH"))
+    for argv in (["status"], ["engage", "--reason", "x"], ["release", "--reason", "x", "--confirm", "RELEASE"]):
+        code, out = _run(capsys, *argv)
+        assert code == 1 and "database file not found" in out and "cd /opt/mba-bot" in out and "touch " in out
+    assert not (tmp_path / "not_here.db").exists()
 
 
 def test_cli_engage_without_a_reason_is_refused_and_writes_nothing(cli_env, capsys):

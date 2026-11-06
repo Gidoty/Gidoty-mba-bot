@@ -1,8 +1,13 @@
-"""Operator command for the kill switch. Run on the server as the app's user, from the app directory:
+"""Operator command for the kill switch. Run on the server as the app's user, FROM THE APP DIRECTORY (the database path in
+DATABASE_URL is relative to it). On the server the package is not installed in the virtual environment, so the source folder
+must be on PYTHONPATH; without it Python says "No module named mba_bot":
 
-    python -m mba_bot.killswitch status
-    python -m mba_bot.killswitch engage --reason "why"
-    python -m mba_bot.killswitch release --reason "why" --confirm RELEASE
+    cd /opt/mba-bot
+    PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch status
+    PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch engage --reason "why"
+    PYTHONPATH=/opt/mba-bot/src .venv/bin/python -m mba_bot.killswitch release --reason "why" --confirm RELEASE
+
+`engage` prints the exact release command for the interpreter and folder it is running from, ready to copy.
 
 Engaging stops NEW live entries on every account (open positions are not touched). Releasing needs a reason and the typed
 word RELEASE. If the database write fails, the command says so (exit status 1) and prints the break-glass command; it
@@ -12,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 
 from . import kill_switch
@@ -27,6 +33,15 @@ def _engine(settings):
     url = settings.database_url
     args = {"timeout": _WRITE_TIMEOUT} if url.startswith("sqlite") else {}
     return create_engine(url, connect_args=args)
+
+
+def _missing_sqlite_file(url: str) -> str | None:
+    """The absolute path if `url` is a SQLite file that does not exist (opening it would silently create an empty database)."""
+    if not url.startswith("sqlite:///") or url.startswith("sqlite:///:memory:") or url == "sqlite://":
+        return None
+    path = url[len("sqlite:///"):].split("?")[0]
+    full = os.path.abspath(path)
+    return None if os.path.exists(full) else full
 
 
 def _actor() -> str:
@@ -97,7 +112,8 @@ def cmd_engage(engine, settings, reason: str | None) -> int:
     _out(f"KILL SWITCH ENGAGED in the database. Reason: {cleaned}",
          "New live entries stop at the next scheduler read (within about 5 minutes). Open positions stay managed and protected.",
          "To release it:  " + kill_switch.release_command(),
-         "To check it:    python -m mba_bot.killswitch status")
+         "To check it:    " + kill_switch.status_command(),
+         "Run those from this same directory: " + os.getcwd())
     return 0
 
 
@@ -136,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
     from .config import load_settings
 
     settings = load_settings()
+    missing = _missing_sqlite_file(settings.database_url)
+    if missing:
+        _out(f"database file not found: {missing}",
+             "DATABASE_URL is relative to the directory you run this from. Run it from the app directory, for example: cd /opt/mba-bot",
+             "Nothing was read or written. To engage by file instead: touch " + settings.kill_switch_file)
+        return 1
     engine = _engine(settings)
     try:
         if args.command == "status":
