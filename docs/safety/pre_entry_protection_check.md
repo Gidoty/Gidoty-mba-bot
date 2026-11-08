@@ -185,7 +185,7 @@ needs a migration, which is not worth it; the name is documented here instead). 
 No migration is needed (the limit reads existing `trades` columns; decision rows reuse `decision_log`). The previous
 branch-only `PROTECTION_PRECHECK_ENABLED` and `PRECHECK_MAINT_MARGIN_RATE` no longer exist; neither was ever deployed.
 
-## Frontend (rebuild required)
+## Frontend (needs a Vercel deploy)
 
 `frontend/src/constants.js` (`closeReasonLabel`) maps `close_reason` to the customer's Trade History wording and falls
 back to "Signal exit". The two new reasons now have explicit labels (`protection_transient_emergency_exit` shows "Safety
@@ -212,7 +212,7 @@ modes in the `precheck` numbers (decision log or `[observe]` journal lines) befo
 
 ## Suggested rollout (owner decides each step)
 
-1. Deploy with the defaults (both modes `observe`) and rebuild the frontend. Trading behaviour is unchanged. Keep
+1. Deploy with the defaults (both modes `observe`) and let Vercel deploy the frontend. Trading behaviour is unchanged. Keep
    `TRADE_TELEMETRY` on so the decision log is complete. An account that is already looping stays exposed in observe;
    keep it inactive, or enforce the limits first (below).
 2. Watch `decision_log` (`outcome = 'observed'`) and the journal (`[observe]` lines, including the pass lines) over
