@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { Card, EmptyState, LoadingBlock, PageHeader, PnlText, StatTile } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
+import { pnlLabels } from "../pnlLabels.js";
 
 const WINDOWS = [
   { key: "pnl_7d", label: "7D", days: 7 },
@@ -17,6 +18,7 @@ export default function Performance() {
   const [closedTrades, setClosedTrades] = useState(undefined);
   const [windowKey, setWindowKey] = useState("pnl_30d");
   const isPaper = account.mode !== "live";
+  const L = pnlLabels(account, { paper: isPaper });
 
   useEffect(() => {
     api.get(`/trades/summary?is_paper=${isPaper}`).then(setSummary).catch(() => setSummary(null));
@@ -62,12 +64,14 @@ export default function Performance() {
       </div>
 
       <div className="mt-4 grid grid-cols-3 gap-3">
-        <StatTile label={`P&L (${activeWindow.label})`} value={<PnlText value={summary[windowKey]} />} />
+        <StatTile label={L.windowPnl(activeWindow.label)} value={<PnlText value={summary[windowKey]} unit={L.unit} />} />
         <StatTile label="Total Trades" value={summary.total_trades} />
-        <StatTile label="Win Rate" value={summary.win_rate === null ? "-" : `${(summary.win_rate * 100).toFixed(0)}%`} />
+        <StatTile label={L.winRate} value={summary.win_rate === null ? "-" : `${(summary.win_rate * 100).toFixed(0)}%`} />
       </div>
 
-      <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">Cumulative P&L</h2>
+      {L.caption && <p className="mt-2 text-xs text-slate-500">{L.caption}</p>}
+
+      <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">{L.cumulative}</h2>
       {series.length === 0 ? (
         <EmptyState
           title="Not enough data yet"

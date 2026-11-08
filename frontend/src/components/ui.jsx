@@ -45,13 +45,14 @@ export function Badge({ children, tone = "slate" }) {
   );
 }
 
-export function PnlText({ value, className = "" }) {
+export function PnlText({ value, className = "", unit = "" }) {
   if (value === null || value === undefined) return <span className={`text-slate-400 ${className}`}>-</span>;
   const tone = value > 0 ? "text-green-600" : value < 0 ? "text-red-600" : "text-slate-500";
   return (
     <span className={`${tone} ${className}`}>
       {value > 0 ? "+" : ""}
       {value.toFixed(2)}
+      {unit ? ` ${unit}` : ""}
     </span>
   );
 }

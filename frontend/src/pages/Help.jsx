@@ -1,5 +1,7 @@
 import { PageHeader } from "../components/ui.jsx";
+import { useAccount } from "../context/AccountContext.jsx";
 import { GLOSSARY } from "../glossary.js";
+import { pnlLabels } from "../pnlLabels.js";
 
 const TOPICS = [
   { title: "What is Testnet?", body: GLOSSARY.testnet.long },
@@ -45,6 +47,8 @@ const TOPICS = [
 ];
 
 export default function Help() {
+  const { account } = useAccount();
+  const L = pnlLabels(account, { paper: account ? account.mode !== "live" : false });
   return (
     <div>
       <PageHeader title="Help & Guide" subtitle="Plain explanations for anyone new to automated trading." />
@@ -52,7 +56,7 @@ export default function Help() {
         {TOPICS.map((topic) => (
           <details key={topic.title} className="rounded-lg border border-slate-200 bg-white p-4">
             <summary className="cursor-pointer text-sm font-medium text-ink">{topic.title}</summary>
-            <p className="mt-2 text-sm text-slate-600">{topic.body}</p>
+            <p className="mt-2 text-sm text-slate-600">{topic.title === "What is P&L?" ? L.glossary(topic.body) : topic.body}</p>
           </details>
         ))}
       </div>

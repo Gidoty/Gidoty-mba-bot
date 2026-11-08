@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, kill_switch, lifecycle, pair_catalog, protection_guard, telemetry
+from . import exchange, kill_switch, lifecycle, pair_catalog, pnl_labels, protection_guard, telemetry
 from . import risk as risk_module
 from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
@@ -137,7 +137,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # Closed this cycle (back to scanning next cycle), or not
                 # healthy and being worked by the reconciler: no strategy
                 # decisions on a trade whose protection is not verified.
-                await _maybe_send_daily_summary(session, account, notifier, now=now)
+                await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
                 return
             ohlcv = await client.fetch_ohlcv(
                 exchange.exchange_symbol(open_trade.pair or account.pair, account.market_type),
@@ -163,7 +163,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
             )
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
-            await _maybe_send_daily_summary(session, account, notifier, now=now)
+            await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
             return
 
         if open_trade is None and not is_paper and (withdrawal_detected or account.withdrawal_blocked_at is not None):
@@ -260,10 +260,11 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
-                session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now
+                session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now,
+                settings=settings,
             )
 
-        await _maybe_send_daily_summary(session, account, notifier, now=now)
+        await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
     except exchange.WithdrawalPermissionDetected as exc:
         await _record_error(notifier, account, exchange.safe_error_message(exc), now=now)
         logger.error("account %s: stored key has withdrawal permission, refusing to trade", account.id)
@@ -877,7 +878,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     )
 
 
-async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now):
+async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None):
     """PAPER trades only. A live trade's exit is lifecycle.execute_exit /
     lifecycle.monitor_trade - never a bare market order from here."""
     if not is_paper:
@@ -911,7 +912,10 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     await notifier.send(
         account.notification_target,
         f"[{mode_label}] Exited {open_trade.side.upper()} {account.pair} ({open_trade.close_reason})\n"
-        f"Entry: {open_trade.entry_price:.4f}  Exit: {exit_price:.4f}  P&L: {pnl:+.2f}",
+        + pnl_labels.exit_line(
+            open_trade.entry_price, exit_price, pnl, on=bool(settings and settings.pnl_labels), paper=True,
+            quote=pnl_labels.quote_of(account.pair),
+        ),
     )
 
 
@@ -991,7 +995,7 @@ async def reconcile_account(
         await client.close()
 
 
-async def _maybe_send_daily_summary(session, account, notifier, *, now) -> None:
+async def _maybe_send_daily_summary(session, account, notifier, *, now, settings=None) -> None:
     today = now.strftime("%Y-%m-%d")
     if account.last_pnl_summary_date == today:
         return
@@ -1005,5 +1009,8 @@ async def _maybe_send_daily_summary(session, account, notifier, *, now) -> None:
     quote = exchange.quote_currency(account.pair)
     await notifier.send(
         account.notification_target,
-        f"Daily P&L summary ({today} UTC): {len(closed_today)} trade(s) closed, net {total_pnl:+.2f} {quote}",
+        pnl_labels.daily_summary(
+            today, len(closed_today), total_pnl, quote, on=bool(settings and settings.pnl_labels),
+            paper_count=sum(1 for t in closed_today if t.is_paper),
+        ),
     )

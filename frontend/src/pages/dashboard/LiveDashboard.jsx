@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client.js";
 import BotStatusCard from "../../components/BotStatusCard.jsx";
 import { Badge, Card, EmptyState, PnlText, StatTile } from "../../components/ui.jsx";
+import { pnlLabels } from "../../pnlLabels.js";
 import { navigate } from "../../useHashRoute.js";
 
 export default function LiveDashboard({ account }) {
+  const L = pnlLabels(account, { paper: false });
   const [balance, setBalance] = useState(undefined); // undefined = loading, null = unavailable
   const [summary, setSummary] = useState(null);
   const [position, setPosition] = useState(undefined);
@@ -39,18 +41,20 @@ export default function LiveDashboard({ account }) {
           value={balance === undefined ? "..." : balance === null ? "Unavailable" : `$${balance.available_balance.toFixed(2)}`}
           help="The free balance in the quote currency of your trading pair, read directly from your Binance account."
         />
-        <StatTile label="Today" value={<PnlText value={summary?.pnl_today ?? null} />} />
-        <StatTile label="7D" value={<PnlText value={summary?.pnl_7d ?? null} />} />
-        <StatTile label="30D" value={<PnlText value={summary?.pnl_30d ?? null} />} />
+        <StatTile label="Today" value={<PnlText value={summary?.pnl_today ?? null} unit={L.unit} />} />
+        <StatTile label="7D" value={<PnlText value={summary?.pnl_7d ?? null} unit={L.unit} />} />
+        <StatTile label="30D" value={<PnlText value={summary?.pnl_30d ?? null} unit={L.unit} />} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="All-Time P&L" value={<PnlText value={summary?.net_pnl ?? null} />} />
+        <StatTile label={L.allTime} value={<PnlText value={summary?.net_pnl ?? null} unit={L.unit} />} />
         <StatTile label="Total Trades" value={summary?.total_trades ?? "-"} />
         <StatTile
-          label="Win Rate"
+          label={L.winRate}
           value={summary?.win_rate === null || summary?.win_rate === undefined ? "-" : `${(summary.win_rate * 100).toFixed(0)}%`}
         />
       </div>
+
+      {L.caption && <p className="mt-2 text-xs text-slate-500">{L.caption}</p>}
 
       <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">Current Position</h2>
       {position === undefined ? (
@@ -68,7 +72,10 @@ export default function LiveDashboard({ account }) {
             <p className="text-sm font-semibold text-ink">
               {position.side.toUpperCase()} {position.pair}
             </p>
-            <PnlText value={position.unrealized_pnl} className="font-semibold" />
+            <span className="text-right">
+              <PnlText value={position.unrealized_pnl} unit={L.unit} className="font-semibold" />
+              {L.unrealized && <span className="block text-xs text-slate-400">{L.unrealized}</span>}
+            </span>
           </div>
           <dl className="mt-3 grid grid-cols-2 gap-y-2 text-sm text-slate-600 sm:grid-cols-4">
             <Field label="Entry" value={position.entry_price} />
@@ -105,7 +112,10 @@ export default function LiveDashboard({ account }) {
                 </p>
                 <p className="text-xs text-slate-500">{new Date(t.opened_at).toLocaleDateString()}</p>
               </div>
-              <PnlText value={t.pnl} className="font-semibold" />
+              <span className="text-right">
+                <PnlText value={t.pnl} unit={L.unit} className="font-semibold" />
+                {L.rowNote && <span className="block text-xs text-slate-400">{L.rowNote}</span>}
+              </span>
             </Card>
           ))}
         </div>

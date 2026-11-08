@@ -224,6 +224,8 @@ class StartBotRequest(BaseModel):
 
 class AccountOut(BaseModel):
     id: str
+    # Set to "gross_before_fees" only while PNL_LABELS is on: profit figures are before exchange fees and funding.
+    pnl_basis: str | None = None
     bot_code: str | None
     pair: str
     market_type: str
@@ -293,6 +295,8 @@ class TradeOut(BaseModel):
 
 
 class TradesSummaryOut(BaseModel):
+    # Same meaning as AccountOut.pnl_basis. `net_pnl` keeps its name for compatibility but is GROSS (before fees and funding).
+    pnl_basis: str | None = None
     total_trades: int
     open_trades: int
     closed_trades: int

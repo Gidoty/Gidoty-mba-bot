@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from ... import pnl_labels
 from ...db import list_trades_for_account
 from ...models import NON_TERMINAL_TRADE_STATUSES, Customer, Trade
 from ..deps import get_current_customer, get_db
@@ -74,6 +75,7 @@ def trades_summary(
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return TradesSummaryOut(
+        pnl_basis=pnl_labels.basis(),
         total_trades=len(trades),
         open_trades=len(open_),
         closed_trades=len(closed),

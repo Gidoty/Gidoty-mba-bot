@@ -4,11 +4,13 @@ import { api } from "../api/client.js";
 import { Card, EmptyState, LoadingBlock, PageHeader, PnlText } from "../components/ui.jsx";
 import { OPEN_TRADE_STATUSES } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
+import { pnlLabels } from "../pnlLabels.js";
 
 export default function Positions() {
   const { account } = useAccount();
   const [trades, setTrades] = useState(undefined);
   const isPaper = account.mode !== "live";
+  const L = pnlLabels(account, { paper: isPaper });
 
   useEffect(() => {
     api
@@ -36,7 +38,7 @@ export default function Positions() {
                 <p className="text-sm font-semibold text-ink">
                   {t.side.toUpperCase()} {account.pair}
                 </p>
-                <PnlText value={t.pnl} className="font-semibold" />
+                <PnlText value={t.pnl} unit={L.unit} className="font-semibold" />
               </div>
               <dl className="mt-2 grid grid-cols-3 gap-y-1 text-sm text-slate-600">
                 <Field label="Entry" value={t.entry_price} />

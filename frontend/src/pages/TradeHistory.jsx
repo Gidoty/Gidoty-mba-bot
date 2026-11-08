@@ -4,11 +4,13 @@ import { api } from "../api/client.js";
 import { Card, EmptyState, LoadingBlock, PageHeader, PnlText } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
 import { closeReasonLabel } from "../constants.js";
+import { pnlLabels } from "../pnlLabels.js";
 
 export default function TradeHistory() {
   const { account } = useAccount();
   const [trades, setTrades] = useState(undefined);
   const isPaper = account.mode !== "live";
+  const L = pnlLabels(account, { paper: isPaper });
 
   useEffect(() => {
     api
@@ -23,6 +25,7 @@ export default function TradeHistory() {
         title="Trade History"
         subtitle={isPaper ? "Completed practice trades." : "Completed trades using real funds."}
       />
+      {L.caption && <p className="-mt-2 mb-3 text-xs text-slate-500">{L.caption}</p>}
 
       {trades === undefined ? (
         <LoadingBlock />
@@ -41,7 +44,8 @@ export default function TradeHistory() {
                 </p>
               </div>
               <div className="text-right">
-                <PnlText value={t.pnl} className="block font-semibold" />
+                <PnlText value={t.pnl} unit={L.unit} className="block font-semibold" />
+                {L.rowNote && <p className="text-xs text-slate-400">{L.rowNote}</p>}
                 <p className="text-xs text-slate-400">
                   {t.entry_price} → {t.exit_price}
                 </p>
