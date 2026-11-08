@@ -39,7 +39,7 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Badge tone="sky">TESTNET - Practice Environment</Badge>
+        <Badge tone="sky">PRACTICE - Simulated trades</Badge>
         <Badge tone="slate">
           {account.pair} · {account.market_type}
         </Badge>
@@ -55,8 +55,9 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
           <HelpTip text={GLOSSARY.testnet.long} />
         </p>
         <p className="mt-1 text-sm text-slate-600">
-          Everything on this page runs against Binance's practice environment. It behaves like the real market, but
-          no real money is involved, and nothing here can be withdrawn.
+          Everything on this page is simulated. The bot reads prices from Binance's practice server, then records
+          each practice trade itself. No order is sent to Binance, no real money is involved, and nothing here can be
+          withdrawn. Real trades can fill at different prices and pay fees.
         </p>
       </Card>
 

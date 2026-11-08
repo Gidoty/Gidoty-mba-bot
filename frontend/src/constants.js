@@ -15,7 +15,7 @@ export const MARKET_TYPES = [
 // Matches the backend's CREDENTIAL_ENVIRONMENTS (schemas.py) - "unknown"
 // is deliberately excluded, it's a migration-only state nobody chooses.
 export const CREDENTIAL_ENVIRONMENTS = [
-  { value: "testnet", label: "Testnet (practice, no real funds)" },
+  { value: "testnet", label: "Testnet (practice, simulated trades, no real funds)" },
   { value: "mainnet", label: "Mainnet (real Binance account)" },
 ];
 

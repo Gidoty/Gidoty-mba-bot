@@ -7,7 +7,7 @@ const STEPS = [
   },
   {
     title: "2. Try it free, no risk",
-    body: "Every account starts in an unlimited practice environment against Binance's testnet - real signals, no real money. There's no time limit and no card required to try it.",
+    body: "Every account starts in an unlimited practice mode: the bot reads prices from Binance's practice server and simulates every trade - no orders are sent and no real money is used. There's no time limit and no card required to try it.",
   },
   {
     title: "3. Link Telegram",
