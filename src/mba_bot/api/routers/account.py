@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ... import exchange, pair_catalog
+from ... import exchange, pair_catalog, pnl_labels
 from ...botcode import assign_unique_bot_code
 from ...config import Settings, manual_pairs
 from ...crypto_utils import decrypt, encrypt
@@ -97,6 +97,7 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
     return AccountOut(
         id=account.id,
         bot_code=account.bot_code,
+        pnl_basis=pnl_labels.basis(),
         pair=account.pair,
         market_type=account.market_type,
         notification_channel=account.notification_channel,

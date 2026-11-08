@@ -268,6 +268,8 @@ class Settings:
     protection_unclassified_window_hours: float = 24.0
     # How often the same blocking reason may alert the customer again (in memory; one alert after a restart).
     protection_alert_repeat_hours: float = 6.0
+    # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
+    pnl_labels: bool = False
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -400,6 +402,7 @@ def load_settings() -> Settings:
         protection_fail_limit=max(0, _env_int("PROTECTION_FAIL_LIMIT", 2)),
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
+        pnl_labels=_env_bool("PNL_LABELS", False),
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),

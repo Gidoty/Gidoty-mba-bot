@@ -5,8 +5,10 @@ import BotStatusCard from "../../components/BotStatusCard.jsx";
 import HelpTip from "../../components/HelpTip.jsx";
 import { Badge, Card, ErrorBanner, PnlText, StatTile } from "../../components/ui.jsx";
 import { GLOSSARY } from "../../glossary.js";
+import { pnlLabels } from "../../pnlLabels.js";
 
 export default function TestnetDashboard({ account, onAccountChanged, onActivate }) {
+  const L = pnlLabels(account, { paper: true });
   const [summary, setSummary] = useState(null);
   const [trades, setTrades] = useState([]);
   const [error, setError] = useState(null);
@@ -64,7 +66,7 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
           value={`$${account.paper_balance.toFixed(2)}`}
           help="A simulated balance used only for practice trades. It is not real money, was never deposited by you, and cannot be withdrawn."
         />
-        <StatTile label="Test P&L" value={<PnlText value={summary?.net_pnl ?? null} />} />
+        <StatTile label={L.testPnl} value={<PnlText value={summary?.net_pnl ?? null} unit={L.unit} />} />
         <StatTile label="Open Test Positions" value={openPositions.length} />
       </div>
 
@@ -85,13 +87,18 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
                 </p>
                 <p className="text-xs text-slate-500">{new Date(t.opened_at).toLocaleDateString()}</p>
               </div>
-              <PnlText value={t.pnl} className="font-semibold" />
+              <span className="text-right">
+                <PnlText value={t.pnl} unit={L.unit} className="font-semibold" />
+                {L.rowNote && <span className="block text-xs text-slate-400">{L.rowNote}</span>}
+              </span>
             </Card>
           ))}
         </div>
       )}
 
-      <UnderstandingTestnet />
+      {L.caption && <p className="mt-2 text-xs text-slate-500">{L.caption}</p>}
+
+      <UnderstandingTestnet labels={L} />
 
       <div className="mt-6 rounded-lg border border-accent/30 bg-accent/5 p-5">
         <p className="text-sm font-semibold text-ink">Ready to move beyond practice trading?</p>
@@ -121,7 +128,7 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
 
 const TOPICS = ["testnet", "pair", "spot", "futures", "position", "pnl"];
 
-function UnderstandingTestnet() {
+function UnderstandingTestnet({ labels }) {
   return (
     <details className="mt-6 rounded-lg border border-slate-200 bg-white p-4">
       <summary className="cursor-pointer text-sm font-semibold text-ink">Understanding Testnet</summary>
@@ -129,7 +136,7 @@ function UnderstandingTestnet() {
         {TOPICS.map((key) => (
           <div key={key}>
             <dt className="text-sm font-medium text-ink">{GLOSSARY[key].term}</dt>
-            <dd className="text-sm text-slate-600">{GLOSSARY[key].long}</dd>
+            <dd className="text-sm text-slate-600">{key === "pnl" ? labels.glossary(GLOSSARY[key].long) : GLOSSARY[key].long}</dd>
           </div>
         ))}
       </dl>

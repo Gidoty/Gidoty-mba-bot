@@ -42,7 +42,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import kill_switch
+from . import kill_switch, pnl_labels
 from . import venue as venue_mod
 from .config import Settings
 from .models import (
@@ -580,7 +580,7 @@ async def emergency_close(
             ctx,
             f"[LIVE] Safety exit on {_pair(ctx, trade)}: {why}, "
             f"so the bot closed the position immediately instead of leaving it unprotected.\n"
-            f"Entry: {trade.entry_price:.4f}  Exit: {trade.exit_price:.4f}  P&L: {trade.pnl:+.2f}",
+            + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
         return trade
     await mark_attention(ctx, trade, ATTN_UNPROTECTED)
@@ -668,7 +668,7 @@ async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str
         await _notify(
             ctx,
             f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
-            f"Entry: {trade.entry_price:.4f}  Exit: {trade.exit_price:.4f}  P&L: {trade.pnl:+.2f}",
+            + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
         if was_attention:
             await _clear_attention(ctx, trade)
@@ -809,7 +809,7 @@ async def _record_exit(
         await _notify(
             ctx,
             f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
-            f"Entry: {trade.entry_price:.4f}  Exit: {trade.exit_price:.4f}  P&L: {trade.pnl:+.2f}",
+            + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
     if was_attention:
         await _clear_attention(ctx, trade)
