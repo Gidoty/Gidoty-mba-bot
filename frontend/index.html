@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Metabridge Trading Bot</title>
+    <script>
+      // Set the theme before the first paint so a dark device never flashes white.
+      // Same rule as src/theme.js: a saved "light" or "dark" wins, otherwise follow the device.
+      (function () {
+        var c = "auto";
+        try { var s = localStorage.getItem("mba-theme"); if (s === "light" || s === "dark") c = s; } catch (e) {}
+        var dark = c === "dark" || (c === "auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

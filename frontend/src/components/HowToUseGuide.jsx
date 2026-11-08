@@ -35,7 +35,7 @@ export default function HowToUseGuide() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow-lg hover:bg-ink/90"
+        className="how-to-fab fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow-lg hover:bg-ink/90"
       >
         <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/70 text-[10px] leading-none">
           ?
