@@ -1,113 +1,129 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import { api } from "../api/client.js";
-import { Card, EmptyState, LoadingBlock, PageHeader, PnlText, StatTile } from "../components/ui.jsx";
+import BarChart from "../components/charts/BarChart.jsx";
+import EquityChart from "../components/charts/EquityChart.jsx";
+import SplitBar from "../components/charts/SplitBar.jsx";
+import useTrades from "../components/dashboard/useTrades.js";
+import { Card, CardTitle, EmptyState, ErrorBanner, LoadingBlock, PageHeader, Pill, PnlText, Seg, StatTile, ThinNotice, UnprovenNotice } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
-import { pnlLabels } from "../pnlLabels.js";
+import { dayMonth, fmt, signed } from "../lib/format.js";
+import { closedTrades, cumulativeSeries, filterRange, isThin, monthlyBuckets, summarize } from "../lib/stats.js";
+import { pnlLabels, quoteCurrency } from "../pnlLabels.js";
 
-const WINDOWS = [
-  { key: "pnl_7d", label: "7D", days: 7 },
-  { key: "pnl_30d", label: "30D", days: 30 },
-  { key: "pnl_90d", label: "90D", days: 90 },
-  { key: "net_pnl", label: "ALL", days: null },
+const RANGES = [
+  { value: "7", label: "7D" },
+  { value: "30", label: "30D" },
+  { value: "90", label: "90D" },
+  { value: "all", label: "All" },
 ];
 
 export default function Performance() {
   const { account } = useAccount();
-  const [summary, setSummary] = useState(undefined);
-  const [closedTrades, setClosedTrades] = useState(undefined);
-  const [windowKey, setWindowKey] = useState("pnl_30d");
   const isPaper = account.mode !== "live";
   const L = pnlLabels(account, { paper: isPaper });
+  const unit = quoteCurrency(account) || "USDT";
+  const { status, trades, reload } = useTrades(isPaper, account.id);
+  const [range, setRange] = useState("all");
+  const days = range === "all" ? null : Number(range);
 
-  useEffect(() => {
-    api.get(`/trades/summary?is_paper=${isPaper}`).then(setSummary).catch(() => setSummary(null));
-    api
-      .get(`/trades?is_paper=${isPaper}`)
-      .then((all) => setClosedTrades(all.filter((t) => t.status === "closed" && t.closed_at)))
-      .catch(() => setClosedTrades([]));
-  }, [account.id, isPaper]);
-
-  const activeWindow = WINDOWS.find((w) => w.key === windowKey);
-
-  const series = useMemo(() => {
-    if (!closedTrades) return [];
-    const cutoff = activeWindow.days === null ? null : Date.now() - activeWindow.days * 86400000;
-    const inWindow = closedTrades
-      .filter((t) => (cutoff === null ? true : new Date(t.closed_at).getTime() >= cutoff))
-      .sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
-    let running = 0;
-    return inWindow.map((t) => {
-      running += t.pnl || 0;
-      return { date: t.closed_at, cumulative: running };
-    });
-  }, [closedTrades, activeWindow]);
-
-  if (summary === undefined || closedTrades === undefined) return <LoadingBlock />;
+  const allClosed = useMemo(() => closedTrades(trades), [trades]);
+  const inRange = useMemo(() => filterRange(allClosed, days), [allClosed, days]);
+  const stats = useMemo(() => summarize(inRange), [inRange]);
+  const points = useMemo(() => cumulativeSeries(allClosed, { days }), [allClosed, days]);
+  const months = useMemo(() => monthlyBuckets(inRange), [inRange]);
+  const thin = isThin(stats.n);
 
   return (
-    <div>
-      <PageHeader title="Performance" subtitle={isPaper ? "Based on practice trades." : "Based on real trades."} />
+    <div className="grid gap-4">
+      <PageHeader title="Performance" subtitle={isPaper ? "Based on practice trades (simulated)." : "Based on real trades."}>
+        <Seg label="Range" value={range} onChange={setRange} options={RANGES} />
+      </PageHeader>
+      <UnprovenNotice paper={isPaper} closedCount={status === "ready" ? allClosed.length : null} />
 
-      <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
-        {WINDOWS.map((w) => (
-          <button
-            key={w.key}
-            onClick={() => setWindowKey(w.key)}
-            className={`flex-1 rounded-md py-1.5 text-sm font-medium ${
-              windowKey === w.key ? "bg-white text-ink shadow-sm" : "text-slate-500"
-            }`}
-          >
-            {w.label}
+      {status === "error" && (
+        <div>
+          <ErrorBanner message="We could not load your trades, so there is nothing to show." />
+          <button type="button" onClick={reload} className="rounded-ctl border border-line-strong px-4 py-2 text-sm font-medium hover:bg-surface-2">
+            Try again
           </button>
-        ))}
-      </div>
+        </div>
+      )}
+      {status === "loading" && <LoadingBlock />}
 
-      <div className="mt-4 grid grid-cols-3 gap-3">
-        <StatTile label={L.windowPnl(activeWindow.label)} value={<PnlText value={summary[windowKey]} unit={L.unit} />} />
-        <StatTile label="Total Trades" value={summary.total_trades} />
-        <StatTile label={L.winRate} value={summary.win_rate === null ? "-" : `${(summary.win_rate * 100).toFixed(0)}%`} />
-      </div>
+      {status === "ready" && (
+        <>
+          {stats.n > 0 && thin && <ThinNotice closedCount={stats.n} />}
 
-      {L.caption && <p className="mt-2 text-xs text-slate-500">{L.caption}</p>}
+          <Card>
+            <CardTitle right={thin && stats.n > 0 ? <Pill tone="info">Not enough trades to read</Pill> : null}>{L.tag("Statistics")}</CardTitle>
+            {stats.n === 0 ? (
+              <EmptyState
+                title={allClosed.length ? "No closed trades in this range" : "No closed trades yet"}
+                body={allClosed.length ? "Choose a longer range." : "Win rate, profit factor and drawdown appear after your first closed trade."}
+              />
+            ) : (
+              <dl className="grid grid-cols-2 gap-3 shell:grid-cols-4">
+                <StatTile label={L.winRate} value={`${fmt(stats.winRate, 0)}%`} basis={`${stats.wins} ${stats.wins === 1 ? "win" : "wins"}, ${stats.losses} ${stats.losses === 1 ? "loss" : "losses"}`} thin={thin} />
+                <StatTile label="Profit factor" value={stats.profitFactor === null ? "no losses yet" : fmt(stats.profitFactor)} basis="gross wins ÷ gross losses" thin={thin} />
+                <StatTile label="Average win" value={stats.avgWin === null ? "none yet" : <PnlText value={stats.avgWin} unit={unit} />} basis={L.basis || null} thin={thin} />
+                <StatTile label="Average loss" value={stats.avgLoss === null ? "none yet" : <PnlText value={stats.avgLoss} unit={unit} />} basis={L.basis || null} thin={thin} />
+                <StatTile label="Best trade" value={<PnlText value={stats.best.pnl} unit={unit} />} basis={`${dayMonth(stats.best.ms)}${L.basis ? `, ${L.basis}` : ""}`} thin={thin} />
+                <StatTile label="Worst trade" value={<PnlText value={stats.worst.pnl} unit={unit} />} basis={`${dayMonth(stats.worst.ms)}${L.basis ? `, ${L.basis}` : ""}`} thin={thin} />
+                <StatTile
+                  label="Maximum drawdown"
+                  value={stats.maxDrawdown ? `-${fmt(stats.maxDrawdown)} ${unit}` : "none yet"}
+                  basis={`largest fall of cumulative P&L from a peak${L.basis ? `, ${L.basis}` : ""}`}
+                  thin={thin}
+                />
+                <StatTile label="Net P&L" value={<PnlText value={stats.totalPnl} unit={unit} />} basis={`${stats.n} closed ${stats.n === 1 ? "trade" : "trades"}${L.basis ? `, ${L.basis}` : ""}`} />
+              </dl>
+            )}
+          </Card>
 
-      <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">{L.cumulative}</h2>
-      {series.length === 0 ? (
-        <EmptyState
-          title="Not enough data yet"
-          body="A performance chart will appear here once some trades have closed in this period."
-        />
-      ) : (
-        <Card>
-          <CumulativePnlChart series={series} />
-        </Card>
+          <div className="grid items-start gap-4 shell:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+            <Card style={{ backgroundImage: "linear-gradient(180deg, var(--glow), transparent 55%)" }}>
+              <CardTitle>{L.cumulative}</CardTitle>
+              {points.length ? (
+                <>
+                  <p className="mb-3 font-mono">
+                    <span className={`text-3xl font-medium tracking-tight ${tone(stats.totalPnl)}`}>{signed(stats.totalPnl)}</span>
+                    <span className="ml-2 text-sm text-muted">{unit}</span>
+                  </p>
+                  <EquityChart points={points} unit={unit} label={L.cumulative} />
+                </>
+              ) : (
+                <EmptyState title="No closed trades in this range" body="The curve appears after your first closed trade." />
+              )}
+            </Card>
+            <div className="grid min-w-0 gap-4">
+              <Card>
+                <CardTitle>Wins and losses</CardTitle>
+                {stats.n ? <SplitBar wins={stats.wins} losses={stats.losses} /> : <EmptyState title="No closed trades" body="The split appears after your first closed trade." />}
+              </Card>
+              <Card>
+                <CardTitle>What these figures leave out</CardTitle>
+                <p className="text-sm text-muted">
+                  Exchange fees and funding are not included, so net results are lower. A high win rate does not mean a profit:{" "}
+                  {!thin && stats.avgWin && stats.avgLoss
+                    ? `here the average win is ${fmt(stats.avgWin / -stats.avgLoss)} times the average loss.`
+                    : "it depends on how large wins are against losses."}
+                </p>
+              </Card>
+            </div>
+          </div>
+
+          <Card>
+            <CardTitle>{L.tag("P&L by month")}</CardTitle>
+            {months.length ? (
+              <BarChart items={months} unit={unit} ariaLabel={L.tag(`P&L by month in ${unit}`)} firstColumn="Month" />
+            ) : (
+              <EmptyState title="No closed trades in this range" body="Monthly bars appear after your first closed trade." />
+            )}
+          </Card>
+        </>
       )}
     </div>
   );
 }
 
-// A small inline SVG line chart - built directly from each real closed
-// trade's own pnl/closed_at, never an invented or interpolated series.
-function CumulativePnlChart({ series }) {
-  const width = 320;
-  const height = 120;
-  const values = series.map((p) => p.cumulative);
-  const min = Math.min(0, ...values);
-  const max = Math.max(0, ...values);
-  const span = max - min || 1;
-  const points = series.map((p, i) => {
-    const x = series.length === 1 ? width : (i / (series.length - 1)) * width;
-    const y = height - ((p.cumulative - min) / span) * height;
-    return `${x},${y}`;
-  });
-  const zeroY = height - ((0 - min) / span) * height;
-  const last = values[values.length - 1];
-  const stroke = last >= 0 ? "#16a34a" : "#dc2626";
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-32 w-full" preserveAspectRatio="none">
-      <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="#e2e8f0" strokeWidth="1" />
-      <polyline points={points.join(" ")} fill="none" stroke={stroke} strokeWidth="2" />
-    </svg>
-  );
-}
+const tone = (n) => (n > 0 ? "text-pos" : n < 0 ? "text-neg" : "text-fg");

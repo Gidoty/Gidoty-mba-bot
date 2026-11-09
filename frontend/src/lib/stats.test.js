@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { dayMonthYearTime, fmt, signed } from "./format.js";
-import { closedTrades, cumulativeSeries, dailyBuckets, isThin, monthlyBuckets, summarize, THIN_THRESHOLD } from "./stats.js";
+import { closedTrades, cumulativeSeries, filterRange, dailyBuckets, isThin, monthlyBuckets, summarize, THIN_THRESHOLD } from "./stats.js";
 
 const T = (iso, pnl, status = "closed") => ({ id: iso, status, closed_at: iso, pnl });
 const trades = [
@@ -112,4 +112,14 @@ test("the same month in two different years stays two buckets, in date order", (
 test("date with year, UTC", () => {
   assert.equal(dayMonthYearTime(Date.parse("2026-11-08T14:05:00Z")), "8 Nov 2026 14:05");
   assert.equal(dayMonthYearTime(Date.parse("2025-01-02T00:00:00Z")), "2 Jan 2025 00:00");
+});
+
+test("filterRange keeps trades inside the window, null keeps all, edge is inclusive", () => {
+  const closed = closedTrades(trades);
+  const now = Date.parse("2026-11-08T00:00:00Z");
+  assert.deepEqual(filterRange(closed, 7, now).map((t) => t.pnl), [-20, 50, -40]);
+  assert.equal(filterRange(closed, null, now).length, 4);
+  assert.deepEqual(filterRange(closed, 0, now).length, 0);
+  const edge = closedTrades([T("2026-11-01T00:00:00Z", 1)]);
+  assert.equal(filterRange(edge, 7, now).length, 1); // exactly 7 days before now is inside
 });

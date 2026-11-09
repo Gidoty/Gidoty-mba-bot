@@ -7,7 +7,7 @@ import NavIcon from "./navIcons.jsx";
 import { Pill, ThemeSwitch } from "./ui.jsx";
 
 // Pages already moved to the wide layout (charts and tables). Each page PR adds its route here.
-const WIDE_ROUTES = new Set(["dashboard", "positions", "trade-history"]);
+const WIDE_ROUTES = new Set(["dashboard", "positions", "trade-history", "performance"]);
 
 // The four routes that get a tab on a phone; everything else sits under "More".
 const TAB_ROUTES = ["dashboard", "positions", "trade-history", "performance"];

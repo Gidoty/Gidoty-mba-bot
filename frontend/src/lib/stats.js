@@ -21,6 +21,11 @@ export function closedTrades(all) {
     .sort((a, b) => a.ms - b.ms);
 }
 
+// Trades closed within the last `days` days (null = all time).
+export function filterRange(closed, days, now = Date.now()) {
+  return days === null ? closed : closed.filter((t) => t.ms >= now - days * DAY);
+}
+
 // Cumulative P&L, starting from 0 at the start of the range. `days` null = all time.
 export function cumulativeSeries(closed, { days = null, now = Date.now() } = {}) {
   const inRange = days === null ? closed : closed.filter((t) => t.ms >= now - days * DAY);
