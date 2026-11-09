@@ -15,8 +15,8 @@ LIB = Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib"
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_frontend_statistics_and_formatting():
     result = subprocess.run(
-        ["node", "--test", str(LIB / "stats.test.js"), str(LIB / "position.test.js")], capture_output=True, text=True, timeout=120
+        ["node", "--test", str(LIB / "stats.test.js"), str(LIB / "position.test.js"), str(LIB / "tradeStatus.test.js")], capture_output=True, text=True, timeout=120
     )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-1000:]
     assert "# fail 0" in result.stdout
-    assert "# pass 22" in result.stdout
+    assert "# pass 26" in result.stdout

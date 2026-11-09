@@ -5,7 +5,7 @@ import { Card, CardTitle, EmptyState, Pill } from "../ui.jsx";
 // One open position with the distance to its stop. `position` is the API shape of GET /account/position
 // (entry_price, current_price, stop_loss_price, quantity, side, unrealized_pnl, protected, opened_at).
 // current_price and unrealized_pnl may be missing (practice trades have no live price); the card then shows what it has.
-export default function PositionCard({ position, L, unit, title = "Open position" }) {
+export default function PositionCard({ position, L, unit, title = "Open position", badge = null }) {
   const { entry_price: entry, stop_loss_price: stop, current_price: now, quantity: qty, unrealized_pnl: unreal } = position;
   const v = positionView(position);
   const { long, decimals } = v;
@@ -13,7 +13,16 @@ export default function PositionCard({ position, L, unit, title = "Open position
 
   return (
     <Card>
-      <CardTitle right={<Pill tone={long ? "ok" : "bad"}>{long ? "Long" : "Short"}</Pill>}>{title}</CardTitle>
+      <CardTitle
+        right={
+          <span className="flex flex-wrap items-center gap-2">
+            {badge}
+            <Pill tone={long ? "ok" : "bad"}>{long ? "Long" : "Short"}</Pill>
+          </span>
+        }
+      >
+        {title}
+      </CardTitle>
       <p className="mb-1 font-mono">
         <span className={`text-3xl font-medium tracking-tight ${unreal > 0 ? "text-pos" : unreal < 0 ? "text-neg" : "text-muted"}`}>
           {unreal === null || unreal === undefined ? "-" : signed(unreal)}
