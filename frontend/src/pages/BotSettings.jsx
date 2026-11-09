@@ -5,6 +5,7 @@ import HelpTip from "../components/HelpTip.jsx";
 import { FormField, SavedNote, inputClass, primaryButton } from "../components/form.jsx";
 import { Card, CardTitle, ErrorBanner, PageHeader, Pill, ThemeSwitch } from "../components/ui.jsx";
 import { MARKET_TYPES, UPCOMING_PAIRS } from "../constants.js";
+import { usd } from "../lib/format.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
@@ -107,15 +108,18 @@ export default function BotSettings() {
         </CardTitle>
         <p className="text-sm text-muted">
           {account.allocated_capital != null
-            ? `Currently set to ${account.allocated_capital}. You can raise or lower it at any time, even with a trade open - it only affects your bot's next new trade.`
+            ? `Currently set to ${usd(account.allocated_capital)}. You can raise or lower it at any time, even with a trade open - it only affects your bot's next new trade.`
             : "Not configured yet. Required before you can start the bot on a live account."}
         </p>
         <div className="mt-3">
           <ErrorBanner message={capitalError} />
         </div>
         <form onSubmit={saveCapital} className="flex flex-wrap items-end gap-3">
-          <FormField label="Amount" className="w-44">
-            <input type="number" min="0.01" step="0.01" value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} className={inputClass} />
+          <FormField label="Amount (US dollars)" className="w-48">
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">$</span>
+              <input type="number" min="0.01" step="0.01" placeholder="10" value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} className={`${inputClass} pl-7`} />
+            </div>
           </FormField>
           <button type="submit" disabled={savingCapital} className={primaryButton}>
             {savingCapital ? "Saving..." : "Save"}
