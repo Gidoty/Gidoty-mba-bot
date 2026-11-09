@@ -68,9 +68,9 @@ if log:
         handle.write(json.dumps({{"argv": args, "has_b2_env": all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY"))}}) + "\\n")
 if not all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY")):
     sys.stderr.write("no credentials\\n"); sys.exit(1)
-# Real rclone 1.76 rejects flags a command does not have (checked against the real binary): copyto takes none of ours,
+# Real rclone 1.76 rejects flags a command does not have (checked against the real binary): copyto takes --no-check-dest,
 # lsjson takes only these three. Anything else, such as --no-check-bucket (not a b2 option), must fail here too.
-ALLOWED = {{"copyto": set(), "lsjson": {{"--hash", "--no-modtime", "--files-only"}}}}
+ALLOWED = {{"copyto": {{"--no-check-dest"}}, "lsjson": {{"--hash", "--no-modtime", "--files-only"}}}}
 bad = [a for a in args[1:] if a.startswith("--") and a not in ALLOWED.get(args[0], set())]
 if bad:
     sys.stderr.write("Error: unknown flag: " + bad[0] + "\\n"); sys.exit(2)
@@ -327,11 +327,13 @@ def test_a_failed_upload_alerts_exactly_once_keeps_the_local_copy_and_does_not_m
     assert B2_KEY not in everything_the_run_wrote(env, proc)
 
 
-def test_a_remote_copy_that_does_not_match_is_a_failure_not_a_success(env):
-    toggle(env, "bad_hash")
+def test_the_upload_key_is_write_only_so_the_upload_never_lists_or_reads_the_bucket(env):
     proc = run_script(env)
-    assert proc.returncode == mba_offsite.EXIT_ALERTED and "step%3A+verify" in alerts(env)[0][1]
-    assert not (env.state / "last_offsite_success").exists()
+    assert proc.returncode == 0
+    calls = rclone_calls(env)
+    assert calls and all(call["argv"][0] == "copyto" for call in calls)  # no lsjson, lsf, cat or any other command
+    assert all("--no-check-dest" in call["argv"] for call in calls)  # a write-only key may not list the destination first
+    assert (env.state / "last_offsite_success").exists()
 
 
 def test_an_unreachable_alert_service_never_changes_the_exit_status_or_hides_the_error(env, monkeypatch):
