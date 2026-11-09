@@ -35,3 +35,10 @@ export function dayMonthYearTime(ms) {
 export function monthName(index) {
   return MONTHS[index];
 }
+
+// $10, $1,250.5, $0.25. Whole dollars show no decimals. Used for money the user typed.
+export function usd(n) {
+  const v = Number(n);
+  if (n === null || n === undefined || Number.isNaN(v)) return "-";
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}

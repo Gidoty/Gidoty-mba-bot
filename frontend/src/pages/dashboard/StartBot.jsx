@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api } from "../../api/client.js";
 import HelpTip from "../../components/HelpTip.jsx";
+import { usd } from "../../lib/format.js";
 import { Card, ErrorBanner } from "../../components/ui.jsx";
 
 // Shown once an account has enabled live trading (accepted the risk
@@ -70,21 +71,25 @@ export default function StartBot({ account, onAccountChanged }) {
         </div>
         <p className="mt-1 text-sm text-slate-600">
           {capitalConfigured
-            ? `Set to ${account.allocated_capital}. You can change this at any time.`
+            ? `Set to ${usd(account.allocated_capital)}. You can change this at any time.`
             : "Tell the bot the maximum amount it may use from your Binance balance."}
         </p>
         <ErrorBanner message={capitalError} />
         <form onSubmit={saveCapital} className="mt-3 flex items-end gap-2">
           <label className="block">
-            <span className="text-xs font-medium text-slate-600">Amount</span>
+            <span className="text-xs font-medium text-slate-600">Amount (US dollars)</span>
+            <span className="relative mt-1 block">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
             <input
               type="number"
               min="0.01"
               step="0.01"
               value={capitalInput}
               onChange={(e) => setCapitalInput(e.target.value)}
-              className="mt-1 w-40 rounded-md border border-slate-300 px-3 py-2 text-sm"
+             
+              className="w-40 rounded-md border border-slate-300 py-2 pl-7 pr-3 text-sm"
             />
+            </span>
           </label>
           <button
             type="submit"
