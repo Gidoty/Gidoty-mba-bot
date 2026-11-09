@@ -1,0 +1,101 @@
+/* Design tokens (design 8, rev 2). One set of CSS variables, light and dark.
+   theme.js always sets data-theme to the resolved theme ("light" or "dark"), so the
+   explicit selector below is what normally applies. The media block is only a fallback
+   for the moment before the script runs. Contrast of every text and graphic pair is
+   checked by frontend/tools/contrast_check.py (WCAG 2.x, run by tests/test_frontend_tokens.py).
+
+   Naming: --bg page, --surface card, --surface-2 raised or hover, --line decorative border,
+   --line-strong border of inputs and buttons, --text, --muted, --accent (fills, buttons),
+   --accent-text (links on light surfaces), --accent-line (chart line, focus ring),
+   --pos / --neg text, --pos-bar / --neg-bar chart marks, *-soft pill and notice backgrounds. */
+:root {
+  --bg: #f3f5f9;
+  --surface: #ffffff;
+  --surface-2: #eceff5;
+  --line: #d5dbe6;
+  --line-strong: #7b879c;
+  --text: #0e1626;
+  --muted: #526078;
+  --accent: #F0901E;
+  --accent-rgb: 240 144 30;
+  --accent-ink: #1a1205;
+  --accent-line: #C26A08;
+  --accent-text: #8f4c00;
+  --accent-soft: #fdeccf;
+  --nav: #0b1220;
+  --nav-text: #c3cee0;
+  --nav-active: #1b2740;
+  --pos: #0f7a47;
+  --pos-soft: #d9f2e5;
+  --pos-bar: #1a9d62;
+  --neg: #b3261e;
+  --neg-soft: #fbe1de;
+  --neg-bar: #d6453b;
+  --warn: #7a4f00;
+  --warn-soft: #fff0c6;
+  --info: #0a6495;
+  --info-soft: #dbeffb;
+  --glow: rgba(240, 144, 30, 0.1);
+}
+
+:root[data-theme="dark"] {
+  --bg: #080d17;
+  --surface: #101828;
+  --surface-2: #17223a;
+  --line: #253352;
+  --line-strong: #6a7ea3;
+  --text: #e9eef7;
+  --muted: #9aa8c1;
+  --accent: #F6AC4D;
+  --accent-rgb: 246 172 77;
+  --accent-ink: #1a1205;
+  --accent-line: #F6AC4D;
+  --accent-text: #F6AC4D;
+  --accent-soft: #33260f;
+  --nav: #050912;
+  --nav-text: #b5c1d6;
+  --nav-active: #15203a;
+  --pos: #4cd18c;
+  --pos-soft: #10352a;
+  --pos-bar: #2fbf7a;
+  --neg: #ff8d80;
+  --neg-soft: #3b1916;
+  --neg-bar: #f0675b;
+  --warn: #f3c15b;
+  --warn-soft: #382c0d;
+  --info: #6cc4f0;
+  --info-soft: #0e2b3c;
+  --glow: rgba(246, 172, 77, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #080d17;
+    --surface: #101828;
+    --surface-2: #17223a;
+    --line: #253352;
+    --line-strong: #6a7ea3;
+    --text: #e9eef7;
+    --muted: #9aa8c1;
+    --accent: #F6AC4D;
+    --accent-rgb: 246 172 77;
+    --accent-ink: #1a1205;
+    --accent-line: #F6AC4D;
+    --accent-text: #F6AC4D;
+    --accent-soft: #33260f;
+    --nav: #050912;
+    --nav-text: #b5c1d6;
+    --nav-active: #15203a;
+    --pos: #4cd18c;
+    --pos-soft: #10352a;
+    --pos-bar: #2fbf7a;
+    --neg: #ff8d80;
+    --neg-soft: #3b1916;
+    --neg-bar: #f0675b;
+    --warn: #f3c15b;
+    --warn-soft: #382c0d;
+    --info: #6cc4f0;
+    --info-soft: #0e2b3c;
+    --glow: rgba(246, 172, 77, 0.12);
+  }
+}
