@@ -1,6 +1,6 @@
 import BinanceConnectionPanel from "../components/BinanceConnectionPanel.jsx";
 import { linkButton } from "../components/form.jsx";
-import { Card, CardTitle, EmptyState, PageHeader } from "../components/ui.jsx";
+import { Card, CardTitle, EmptyState, Notice, PageHeader } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
 import { navigate } from "../useHashRoute.js";
 
@@ -10,6 +10,10 @@ export default function ExchangeConnection({ customer }) {
   return (
     <div className="grid gap-4">
       <PageHeader title="Exchange Connection" subtitle="Is Binance connected, and how is it managed." />
+
+      <Notice>
+        <strong className="font-semibold">Trading can lose money.</strong> Only use funds you can afford to lose.
+      </Notice>
 
       {account.has_mainnet_credential ? (
         <BinanceConnectionPanel account={account} onAccountChanged={refreshAccount} defaultOpen />
