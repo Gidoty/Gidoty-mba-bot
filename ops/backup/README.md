@@ -7,7 +7,7 @@ Status: DRAFT until the reviewer approves the pull request. The owner runs every
 | Piece | Where | What it does |
 |---|---|---|
 | `/opt/mba-bot/backup_db.sh` (extended) | cron `0 3,9,15,21 * * *` (UTC) | the existing steps unchanged (sqlite3 `.backup`, `integrity_check`, 30-day local delete), plus: an alert if anything fails, two success markers, and a last step that sends the new copy off the server |
-| `ops/backup/mba_offsite.py` | called by the script | checks the one named copy, compresses, encrypts with `age`, uploads with `rclone`, verifies size and hash, writes the markers, pings the dead-man service |
+| `ops/backup/mba_offsite.py` | called by the script | checks the one named copy, compresses, encrypts with `age`, uploads with `rclone` (Backblaze checks the upload's SHA-1), writes the markers, pings the dead-man service |
 | `ops/backup/mba_watchdog.py` | cron `7 * * * *` | read-only; alerts when a marker is stale (8 hours for the 6-hourly ones, 26 hours for the daily copy) |
 | `ops/backup/mba_alert.py` | called by the others | Telegram message with fixed text, plus the dead-man ping |
 | `ops/backup/mba_restore_test.py` | your laptop | restore drill on a scratch copy |
@@ -20,18 +20,18 @@ Object layout in the bucket: `mba/recent/`, `mba/daily/`, `mba/weekly/`, `mba/mo
 
 | Secret | Lives | Never |
 |---|---|---|
-| B2 **upload** key (list and write only, one bucket, prefix `mba/`) | `/etc/mba-backup/b2.env`, mode 600 | repo, chat, command lines, logs |
+| B2 **upload** key (**Write Only**, one bucket, prefix `mba/`; it cannot list, read or delete) | `/etc/mba-backup/b2.env`, mode 600 | repo, chat, command lines, logs |
 | B2 **restore** key (read and list) | your password manager only; typed at the drill | the server |
 | `age` **private** key | your password manager plus one sealed offline copy somewhere else | the server, the bucket, the repo |
 | ops-bot token, chat id, dead-man URL | `/etc/mba-backup/alert.env`, mode 600 | repo, chat, logs |
-The `age` public key (not secret) is `/etc/mba-backup/recipient.txt`. The server therefore cannot decrypt any backup, and a stolen upload key can only add files.
+The `age` public key (not secret) is `/etc/mba-backup/recipient.txt`. The server therefore cannot decrypt any backup, and a stolen upload key can only add files (it cannot read, list or delete).
 Also keep a copy of `.env` (above all `ENCRYPTION_KEY`) in your password manager. It is not in the database and not in the bucket, and a restored database is useless for trading without it.
 
 ## 2. Backblaze (browser)
 
 1. Turn on two-factor authentication for the account.
 2. Create a **private** bucket. Write its name down (the name is not secret, but keep it out of the public repo). Note the region you chose: see section 9 for counsel.
-3. Create the **upload** application key: restricted to that bucket, file name prefix `mba/`, capabilities **list files and write files only** (no read, no delete). The key ID and key are shown once: copy them straight into your password manager.
+3. Create the **upload** application key: restricted to that bucket, file name prefix `mba/`, type of access **Write Only** (it cannot list, read or delete). The off-server step uploads with `--no-check-dest` and never lists, because the console's Write Only key was tested on the owner's server and is refused a listing (401). The key ID and key are shown once: copy them straight into your password manager.
 4. Create the **restore** application key: same bucket, **read files and list files**. Password manager only.
 5. Lifecycle rules, one per prefix (wording on the screen is UNVERIFIED): `mba/recent/` hide after 7 days then delete; `mba/daily/` 30 days; `mba/weekly/` 84 days; `mba/monthly/` 365 days. Optionally turn on Object Lock for extra protection (UNVERIFIED; it limits flexibility).
 6. Set a bucket size or cost alert.
@@ -158,4 +158,4 @@ Nothing else was changed. Uploaded objects stay and expire through the lifecycle
 
 ## 10. Not verified by Claude
 
-Backblaze screen wording and lifecycle options; rclone's behaviour with a bucket-restricted key (confirmed on the owner's server only by the first run); the `lsjson` hash field names; the exact rclone and age release file names and checksums; the Telegram and dead-man service behaviour. The tests use a stand-in for the upload and the real `age`. They prove this code's checks, ordering, alerts and secret handling, not Backblaze.
+Backblaze screen wording and lifecycle options; that Backblaze refuses an upload whose SHA-1 does not match (from the B2 API description, not tested here); rclone's behaviour with a bucket-restricted key (confirmed on the owner's server only by the first run); the exact rclone and age release file names and checksums; the Telegram and dead-man service behaviour. The tests use a stand-in for the upload and the real `age`. They prove this code's checks, ordering, alerts and secret handling, not Backblaze.

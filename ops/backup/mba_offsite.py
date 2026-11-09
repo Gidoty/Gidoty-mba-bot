@@ -204,7 +204,7 @@ def run(source: str, *, now: float | None = None, runner: Runner | None = None, 
         with open(enc, "rb") as handle:
             if not handle.read(32).startswith(b"age-encryption.org/v1"):
                 raise StepError("encrypt", "the encrypted file does not have the age header")
-        sha256, sha1 = file_digests(enc)
+        sha256, _sha1 = file_digests(enc)
         tiers = choose_tiers(now, state)
         manifest = {"source": name, "object": obj, "created_utc": stamp, "size_plain": size_plain, "size_encrypted": os.path.getsize(enc),
                     "sha256_encrypted": sha256, "alembic_version": facts["alembic_version"], "tiers": tiers, "tool": "mba_offsite/1"}
@@ -220,23 +220,14 @@ def run(source: str, *, now: float | None = None, runner: Runner | None = None, 
         for tier in tiers:  # recent first: there is an off-server copy before any extra copy is attempted
             remote_dir = f"b2:{bucket}/mba/{tier}"
             for local, remote_name in ((enc, obj), (man_path, obj + ".manifest.json")):
-                code, _o, err = runner.run([rclone_bin, "copyto", local, f"{remote_dir}/{remote_name}"], env=rc_env, timeout=1800)
+                code, _o, err = runner.run([rclone_bin, "copyto", "--no-check-dest", local, f"{remote_dir}/{remote_name}"], env=rc_env, timeout=1800)
                 if code != 0:
                     _note_error(state, err, secrets)
                     raise StepError("upload", f"rclone copyto exited with status {code}")
-            code, listing, err = runner.run([rclone_bin, "lsjson", "--hash", "--no-modtime", "--files-only", remote_dir], env=rc_env, timeout=300)
-            if code != 0:
-                _note_error(state, err, secrets)
-                raise StepError("verify", f"rclone lsjson exited with status {code}")
-            try:
-                entries = {e["Name"]: e for e in json.loads(listing)}
-                entry = entries[obj]
-                remote_sha1 = (entry.get("Hashes") or {}).get("sha1")
-                same = entry["Size"] == manifest["size_encrypted"] and remote_sha1 == sha1 and (obj + ".manifest.json") in entries
-            except (ValueError, KeyError, TypeError):
-                same = False
-            if not same:
-                raise StepError("verify", f"the remote copy in {tier} does not match the local file")
+            # No listing and no read-back. The upload key is write-only on purpose: a thief who steals it from this server can add
+            # files but cannot read, list or delete any backup. Backblaze checks the SHA-1 that rclone sends with each upload and
+            # refuses a file that does not match, and rclone exits non-zero on any failure. The monthly restore drill (which uses the
+            # separate restore key) is what proves the stored files can be read back and opened.
 
         try:
             common.write_atomic(os.path.join(state, "last_offsite.json"), common.json_dump({"name": obj, "size_plain": size_plain, "sha256": sha256, "epoch": int(now), "tiers": tiers}))
