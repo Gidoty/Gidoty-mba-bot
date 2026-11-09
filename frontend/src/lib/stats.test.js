@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fmt, signed } from "./format.js";
+import { dayMonthYearTime, fmt, signed } from "./format.js";
 import { closedTrades, cumulativeSeries, dailyBuckets, isThin, monthlyBuckets, summarize, THIN_THRESHOLD } from "./stats.js";
 
 const T = (iso, pnl, status = "closed") => ({ id: iso, status, closed_at: iso, pnl });
@@ -107,4 +107,9 @@ test("a trade exactly at midnight UTC belongs to one day only", () => {
 test("the same month in two different years stays two buckets, in date order", () => {
   const m = monthlyBuckets(closedTrades([T("2026-12-05T00:00:00Z", 3), T("2025-12-05T00:00:00Z", -1)]));
   assert.deepEqual(m.map((x) => [x.label, x.value]), [["Dec", -1], ["Dec", 3]]);
+});
+
+test("date with year, UTC", () => {
+  assert.equal(dayMonthYearTime(Date.parse("2026-11-08T14:05:00Z")), "8 Nov 2026 14:05");
+  assert.equal(dayMonthYearTime(Date.parse("2025-01-02T00:00:00Z")), "2 Jan 2025 00:00");
 });

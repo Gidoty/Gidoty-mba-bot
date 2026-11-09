@@ -28,6 +28,10 @@ export function dayMonthTime(ms) {
   return `${dayMonth(ms)} ${hh}:${mm}`;
 }
 
+export function dayMonthYearTime(ms) {
+  return `${dayMonth(ms)} ${new Date(ms).getUTCFullYear()} ${dayMonthTime(ms).split(" ").pop()}`;
+}
+
 export function monthName(index) {
   return MONTHS[index];
 }
