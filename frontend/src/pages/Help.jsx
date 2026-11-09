@@ -1,4 +1,8 @@
-import { PageHeader } from "../components/ui.jsx";
+import { useMemo, useState } from "react";
+
+import { FormField, inputClass } from "../components/form.jsx";
+import { Card, CardTitle, EmptyState, PageHeader } from "../components/ui.jsx";
+import { BINANCE_GUIDE_SUPPORT } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { GLOSSARY } from "../glossary.js";
 import { pnlLabels } from "../pnlLabels.js";
@@ -46,20 +50,81 @@ const TOPICS = [
   },
 ];
 
+// Which heading each topic sits under. A topic missing here falls under "More".
+const GROUPS = {
+  "What is Testnet?": "Getting started",
+  "How does automated trading work?": "Getting started",
+  "How activation works": "Getting started",
+  "Connecting Binance": "Getting started",
+  "Telegram notifications": "Getting started",
+  "What is Spot trading?": "Trading basics",
+  "What is Futures trading?": "Trading basics",
+  "What is a trading pair?": "Trading basics",
+  "What is P&L?": "Trading basics",
+  "What does Bot Active mean?": "Using the bot",
+  "What does Scanning mean?": "Using the bot",
+  "What is an open position?": "Using the bot",
+  "Understanding trade history": "Using the bot",
+  "Common status messages": "Using the bot",
+  "Managing your Binance connection": "Your account",
+  "Moving between Testnet and Live": "Your account"
+};
+const GROUP_ORDER = ["Getting started", "Trading basics", "Using the bot", "Your account", "More"];
+
 export default function Help() {
   const { account } = useAccount();
   const L = pnlLabels(account, { paper: account ? account.mode !== "live" : false });
+  const [query, setQuery] = useState("");
+
+  const sections = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const text = (t) => (t.title === "What is P&L?" ? L.glossary(t.body) : t.body);
+    const hits = TOPICS.filter((t) => !q || t.title.toLowerCase().includes(q) || text(t).toLowerCase().includes(q));
+    return GROUP_ORDER.map((name) => ({ name, items: hits.filter((t) => (GROUPS[t.title] || "More") === name).map((t) => ({ ...t, text: text(t) })) })).filter((g) => g.items.length);
+  }, [query, L]);
+
   return (
-    <div>
+    <div className="grid gap-4">
       <PageHeader title="Help & Guide" subtitle="Plain explanations for anyone new to automated trading." />
-      <div className="space-y-2">
-        {TOPICS.map((topic) => (
-          <details key={topic.title} className="rounded-lg border border-slate-200 bg-white p-4">
-            <summary className="cursor-pointer text-sm font-medium text-ink">{topic.title}</summary>
-            <p className="mt-2 text-sm text-slate-600">{topic.title === "What is P&L?" ? L.glossary(topic.body) : topic.body}</p>
-          </details>
-        ))}
-      </div>
+
+      <FormField label="Search the help topics">
+        <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="For example: stop-loss, Telegram, futures" className={inputClass} />
+      </FormField>
+
+      {sections.length === 0 && (
+        <Card>
+          <EmptyState title="No topic matches that search" body="Try a shorter word, or clear the search to see every topic." />
+        </Card>
+      )}
+
+      {sections.map((section) => (
+        <Card key={section.name}>
+          <CardTitle>{section.name}</CardTitle>
+          <div className="divide-y divide-line">
+            {section.items.map((topic) => (
+              <details key={topic.title} className="group py-3" open={Boolean(query.trim())}>
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-fg">
+                  {topic.title}
+                  <span aria-hidden="true" className="text-muted transition-transform group-open:rotate-90">›</span>
+                </summary>
+                <p className="mt-2 text-sm text-muted">{topic.text}</p>
+              </details>
+            ))}
+          </div>
+        </Card>
+      ))}
+
+      <Card>
+        <CardTitle>Still stuck?</CardTitle>
+        <p className="text-sm text-muted">
+          Have your bot code ready (it is shown under the logo) and contact support on WhatsApp at {BINANCE_GUIDE_SUPPORT.whatsappDisplay} or by email.
+        </p>
+        <p className="mt-2 text-sm">
+          <a className="font-semibold text-brand-text hover:underline" href={`mailto:${BINANCE_GUIDE_SUPPORT.email}`}>
+            {BINANCE_GUIDE_SUPPORT.email}
+          </a>
+        </p>
+      </Card>
     </div>
   );
 }

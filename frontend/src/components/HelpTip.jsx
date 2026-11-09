@@ -27,14 +27,14 @@ export default function HelpTip({ text }) {
         onClick={() => setOpen((v) => !v)}
         aria-label="More information"
         aria-expanded={open}
-        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold leading-none text-slate-500 hover:border-accent hover:text-accent"
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-line-strong text-[10px] font-semibold leading-none text-muted hover:border-brand-line hover:text-brand-text"
       >
         i
       </button>
       {open && (
         <span
           role="tooltip"
-          className="absolute left-0 top-full z-20 mt-1 w-60 max-w-[70vw] rounded-md border border-slate-200 bg-white p-2.5 text-xs leading-snug text-slate-600 shadow-lg"
+          className="absolute left-0 top-full z-20 mt-1 w-60 max-w-[70vw] rounded-ctl border border-line bg-surface p-2.5 text-xs leading-snug text-fg shadow-lg"
         >
           {text}
         </span>
