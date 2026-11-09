@@ -29,6 +29,8 @@ export function pnlLabels(account, { paper = false } = {}) {
       unrealized: null,
       unit: "",
       glossary: (long) => long,
+      basis: "",
+      tag: (text) => text,
     };
   }
   return {
@@ -45,5 +47,8 @@ export function pnlLabels(account, { paper = false } = {}) {
     unrealized: paper ? "Unrealized, simulated" : "Unrealized, before fees",
     unit: quoteCurrency(account),
     glossary: (long) => long + FEES_SENTENCE,
+    // Appended to chart and table titles: "Daily P&L" -> "Daily P&L, before fees" (or "simulated" for practice).
+    basis: paper ? "simulated" : "before fees",
+    tag: (text) => `${text}, ${paper ? "simulated" : "before fees"}`,
   };
 }

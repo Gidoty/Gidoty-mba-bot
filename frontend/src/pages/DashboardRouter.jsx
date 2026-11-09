@@ -30,6 +30,9 @@ function clearPaystackReturnParams() {
 // (has_paid, has_mainnet_credential, live_trading_enabled_at,
 // bot_started_at, mode) - nothing here decides trading permissions, it
 // only decides which screen to show.
+// The Dashboard route uses the wide layout for the two data dashboards; the setup steps stay in a narrow column.
+const narrow = (node) => <div className="mx-auto w-full max-w-3xl">{node}</div>;
+
 export default function DashboardRouter({ customer, onCustomerChanged }) {
   const { account, refreshAccount } = useAccount();
   const [activating, setActivating] = useState(hasPaystackReturnParams());
@@ -44,7 +47,7 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
   }
 
   if (activating) {
-    return (
+    return narrow(
       <ActivationFlow
         customer={customer}
         onCustomerChanged={onCustomerChanged}
@@ -65,12 +68,12 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
   }
 
   if (!account.has_mainnet_credential) {
-    return <ConnectBinance onAccountChanged={refreshAccount} />;
+    return narrow(<ConnectBinance onAccountChanged={refreshAccount} />);
   }
 
   if (account.live_trading_enabled_at == null) {
-    return <ReadyForLive account={account} onAccountChanged={refreshAccount} />;
+    return narrow(<ReadyForLive account={account} onAccountChanged={refreshAccount} />);
   }
 
-  return <StartBot account={account} onAccountChanged={refreshAccount} />;
+  return narrow(<StartBot account={account} onAccountChanged={refreshAccount} />);
 }

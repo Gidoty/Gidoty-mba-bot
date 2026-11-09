@@ -16,8 +16,12 @@ export function PageHeader({ title, subtitle, children }) {
   );
 }
 
-export function Card({ children, className = "" }) {
-  return <div className={`min-w-0 rounded-card border border-line bg-surface p-4 ${className}`}>{children}</div>;
+export function Card({ children, className = "", style }) {
+  return (
+    <div className={`min-w-0 rounded-card border border-line bg-surface p-4 ${className}`} style={style}>
+      {children}
+    </div>
+  );
 }
 
 // Uppercase label line at the top of a card or chart.
@@ -120,7 +124,7 @@ export function ThinNotice({ closedCount }) {
   return (
     <Notice tone="info">
       <strong className="font-semibold">Not enough trades to read.</strong> {closedCount} closed{" "}
-      {closedCount === 1 ? "trade is" : "trades are"} too few for a win rate, average or drawdown to mean anything. Figures are shown for reference and greyed out.
+      {closedCount === 1 ? "trade is" : "trades are"} too few for a win rate, average or drawdown to mean anything. Treat them as a first look, not a result.
     </Notice>
   );
 }
