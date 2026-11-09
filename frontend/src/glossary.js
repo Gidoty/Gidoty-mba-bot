@@ -5,7 +5,7 @@ export const GLOSSARY = {
   testnet: {
     term: "Testnet",
     short: "A practice trading environment that does not use real money.",
-    long: "Testnet is a practice version of Binance. Trades placed here look and behave like real trades, but no real funds are ever involved. It's there so you can learn how the bot works and watch it operate before deciding whether to use it with real money.",
+    long: "Testnet is Binance's practice server. In practice mode the bot reads prices from it, but every trade is simulated by the bot: no order is sent, no fees are charged and no real funds are involved. Real trades can fill at different prices and pay fees. Practice mode lets you watch how the bot works before you decide whether to use it with real money.",
   },
   pair: {
     term: "Trading Pair",

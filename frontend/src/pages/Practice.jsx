@@ -30,7 +30,7 @@ export default function Practice() {
         <PageHeader title="Testnet / Practice" subtitle="You're already in the practice environment." />
         <Card>
           <p className="text-sm text-slate-600">
-            Your account is currently trading on Testnet - your Dashboard already shows your practice activity.
+            Your account is currently in practice mode. Trades are simulated, and your Dashboard already shows your practice activity.
           </p>
           <button onClick={() => navigate("dashboard")} className="mt-3 text-sm font-medium text-accent hover:underline">
             Go to Dashboard
