@@ -3,7 +3,8 @@ import { useState } from "react";
 import { api } from "../../api/client.js";
 import HelpTip from "../../components/HelpTip.jsx";
 import { usd } from "../../lib/format.js";
-import { Card, ErrorBanner } from "../../components/ui.jsx";
+import { FormField, inputClass, primaryButton } from "../../components/form.jsx";
+import { Card, CardTitle, ErrorBanner, PageHeader, Pill } from "../../components/ui.jsx";
 
 // Shown once an account has enabled live trading (accepted the risk
 // disclosure) but hasn't yet taken the separate, final "Start Bot"
@@ -53,70 +54,58 @@ export default function StartBot({ account, onAccountChanged }) {
   const capitalConfigured = account.allocated_capital != null;
 
   return (
-    <div>
-      <div className="mb-5">
-        <h1 className="text-xl font-semibold text-ink">Start Your Bot</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Live trading is authorized on this account. The bot will not place a single order until you configure
-          your trading capital and explicitly start it below.
-        </p>
-      </div>
+    <div className="grid gap-4">
+      <PageHeader
+        title="Start Your Bot"
+        subtitle="Live trading is authorized on this account. The bot will not place a single order until you configure your trading capital and explicitly start it below."
+      />
 
-      <Card className={capitalConfigured ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
-        <div className="flex items-center gap-1">
-          <p className={`text-sm font-semibold ${capitalConfigured ? "text-green-800" : "text-amber-800"}`}>
-            1. Trading Capital
-          </p>
-          <HelpTip text="The maximum amount of your Binance balance the bot may use as its sizing base. Your funds stay in your own Binance account - this is a ceiling, not a transfer. The bot will never use more than what Binance actually shows as available, even if you set this higher." />
-        </div>
-        <p className="mt-1 text-sm text-slate-600">
+      <Card className={capitalConfigured ? "border-l-4 border-l-pos" : "border-l-4 border-l-warn"}>
+        <CardTitle
+          right={
+            <span className="flex items-center gap-2">
+              <Pill tone={capitalConfigured ? "ok" : "warn"}>{capitalConfigured ? "Done" : "To do"}</Pill>
+              <HelpTip text="The maximum amount of your Binance balance the bot may use as its sizing base. Your funds stay in your own Binance account - this is a ceiling, not a transfer. The bot will never use more than what Binance actually shows as available, even if you set this higher." />
+            </span>
+          }
+        >
+          Step 1: Trading capital
+        </CardTitle>
+        <p className="text-sm text-muted">
           {capitalConfigured
             ? `Set to ${usd(account.allocated_capital)}. You can change this at any time.`
             : "Tell the bot the maximum amount it may use from your Binance balance."}
         </p>
-        <ErrorBanner message={capitalError} />
-        <form onSubmit={saveCapital} className="mt-3 flex items-end gap-2">
-          <label className="block">
-            <span className="text-xs font-medium text-slate-600">Amount (US dollars)</span>
-            <span className="relative mt-1 block">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">$</span>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={capitalInput}
-              onChange={(e) => setCapitalInput(e.target.value)}
-             
-              className="w-40 rounded-md border border-slate-300 py-2 pl-7 pr-3 text-sm"
-            />
-            </span>
-          </label>
-          <button
-            type="submit"
-            disabled={savingCapital}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
-          >
+        <div className="mt-3">
+          <ErrorBanner message={capitalError} />
+        </div>
+        <form onSubmit={saveCapital} className="flex flex-wrap items-end gap-3">
+          <FormField label="Amount (US dollars)" className="w-48">
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">$</span>
+              <input type="number" min="0.01" step="0.01" value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} className={`${inputClass} pl-7`} />
+            </div>
+          </FormField>
+          <button type="submit" disabled={savingCapital} className={primaryButton}>
             {savingCapital ? "Saving..." : capitalConfigured ? "Update" : "Save"}
           </button>
         </form>
       </Card>
 
-      <Card className="mt-4 border-slate-200">
-        <p className="text-sm font-semibold text-ink">2. Start the bot</p>
-        <p className="mt-1 text-sm text-slate-600">
+      <Card>
+        <CardTitle right={<Pill>{capitalConfigured ? "Ready" : "Waiting for step 1"}</Pill>}>Step 2: Start the bot</CardTitle>
+        <p className="text-sm text-muted">
           Once started, the bot runs continuously on our servers - you don't need to keep this page open, stay
           logged in, or do anything after a trade closes. There is no Pause; the bot keeps scanning for qualifying
           trades until you tell it otherwise.
         </p>
-        <ErrorBanner message={startError} />
-        <button
-          onClick={startBot}
-          disabled={starting || !capitalConfigured}
-          className="mt-3 rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
-        >
+        <div className="mt-3">
+          <ErrorBanner message={startError} />
+        </div>
+        <button type="button" onClick={startBot} disabled={starting || !capitalConfigured} className={primaryButton}>
           {starting ? "Starting..." : "Start Bot"}
         </button>
-        {!capitalConfigured && <p className="mt-2 text-xs text-slate-500">Configure your Trading Capital above first.</p>}
+        {!capitalConfigured && <p className="mt-2 text-xs text-muted">Configure your trading capital above first.</p>}
       </Card>
     </div>
   );
