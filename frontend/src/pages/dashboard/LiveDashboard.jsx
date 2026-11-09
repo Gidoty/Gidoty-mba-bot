@@ -1,134 +1,95 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../../api/client.js";
 import BotStatusCard from "../../components/BotStatusCard.jsx";
-import { Badge, Card, EmptyState, PnlText, StatTile } from "../../components/ui.jsx";
-import { pnlLabels } from "../../pnlLabels.js";
-import { navigate } from "../../useHashRoute.js";
+import { DailyCard, PnlHero, WinLossCard } from "../../components/dashboard/PerformancePanels.jsx";
+import PositionCard, { NoPosition } from "../../components/dashboard/PositionCard.jsx";
+import RecentTrades from "../../components/dashboard/RecentTrades.jsx";
+import useTrades from "../../components/dashboard/useTrades.js";
+import { Badge, Card, CardTitle, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
+import { closedTrades, isThin, summarize } from "../../lib/stats.js";
+import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
 
 export default function LiveDashboard({ account }) {
   const L = pnlLabels(account, { paper: false });
+  const unit = quoteCurrency(account) || "USDT";
   const [balance, setBalance] = useState(undefined); // undefined = loading, null = unavailable
   const [summary, setSummary] = useState(null);
   const [position, setPosition] = useState(undefined);
-  const [recent, setRecent] = useState([]);
+  const { status, trades, reload } = useTrades(false, account.id);
 
   useEffect(() => {
     api.get("/account/balance").then(setBalance).catch(() => setBalance(null));
     api.get("/trades/summary?is_paper=false").then(setSummary).catch(() => {});
     api.get("/account/position").then(setPosition).catch(() => setPosition(null));
-    api
-      .get("/trades?is_paper=false")
-      .then((trades) => setRecent(trades.filter((t) => t.status === "closed").slice(0, 5)))
-      .catch(() => {});
   }, [account.id]);
 
-  return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Badge tone="red">LIVE</Badge>
-        <Badge tone="slate">
-          {account.pair} · {account.market_type}
-        </Badge>
-      </div>
+  const closed = useMemo(() => closedTrades(trades), [trades]);
+  const stats = useMemo(() => summarize(closed), [closed]);
+  const thin = isThin(stats.n);
 
+  return (
+    <div className="grid gap-4">
+      <PageHeader title="Dashboard" subtitle={`${account.pair} · ${account.market_type}`}>
+        <Badge tone="red">LIVE</Badge>
+      </PageHeader>
+
+      <UnprovenNotice closedCount={status === "ready" ? stats.n : null} />
       <BotStatusCard account={account} />
 
-      <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">Account Overview</h2>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-3 shell:grid-cols-4">
         <StatTile
-          label="Exchange Balance"
-          value={balance === undefined ? "..." : balance === null ? "Unavailable" : `$${balance.available_balance.toFixed(2)}`}
+          label="Exchange balance"
+          value={balance === undefined ? "..." : balance === null ? "Unavailable" : `${balance.available_balance.toFixed(2)} ${balance.quote_currency || unit}`}
           help="The free balance in the quote currency of your trading pair, read directly from your Binance account."
         />
-        <StatTile label="Today" value={<PnlText value={summary?.pnl_today ?? null} unit={L.unit} />} />
-        <StatTile label="7D" value={<PnlText value={summary?.pnl_7d ?? null} unit={L.unit} />} />
-        <StatTile label="30D" value={<PnlText value={summary?.pnl_30d ?? null} unit={L.unit} />} />
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label={L.allTime} value={<PnlText value={summary?.net_pnl ?? null} unit={L.unit} />} />
-        <StatTile label="Total Trades" value={summary?.total_trades ?? "-"} />
+        <StatTile label="Today" value={<PnlText value={summary?.pnl_today ?? null} unit={unit} />} basis={L.basis || null} />
+        <StatTile label="7D" value={<PnlText value={summary?.pnl_7d ?? null} unit={unit} />} basis={L.basis || null} />
+        <StatTile label="30D" value={<PnlText value={summary?.pnl_30d ?? null} unit={unit} />} basis={L.basis || null} />
+        <StatTile label={L.allTime} value={<PnlText value={summary?.net_pnl ?? null} unit={unit} />} />
+        <StatTile label="Total trades" value={summary?.total_trades ?? "-"} />
         <StatTile
           label={L.winRate}
-          value={summary?.win_rate === null || summary?.win_rate === undefined ? "-" : `${(summary.win_rate * 100).toFixed(0)}%`}
+          value={stats.winRate === null ? "-" : `${stats.winRate.toFixed(0)}%`}
+          basis={stats.n && thin ? "not enough trades to read" : stats.n ? `${stats.wins} wins, ${stats.losses} losses` : null}
+          thin={stats.n > 0 && thin}
         />
-      </div>
+      </dl>
+      {L.caption && <p className="-mt-2 text-xs text-muted">{L.caption}</p>}
 
-      {L.caption && <p className="mt-2 text-xs text-slate-500">{L.caption}</p>}
-
-      <h2 className="mt-6 mb-2 text-sm font-semibold text-slate-700">Current Position</h2>
-      {position === undefined ? (
-        <Card>
-          <p className="text-sm text-slate-400">Loading...</p>
-        </Card>
-      ) : !position.has_position ? (
-        <EmptyState
-          title="No open position"
-          body="The bot is monitoring the market for qualifying opportunities."
-        />
-      ) : (
-        <Card>
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-ink">
-              {position.side.toUpperCase()} {position.pair}
-            </p>
-            <span className="text-right">
-              <PnlText value={position.unrealized_pnl} unit={L.unit} className="font-semibold" />
-              {L.unrealized && <span className="block text-xs text-slate-400">{L.unrealized}</span>}
-            </span>
-          </div>
-          <dl className="mt-3 grid grid-cols-2 gap-y-2 text-sm text-slate-600 sm:grid-cols-4">
-            <Field label="Entry" value={position.entry_price} />
-            <Field label="Current" value={position.current_price ?? "-"} />
-            <Field label="Size" value={position.quantity} />
-            <Field label="Stop-loss" value={position.stop_loss_price ?? "-"} />
-          </dl>
-          <p className="mt-2 text-xs text-slate-500">
-            {position.protected === true
-              ? "Protected: the stop-loss is resting at Binance."
-              : position.protected === false
-                ? "Setting up or checking the stop-loss at Binance."
-                : null}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">Opened {new Date(position.opened_at).toLocaleString()}</p>
-        </Card>
-      )}
-
-      <div className="mt-6 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-700">Recent Trades</h2>
-        <button onClick={() => navigate("trade-history")} className="text-sm text-accent hover:underline">
-          View All
-        </button>
-      </div>
-      {recent.length === 0 ? (
-        <EmptyState title="No trades yet" body="The bot is monitoring the market for qualifying opportunities." />
-      ) : (
-        <div className="space-y-2">
-          {recent.map((t) => (
-            <Card key={t.id} className="flex items-center justify-between py-3">
-              <div>
-                <p className="text-sm font-medium text-ink">
-                  {t.side.toUpperCase()} {account.pair}
-                </p>
-                <p className="text-xs text-slate-500">{new Date(t.opened_at).toLocaleDateString()}</p>
-              </div>
-              <span className="text-right">
-                <PnlText value={t.pnl} unit={L.unit} className="font-semibold" />
-                {L.rowNote && <span className="block text-xs text-slate-400">{L.rowNote}</span>}
-              </span>
-            </Card>
-          ))}
+      {status === "error" && (
+        <div>
+          <ErrorBanner message="We could not load your trades, so the charts are not shown." />
+          <button type="button" onClick={reload} className="rounded-ctl border border-line-strong px-4 py-2 text-sm font-medium hover:bg-surface-2">
+            Try again
+          </button>
         </div>
       )}
-    </div>
-  );
-}
+      {status === "loading" && <LoadingBlock />}
 
-function Field({ label, value }) {
-  return (
-    <div>
-      <dt className="text-xs uppercase text-slate-400">{label}</dt>
-      <dd className="font-medium text-ink">{value}</dd>
+      {status === "ready" && (
+        <div className="grid items-start gap-4 shell:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+          <div className="grid min-w-0 gap-4">
+            <PnlHero closed={closed} L={L} unit={unit} />
+            <DailyCard closed={closed} L={L} unit={unit} />
+          </div>
+          <div className="grid min-w-0 gap-4">
+            {position === undefined ? (
+              <Card>
+                <CardTitle>Open position</CardTitle>
+                <LoadingBlock />
+              </Card>
+            ) : !position || !position.has_position ? (
+              <NoPosition />
+            ) : (
+              <PositionCard position={position} L={L} unit={unit} />
+            )}
+            <WinLossCard stats={stats} />
+          </div>
+        </div>
+      )}
+
+      {status === "ready" && <RecentTrades closed={closed} L={L} unit={unit} />}
     </div>
   );
 }
