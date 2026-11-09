@@ -110,7 +110,7 @@ export default function App() {
   return (
     <>
       {content}
-      <Footer />
+      <Footer dark={customer === null && !LEGAL_ROUTES[route] && route !== "login" && route !== "signup"} />
       <HowToUseGuide />
     </>
   );
