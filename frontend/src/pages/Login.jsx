@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import BrandLogo from "../components/BrandLogo.jsx";
-import { ErrorBanner, Notice, ThemeSwitch } from "../components/ui.jsx";
+import { ErrorBanner, ThemeSwitch } from "../components/ui.jsx";
 import { navigate } from "../useHashRoute.js";
 import { Field } from "./Signup.jsx";
 
@@ -91,10 +91,6 @@ export default function Login({ onAuthed }) {
               </button>
             </p>
           </form>
-
-          <Notice>
-            <strong className="font-semibold">Trading can lose money.</strong> Results are not proven and past results do not predict future ones.
-          </Notice>
         </div>
       </section>
     </div>
