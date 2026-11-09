@@ -220,11 +220,11 @@ def run(source: str, *, now: float | None = None, runner: Runner | None = None, 
         for tier in tiers:  # recent first: there is an off-server copy before any extra copy is attempted
             remote_dir = f"b2:{bucket}/mba/{tier}"
             for local, remote_name in ((enc, obj), (man_path, obj + ".manifest.json")):
-                code, _o, err = runner.run([rclone_bin, "copyto", "--no-check-bucket", local, f"{remote_dir}/{remote_name}"], env=rc_env, timeout=1800)
+                code, _o, err = runner.run([rclone_bin, "copyto", local, f"{remote_dir}/{remote_name}"], env=rc_env, timeout=1800)
                 if code != 0:
                     _note_error(state, err, secrets)
                     raise StepError("upload", f"rclone copyto exited with status {code}")
-            code, listing, err = runner.run([rclone_bin, "lsjson", "--no-check-bucket", "--hash", "--no-modtime", "--files-only", remote_dir], env=rc_env, timeout=300)
+            code, listing, err = runner.run([rclone_bin, "lsjson", "--hash", "--no-modtime", "--files-only", remote_dir], env=rc_env, timeout=300)
             if code != 0:
                 _note_error(state, err, secrets)
                 raise StepError("verify", f"rclone lsjson exited with status {code}")

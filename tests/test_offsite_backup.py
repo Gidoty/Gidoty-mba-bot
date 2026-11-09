@@ -68,8 +68,12 @@ if log:
         handle.write(json.dumps({{"argv": args, "has_b2_env": all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY"))}}) + "\\n")
 if not all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY")):
     sys.stderr.write("no credentials\\n"); sys.exit(1)
-if "--no-check-bucket" not in args:
-    sys.stderr.write("would try to create or check the bucket\\n"); sys.exit(7)
+# Real rclone 1.76 rejects flags a command does not have (checked against the real binary): copyto takes none of ours,
+# lsjson takes only these three. Anything else, such as --no-check-bucket (not a b2 option), must fail here too.
+ALLOWED = {{"copyto": set(), "lsjson": {{"--hash", "--no-modtime", "--files-only"}}}}
+bad = [a for a in args[1:] if a.startswith("--") and a not in ALLOWED.get(args[0], set())]
+if bad:
+    sys.stderr.write("Error: unknown flag: " + bad[0] + "\\n"); sys.exit(2)
 root = open(os.path.join(here, "root.txt")).read().strip()
 paths = [a for a in args[1:] if not a.startswith("--")]
 if args[0] == "copyto":
@@ -343,7 +347,7 @@ def test_secrets_never_appear_in_output_files_names_arguments_or_messages(env):
     for proc in (ok, bad):
         assert not any(s in everything_the_run_wrote(env, proc) for s in SENTINELS)
     assert all(call["has_b2_env"] for call in rclone_calls(env))  # the credentials reached rclone through its environment
-    assert all("--no-check-bucket" in call["argv"] for call in rclone_calls(env))
+    assert not any("--no-check-bucket" in call["argv"] for call in rclone_calls(env))  # not a b2 flag in rclone 1.76
 
 
 def test_the_plain_copy_is_gone_afterwards_and_the_work_folder_is_removed(env, monkeypatch):
@@ -638,7 +642,7 @@ def test_the_restore_drill_fails_loudly_on_a_tampered_backup(env, capsys):
 
 def test_the_runbook_matches_the_decisions_and_contains_no_secret():
     text = (OPS / "README.md").read_text()
-    for needle in ("0 3,9,15,21 * * *", "--no-check-bucket", "read -rs", "env.pre", "recent/", "daily/", "weekly/", "monthly/", "restore"):
+    for needle in ("0 3,9,15,21 * * *", "read -rs", "env.pre", "recent/", "daily/", "weekly/", "monthly/", "restore"):
         assert needle in text, needle
     assert "AGE-SECRET-KEY-1" not in text and "keyID" not in text.replace("key ID", "")
     for line in text.splitlines():

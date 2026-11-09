@@ -39,13 +39,13 @@ def fetch_remote(bucket: str, tier: str, scratch: str) -> tuple[str, str]:
     env = {**os.environ, "RCLONE_CONFIG_B2_TYPE": "b2", "RCLONE_CONFIG_B2_ACCOUNT": getpass.getpass("restore key ID (hidden): "),
            "RCLONE_CONFIG_B2_KEY": getpass.getpass("restore application key (hidden): ")}
     base = f"b2:{bucket}/mba/{tier}"
-    names = [e["Name"] for e in json.loads(sh(["rclone", "lsjson", "--no-check-bucket", "--files-only", base], env))]
+    names = [e["Name"] for e in json.loads(sh(["rclone", "lsjson", "--files-only", base], env))]
     objs = sorted(n for n in names if n.endswith(".gz.age"))
     if not objs:
         raise SystemExit(f"no backups found in {tier}")
     newest = objs[-1]
     for name in (newest, newest + ".manifest.json"):
-        sh(["rclone", "copyto", "--no-check-bucket", f"{base}/{name}", os.path.join(scratch, name)], env)
+        sh(["rclone", "copyto", f"{base}/{name}", os.path.join(scratch, name)], env)
     return os.path.join(scratch, newest), os.path.join(scratch, newest + ".manifest.json")
 
 
