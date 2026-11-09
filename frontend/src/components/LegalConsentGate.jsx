@@ -33,18 +33,18 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-app px-4">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-md space-y-4 rounded-lg border border-slate-200 bg-white p-8 shadow-sm"
+        className="w-full max-w-md space-y-4 rounded-lg border border-line bg-surface p-8 shadow-sm"
       >
-        <h1 className="text-xl font-semibold text-ink">Updated Terms of Service and Privacy Policy</h1>
-        <p className="text-sm text-slate-600">
+        <h1 className="text-xl font-semibold text-fg">Updated Terms of Service and Privacy Policy</h1>
+        <p className="text-sm text-muted">
           We've introduced a Terms of Service and a Privacy Policy. Please review and accept them to continue
           using your account.
         </p>
 
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && <p className="rounded-md bg-neg-soft px-3 py-2 text-sm text-fg">{error}</p>}
 
         <ConsentCheckbox
           checked={acceptTerms}
@@ -52,7 +52,7 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
           label={
             <>
               I accept the{" "}
-              <a href="#/terms" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+              <a href="#/terms" target="_blank" rel="noopener noreferrer" className="text-brand-text hover:underline">
                 Terms of Service
               </a>
             </>
@@ -64,7 +64,7 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
           label={
             <>
               I acknowledge the{" "}
-              <a href="#/privacy" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+              <a href="#/privacy" target="_blank" rel="noopener noreferrer" className="text-brand-text hover:underline">
                 Privacy Policy
               </a>
             </>
@@ -74,14 +74,14 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
         <button
           type="submit"
           disabled={!acceptTerms || !acknowledgePrivacy || submitting}
-          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+          className="w-full rounded-md bg-brand px-4 py-2 font-medium text-brand-ink hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {submitting ? "Saving..." : "Continue"}
         </button>
         <button
           type="button"
           onClick={onLogout}
-          className="w-full text-center text-sm text-slate-500 hover:text-ink"
+          className="w-full text-center text-sm text-muted hover:text-fg"
         >
           Log out instead
         </button>

@@ -86,7 +86,7 @@ export default function App() {
     // the legal-consent gate below, or still "loading".
     content = <LegalPage document={LEGAL_ROUTES[route]} />;
   } else if (customer === undefined) {
-    content = <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
+    content = <div className="flex min-h-screen items-center justify-center text-muted">Loading...</div>;
   } else if (!customer) {
     if (route === "login") content = <Login onAuthed={handleAuthed} />;
     else if (route === "signup") content = <Signup onAuthed={handleAuthed} />;
@@ -145,7 +145,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
   }, [account]);
 
   if (account === undefined || (account === null && autoCreate !== "done")) {
-    return <div className="flex min-h-screen items-center justify-center text-slate-500">Loading...</div>;
+    return <div className="flex min-h-screen items-center justify-center text-muted">Loading...</div>;
   }
 
   if (!account) {
