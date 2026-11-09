@@ -5,8 +5,8 @@
 import { monthName } from "./format.js";
 
 // Fewer closed trades than this is marked "not enough trades to read".
-// Placeholder threshold, to be set by the owner.
-export const THIN_THRESHOLD = 9;
+// Set by the owner on 9 Nov 2026 (was a placeholder of 9).
+export const THIN_THRESHOLD = 30;
 const DAY = 86400000;
 
 export function isThin(n) {
