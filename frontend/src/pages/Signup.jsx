@@ -1,8 +1,9 @@
 import { useId, useState } from "react";
 
 import { api } from "../api/client.js";
-import BrandLogo from "../components/BrandLogo.jsx";
+import AuthLayout from "../components/AuthLayout.jsx";
 import ConsentCheckbox from "../components/ConsentCheckbox.jsx";
+import { ErrorBanner } from "../components/ui.jsx";
 import { navigate } from "../useHashRoute.js";
 
 export default function Signup({ onAuthed }) {
@@ -10,6 +11,7 @@ export default function Signup({ onAuthed }) {
   const [password, setPassword] = useState("");
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [acknowledgePrivacy, setAcknowledgePrivacy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -33,56 +35,70 @@ export default function Signup({ onAuthed }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 px-4 py-10">
-      <div className="mb-6">
-        <BrandLogo dark={false} subtitle={null} />
+    <AuthLayout
+      heading="Start in practice mode. No Binance account, no card."
+      blurb="Pick your pair, link Telegram and watch the bot work with simulated trades. Connecting a real Binance account is a separate step, later."
+    >
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
+        <p className="mt-1 text-sm text-muted">It takes a minute.</p>
       </div>
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-xl font-semibold text-ink">Create your account</h1>
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-        <Field label="Email" type="email" value={email} onChange={setEmail} required />
-        <Field label="Password" type="password" value={password} onChange={setPassword} minLength={8} required />
 
-        <ConsentCheckbox
-          checked={acceptTerms}
-          onChange={setAcceptTerms}
-          label={
-            <>
-              I accept the{" "}
-              <a href="#/terms" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                Terms of Service
-              </a>
-            </>
-          }
-        />
-        <ConsentCheckbox
-          checked={acknowledgePrivacy}
-          onChange={setAcknowledgePrivacy}
-          label={
-            <>
-              I acknowledge the{" "}
-              <a href="#/privacy" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                Privacy Policy
-              </a>
-            </>
-          }
-        />
+      <form onSubmit={handleSubmit} className="space-y-4 rounded-card border border-line bg-surface p-5">
+        <ErrorBanner message={error} />
+        <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" placeholder="you@example.com" required />
+        <div>
+          <Field label="Password" type={showPassword ? "text" : "password"} value={password} onChange={setPassword} autoComplete="new-password" minLength={8} required />
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted">At least 8 characters.</span>
+            <button type="button" onClick={() => setShowPassword((v) => !v)} aria-pressed={showPassword} className="text-xs font-medium text-brand-text hover:underline">
+              {showPassword ? "Hide password" : "Show password"}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <ConsentCheckbox
+            checked={acceptTerms}
+            onChange={setAcceptTerms}
+            label={
+              <>
+                I accept the{" "}
+                <a href="#/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-brand-text hover:underline">
+                  Terms of Service
+                </a>
+              </>
+            }
+          />
+          <ConsentCheckbox
+            checked={acknowledgePrivacy}
+            onChange={setAcknowledgePrivacy}
+            label={
+              <>
+                I acknowledge the{" "}
+                <a href="#/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-brand-text hover:underline">
+                  Privacy Policy
+                </a>
+              </>
+            }
+          />
+        </div>
 
         <button
           type="submit"
           disabled={submitting || !acceptTerms || !acknowledgePrivacy}
-          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-[44px] w-full rounded-ctl bg-brand px-4 font-semibold text-brand-ink hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {submitting ? "Creating account..." : "Sign up"}
         </button>
-        <p className="text-center text-sm text-slate-500">
+        <p className="text-center text-sm text-muted">
           Already have an account?{" "}
-          <button type="button" onClick={() => navigate("login")} className="text-accent hover:underline">
+          <button type="button" onClick={() => navigate("login")} className="font-medium text-brand-text hover:underline">
             Log in
           </button>
         </p>
       </form>
-    </div>
+    </AuthLayout>
   );
 }
 
