@@ -86,7 +86,7 @@ export default function StartBot({ account, onAccountChanged }) {
               step="0.01"
               value={capitalInput}
               onChange={(e) => setCapitalInput(e.target.value)}
-              placeholder="10"
+             
               className="w-40 rounded-md border border-slate-300 py-2 pl-7 pr-3 text-sm"
             />
             </span>

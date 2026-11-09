@@ -118,7 +118,7 @@ export default function BotSettings() {
           <FormField label="Amount (US dollars)" className="w-48">
             <div className="relative">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">$</span>
-              <input type="number" min="0.01" step="0.01" placeholder="10" value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} className={`${inputClass} pl-7`} />
+              <input type="number" min="0.01" step="0.01" value={capitalInput} onChange={(e) => setCapitalInput(e.target.value)} className={`${inputClass} pl-7`} />
             </div>
           </FormField>
           <button type="submit" disabled={savingCapital} className={primaryButton}>
