@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import { useAccount } from "../context/AccountContext.jsx";
+import { primaryButton, secondaryButton } from "./form.jsx";
+import { Notice } from "./ui.jsx";
 
 // Shown on every authenticated page while the account has no linked
 // Telegram chat. trader.py skips an account with no notification_target
@@ -35,30 +37,29 @@ export default function TelegramLinkBanner() {
   }
 
   return (
-    <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
-      <p className="text-sm font-semibold text-amber-900">Link Telegram to start practice trading</p>
-      <p className="mt-1 text-sm text-amber-900">
-        Your account is ready. The bot will not scan or trade until Telegram is linked, so we can send you trade
-        entries, exits, and daily summaries.
-      </p>
-      {error && <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-      <div className="mt-3 flex flex-wrap gap-3">
-        <button
-          onClick={getLink}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark"
-        >
-          Open Telegram and link
-        </button>
-        {linkUrl && (
-          <button
-            onClick={checkLinked}
-            disabled={checking}
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50 disabled:opacity-60"
-          >
-            {checking ? "Checking..." : "I've linked it - continue"}
-          </button>
+    <div className="mb-4">
+      <Notice>
+        <p className="font-semibold">Link Telegram to start practice trading</p>
+        <p className="mt-1">
+          Your account is ready. The bot will not scan or trade until Telegram is linked, so we can send you trade
+          entries, exits, and daily summaries.
+        </p>
+        {error && (
+          <p role="alert" className="mt-2 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2">
+            {error}
+          </p>
         )}
-      </div>
+        <div className="mt-3 flex flex-wrap gap-3">
+          <button type="button" onClick={getLink} className={primaryButton}>
+            Open Telegram and link
+          </button>
+          {linkUrl && (
+            <button type="button" onClick={checkLinked} disabled={checking} className={secondaryButton}>
+              {checking ? "Checking..." : "I've linked it - continue"}
+            </button>
+          )}
+        </div>
+      </Notice>
     </div>
   );
 }
