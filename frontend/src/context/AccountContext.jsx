@@ -24,6 +24,15 @@ export function AccountProvider({ customer, onCustomerChanged, children }) {
       });
   }
 
+  // Same read, but the current account stays on screen while it loads. Pages that show a
+  // "Saved" message use this: refreshAccount() would blank the app and lose that message.
+  function reloadAccount() {
+    return api
+      .get("/account")
+      .then(setAccount)
+      .catch(() => {});
+  }
+
   // Not `useEffect(refreshAccount, [])` - refreshAccount returns a
   // Promise so callers can await it, and React treats an effect's own
   // return value as a cleanup function, not a Promise.
@@ -32,7 +41,7 @@ export function AccountProvider({ customer, onCustomerChanged, children }) {
   }, []);
 
   return (
-    <AccountContext.Provider value={{ account, refreshAccount, onCustomerChanged }}>
+    <AccountContext.Provider value={{ account, refreshAccount, reloadAccount, onCustomerChanged }}>
       {children}
     </AccountContext.Provider>
   );
