@@ -49,24 +49,24 @@ export default function HowToUseGuide() {
           onClick={() => setOpen(false)}
         >
           <div
-            className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg bg-white p-6 shadow-xl"
+            className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-ink">How to use Metabridge Trading Bot</h2>
+              <h2 className="text-lg font-semibold text-fg">How to use Metabridge Trading Bot</h2>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close"
-                className="text-slate-400 hover:text-ink"
+                className="text-muted hover:text-fg"
               >
                 ✕
               </button>
             </div>
-            <ol className="space-y-4 text-sm text-slate-600">
+            <ol className="space-y-4 text-sm text-muted">
               {STEPS.map((step) => (
                 <li key={step.title}>
-                  <p className="font-medium text-ink">{step.title}</p>
+                  <p className="font-medium text-fg">{step.title}</p>
                   <p className="mt-0.5">{step.body}</p>
                 </li>
               ))}

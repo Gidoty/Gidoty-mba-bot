@@ -18,16 +18,16 @@ export default function Onboarding({ account, onLogout, onProgress }) {
 
 function Shell({ title, onLogout, children }) {
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-10">
+    <div className="min-h-screen bg-surface-2 px-4 py-10">
       <div className="mx-auto max-w-lg">
         <div className="mb-6 flex items-center justify-between">
           <BrandLogo dark={false} subtitle={null} />
-          <button onClick={onLogout} className="text-sm text-slate-500 hover:text-ink">
+          <button onClick={onLogout} className="text-sm text-muted hover:text-fg">
             Log out
           </button>
         </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
-          <h1 className="mb-6 text-xl font-semibold text-ink">{title}</h1>
+        <div className="rounded-lg border border-line bg-surface p-8 shadow-sm">
+          <h1 className="mb-6 text-xl font-semibold text-fg">{title}</h1>
           {children}
         </div>
       </div>
@@ -77,17 +77,17 @@ function AccountForm({ onLogout, onCreated }) {
   return (
     <Shell title="Set up your trading account" onLogout={onLogout}>
       <form onSubmit={handleSubmit} className="space-y-4">
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && <p className="rounded-md bg-neg-soft px-3 py-2 text-sm text-fg">{error}</p>}
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">
+          <span className="text-sm font-medium text-fg">
             Pair
             <HelpTip text="The crypto pair the bot watches and trades, e.g. BTC/USDT means it trades Bitcoin priced in Tether. Pick one you're comfortable with - you can change this anytime from Bot Settings." />
           </span>
           <select
             value={pair}
             onChange={(e) => setPair(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
           >
             {pairList.map((p) => (
               <option key={p.pair} value={p.pair} disabled={!p.available}>
@@ -103,14 +103,14 @@ function AccountForm({ onLogout, onCreated }) {
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">
+          <span className="text-sm font-medium text-fg">
             Market
             <HelpTip text="Spot: you buy and sell the actual coin, simplest and lowest risk. Futures: you trade with leverage, which can multiply both gains and losses. If you're not sure, choose Spot." />
           </span>
           <select
             value={marketType}
             onChange={(e) => setMarketType(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
           >
             <option value="spot">Spot</option>
             <option value="futures">Futures</option>
@@ -118,7 +118,7 @@ function AccountForm({ onLogout, onCreated }) {
         </label>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">
+          <span className="text-sm font-medium text-fg">
             Risk per trade (%)
             <HelpTip text="How much of your balance the bot risks on a single trade before its stop-loss triggers. Lower means smaller, steadier moves; higher means bigger swings, up and down. Kept at 2% or less either way." />
           </span>
@@ -129,12 +129,12 @@ function AccountForm({ onLogout, onCreated }) {
             step="0.1"
             value={riskPct}
             onChange={(e) => setRiskPct(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
           />
-          <span className="mt-1 block text-xs text-slate-500">Capped at 2% of your account balance per trade.</span>
+          <span className="mt-1 block text-xs text-muted">Capped at 2% of your account balance per trade.</span>
         </label>
 
-        <div className="rounded-md bg-accent/5 border border-accent/20 px-3 py-2 text-xs text-slate-700">
+        <div className="rounded-md bg-brand-soft border border-accent/20 px-3 py-2 text-xs text-fg">
           Your account starts in an unlimited practice environment - no real money is involved, and no Binance
           account is needed yet. You'll be able to connect a real Binance account later, only once you choose to
           activate.
@@ -145,7 +145,7 @@ function AccountForm({ onLogout, onCreated }) {
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark disabled:opacity-60"
+          className="w-full rounded-md bg-brand px-4 py-2 font-medium text-brand-ink hover:brightness-105 disabled:opacity-60"
         >
           {submitting ? "Creating..." : "Continue"}
         </button>
@@ -157,7 +157,7 @@ function AccountForm({ onLogout, onCreated }) {
 function ContactSupport() {
   if (!SUPPORT_WHATSAPP_NUMBER && !SUPPORT_EMAIL) return null;
   return (
-    <p className="text-xs text-slate-500">
+    <p className="text-xs text-muted">
       Need help? Metabridge Academy can help you set this up.
       {SUPPORT_WHATSAPP_NUMBER && (
         <>
@@ -167,7 +167,7 @@ function ContactSupport() {
             href={`https://wa.me/${SUPPORT_WHATSAPP_NUMBER}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent hover:underline"
+            className="text-brand-text hover:underline"
           >
             {SUPPORT_WHATSAPP_NUMBER}
           </a>
@@ -178,7 +178,7 @@ function ContactSupport() {
         <>
           {" "}
           Email{" "}
-          <a href={`mailto:${SUPPORT_EMAIL}`} className="text-accent hover:underline">
+          <a href={`mailto:${SUPPORT_EMAIL}`} className="text-brand-text hover:underline">
             {SUPPORT_EMAIL}
           </a>
           .
@@ -216,20 +216,20 @@ function TelegramLinkStep({ account, onLogout, onLinked }) {
   return (
     <Shell title="Connect Telegram" onLogout={onLogout}>
       {account?.bot_code && (
-        <p className="mb-4 inline-block rounded-full bg-slate-100 px-3 py-1 font-mono text-xs text-slate-600">
+        <p className="mb-4 inline-block rounded-full bg-surface-2 px-3 py-1 font-mono text-xs text-muted">
           Bot code: {account.bot_code}
         </p>
       )}
-      <p className="text-sm text-slate-600">
+      <p className="text-sm text-muted">
         Your account is created with a free, unlimited practice environment - no card needed, no real funds at risk.
         Last step: link Telegram so we can send you trade entries, exits, and daily summaries. The bot won't trade
         at all until this is done.
       </p>
-      {error && <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && <p className="mt-4 rounded-md bg-neg-soft px-3 py-2 text-sm text-fg">{error}</p>}
       <div className="mt-6 space-y-3">
         <button
           onClick={getLink}
-          className="w-full rounded-md bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark"
+          className="w-full rounded-md bg-brand px-4 py-2 font-medium text-brand-ink hover:brightness-105"
         >
           Open Telegram and link
         </button>
@@ -237,7 +237,7 @@ function TelegramLinkStep({ account, onLogout, onLinked }) {
           <button
             onClick={checkLinked}
             disabled={checking}
-            className="w-full rounded-md border border-slate-300 px-4 py-2 font-medium text-ink hover:bg-slate-50 disabled:opacity-60"
+            className="w-full rounded-md border border-line-strong px-4 py-2 font-medium text-fg hover:bg-surface-2 disabled:opacity-60"
           >
             {checking ? "Checking..." : "I've linked it - continue"}
           </button>

@@ -50,13 +50,13 @@ function GuideModal({ onClose }) {
         role="dialog"
         aria-modal="true"
         aria-label="Binance connection guide"
-        className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl bg-white shadow-xl sm:rounded-2xl"
+        className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-2xl bg-surface shadow-xl sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div>
-            <h2 className="font-serif text-lg font-bold text-ink">Connect Binance: step by step</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <h2 className="font-serif text-lg font-bold text-fg">Connect Binance: step by step</h2>
+            <p className="mt-0.5 text-xs text-muted">
               About 5 minutes. Your form stays exactly as you left it.
             </p>
           </div>
@@ -64,13 +64,13 @@ function GuideModal({ onClose }) {
             type="button"
             onClick={onClose}
             aria-label="Close guide"
-            className="rounded-md px-2 py-1 text-slate-400 hover:bg-slate-100 hover:text-ink"
+            className="rounded-md px-2 py-1 text-muted hover:bg-surface-2 hover:text-fg"
           >
             ✕
           </button>
         </div>
 
-        <div className="space-y-5 overflow-y-auto px-5 py-5 text-sm text-slate-600">
+        <div className="space-y-5 overflow-y-auto px-5 py-5 text-sm text-muted">
           <Step n={1} title="Open API Management on Binance">
             <p>
               Sign in to Binance (website or app), open your profile, and go to <strong>API Management</strong>{" "}
@@ -101,7 +101,7 @@ function GuideModal({ onClose }) {
           <Step n={3} title="Set the permissions">
             <p>Click <strong>Edit restrictions</strong> on the new key and match this table:</p>
             <PermissionTable />
-            <p className="mt-2 text-xs text-slate-500">
+            <p className="mt-2 text-xs text-muted">
               Wording can differ slightly between Binance app versions. Anything not listed should stay OFF.
             </p>
             <Callout tone="red" title="NEVER ENABLE WITHDRAWALS">
@@ -126,7 +126,7 @@ function GuideModal({ onClose }) {
 
           <Step n={5} title="Save on Binance">
             <p>Complete Binance's security verification and save the configuration. The recommended final setup is:</p>
-            <p className="mt-2 rounded-md bg-slate-100 px-3 py-2 font-medium text-ink">
+            <p className="mt-2 rounded-md bg-surface-2 px-3 py-2 font-medium text-fg">
               Reading + Spot Trading + Futures Trading + Metabridge Bot's trusted IP, with withdrawals and transfers
               OFF.
             </p>
@@ -154,11 +154,11 @@ function GuideModal({ onClose }) {
           <SupportCard />
         </div>
 
-        <div className="border-t border-slate-200 px-5 py-3">
+        <div className="border-t border-line px-5 py-3">
           <button
             type="button"
             onClick={onClose}
-            className="w-full rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50"
+            className="w-full rounded-md border border-line-strong px-4 py-2 text-sm font-medium text-fg hover:bg-surface-2"
           >
             Close guide
           </button>
@@ -171,11 +171,11 @@ function GuideModal({ onClose }) {
 function Step({ n, title, children }) {
   return (
     <section className="flex gap-3">
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-white">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-brand-ink">
         {n}
       </span>
       <div className="min-w-0 flex-1">
-        <h3 className="text-base font-semibold text-ink">{title}</h3>
+        <h3 className="text-base font-semibold text-fg">{title}</h3>
         <div className="mt-1.5">{children}</div>
       </div>
     </section>
@@ -183,8 +183,8 @@ function Step({ n, title, children }) {
 }
 
 const CALLOUT_TONES = {
-  red: "border-red-300 bg-red-50 text-red-900",
-  amber: "border-amber-300 bg-amber-50 text-amber-900",
+  red: "border-neg-bar bg-neg-soft text-fg",
+  amber: "border-warn bg-warn-soft text-fg",
 };
 
 function Callout({ tone, title, children }) {
@@ -213,9 +213,9 @@ const PERMISSIONS = [
 
 function PermissionTable() {
   return (
-    <div className="mt-2 overflow-hidden rounded-md border border-slate-200">
+    <div className="mt-2 overflow-hidden rounded-md border border-line">
       <table className="w-full text-left text-sm">
-        <thead className="bg-slate-100 text-xs uppercase tracking-wide text-slate-500">
+        <thead className="bg-surface-2 text-xs uppercase tracking-wide text-muted">
           <tr>
             <th className="px-3 py-2 font-semibold">Binance permission</th>
             <th className="px-3 py-2 font-semibold">Setting</th>
@@ -223,11 +223,11 @@ function PermissionTable() {
         </thead>
         <tbody>
           {PERMISSIONS.map(([name, on, note]) => (
-            <tr key={name} className="border-t border-slate-100">
-              <td className="px-3 py-2 text-ink">{name}</td>
-              <td className={`px-3 py-2 font-semibold ${on ? "text-emerald-700" : "text-red-700"}`}>
+            <tr key={name} className="border-t border-line">
+              <td className="px-3 py-2 text-fg">{name}</td>
+              <td className={`px-3 py-2 font-semibold ${on ? "text-fg" : "text-fg"}`}>
                 {on ? "✅ ON" : "❌ OFF"}
-                {note && <span className="block text-xs font-normal text-slate-500">{note}</span>}
+                {note && <span className="block text-xs font-normal text-muted">{note}</span>}
               </td>
             </tr>
           ))}
@@ -268,7 +268,7 @@ function CopyIp({ ip }) {
       <button
         type="button"
         onClick={copy}
-        className="rounded-md border border-accent px-3 py-2 text-sm font-semibold text-accent-dark hover:bg-accent/10"
+        className="rounded-md border border-accent px-3 py-2 text-sm font-semibold text-brand-text hover:bg-brand-soft"
       >
         {copied ? "Copied ✓" : "Copy IP Address"}
       </button>
@@ -292,21 +292,21 @@ function SupportCard() {
   const { whatsappNumber, whatsappDisplay, email, whatsappMessage } = BINANCE_GUIDE_SUPPORT;
   const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(whatsappMessage)}`;
   return (
-    <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-      <h3 className="text-base font-semibold text-ink">Still having trouble?</h3>
+    <section className="rounded-lg border border-line bg-surface-2 p-4">
+      <h3 className="text-base font-semibold text-fg">Still having trouble?</h3>
       <p className="mt-1">
         If you're unable to complete your Binance connection, our support team can help you through the setup.{" "}
         <strong>Never send your API Secret Key to support.</strong>
       </p>
       <dl className="mt-3 space-y-1">
         <div>
-          <dt className="inline font-medium text-ink">WhatsApp Support: </dt>
+          <dt className="inline font-medium text-fg">WhatsApp Support: </dt>
           <dd className="inline">{whatsappDisplay}</dd>
         </div>
         <div>
-          <dt className="inline font-medium text-ink">Email Support: </dt>
+          <dt className="inline font-medium text-fg">Email Support: </dt>
           <dd className="inline">
-            <a href={`mailto:${email}`} className="text-accent-dark underline">
+            <a href={`mailto:${email}`} className="text-brand-text underline">
               {email}
             </a>
           </dd>
@@ -316,12 +316,12 @@ function SupportCard() {
         href={whatsappUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-3 inline-flex items-center gap-2 rounded-md bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95"
+        className="mt-3 inline-flex items-center gap-2 rounded-md bg-[#25D366] px-4 py-2.5 text-sm font-semibold text-black hover:brightness-95"
       >
         <WhatsAppIcon />
         Chat with Support on WhatsApp
       </a>
-      <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-red-900">
+      <div className="mt-4 rounded-md border border-neg-bar bg-neg-soft px-3 py-2.5 text-fg">
         <p className="text-sm font-bold">🔒 Security Notice</p>
         <p className="mt-0.5 text-sm">
           Metabridge Academy support will never ask for your Binance Secret Key, password, 2FA code, seed phrase, or
