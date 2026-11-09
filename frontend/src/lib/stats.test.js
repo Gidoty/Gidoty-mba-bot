@@ -81,10 +81,13 @@ test("monthlyBuckets groups by calendar month in order", () => {
 });
 
 test("thin-sample threshold", () => {
-  assert.equal(THIN_THRESHOLD, 9);
+  assert.equal(THIN_THRESHOLD, 30);
   assert.equal(isThin(0), true);
   assert.equal(isThin(8), true);
-  assert.equal(isThin(9), false);
+  assert.equal(isThin(9), true); // the old threshold: now still thin
+  assert.equal(isThin(29), true);
+  assert.equal(isThin(30), false);
+  assert.equal(isThin(31), false);
 });
 
 test("formatting: explicit signs, zero has none, missing is a dash", () => {

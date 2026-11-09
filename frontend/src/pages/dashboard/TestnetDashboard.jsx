@@ -9,7 +9,7 @@ import useTrades from "../../components/dashboard/useTrades.js";
 import HelpTip from "../../components/HelpTip.jsx";
 import { Badge, Card, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
 import { GLOSSARY } from "../../glossary.js";
-import { closedTrades, summarize } from "../../lib/stats.js";
+import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
 
 // Practice mode: the bot reads practice-server prices and simulates every trade (no order is sent).
@@ -71,8 +71,8 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
         <StatTile
           label={L.winRate}
           value={stats.winRate === null ? "-" : `${stats.winRate.toFixed(0)}%`}
-          basis={stats.n && stats.n < 9 ? "not enough trades to read" : null}
-          thin={stats.n > 0 && stats.n < 9}
+          basis={stats.n && isThin(stats.n) ? "not enough trades to read" : null}
+          thin={stats.n > 0 && isThin(stats.n)}
         />
       </dl>
       {L.caption && <p className="-mt-2 text-xs text-muted">{L.caption}</p>}
