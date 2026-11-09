@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { api } from "../api/client.js";
 import BrandLogo from "../components/BrandLogo.jsx";
@@ -86,17 +86,22 @@ export default function Signup({ onAuthed }) {
   );
 }
 
-export function Field({ label, type = "text", value, onChange, ...rest }) {
+export function Field({ label, type = "text", value, onChange, id, ...rest }) {
+  const auto = useId();
+  const inputId = id || auto;
   return (
-    <label className="block">
-      <span className="text-sm font-medium text-slate-700">{label}</span>
+    <div>
+      <label htmlFor={inputId} className="block text-sm font-medium text-fg">
+        {label}
+      </label>
       <input
+        id={inputId}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        className="mt-1.5 min-h-[44px] w-full rounded-ctl border border-line-strong bg-surface px-3.5 text-sm text-fg placeholder:text-muted"
         {...rest}
       />
-    </label>
+    </div>
   );
 }
