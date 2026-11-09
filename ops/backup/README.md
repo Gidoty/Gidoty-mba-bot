@@ -106,7 +106,7 @@ cp /opt/mba-bot/ops/backup/backup_db.sh /opt/mba-bot/backup_db.sh
 chmod 755 /opt/mba-bot/backup_db.sh
 python3 /opt/mba-bot/ops/backup/mba_offsite.py --check-config
 ```
-The last command must print `config: ok`. Our code passes `--no-check-bucket` on every rclone call, because a key restricted to one bucket may not be allowed to look up or create buckets, and rclone otherwise tries to. This is UNVERIFIED until the first run below; if it still fails with an authorization error, add the `listBuckets` capability to the upload key and try again.
+The last command must print `config: ok`. The first run below is the real test of the Backblaze key: rclone 1.76 has no `--no-check-bucket` option for Backblaze, so the code does not use it. If the upload key is refused, the alert names the step and `/var/lib/mba-backup/offsite_last_error.txt` has the reason.
 
 4.9 First run, by hand, with cron's bare environment:
 ```
@@ -158,4 +158,4 @@ Nothing else was changed. Uploaded objects stay and expire through the lifecycle
 
 ## 10. Not verified by Claude
 
-Backblaze screen wording and lifecycle options; rclone's behaviour with a bucket-restricted key (`--no-check-bucket`); the `lsjson` hash field names; the exact rclone and age release file names and checksums; the Telegram and dead-man service behaviour. The tests use a stand-in for the upload and the real `age`. They prove this code's checks, ordering, alerts and secret handling, not Backblaze.
+Backblaze screen wording and lifecycle options; rclone's behaviour with a bucket-restricted key (confirmed on the owner's server only by the first run); the `lsjson` hash field names; the exact rclone and age release file names and checksums; the Telegram and dead-man service behaviour. The tests use a stand-in for the upload and the real `age`. They prove this code's checks, ordering, alerts and secret handling, not Backblaze.
