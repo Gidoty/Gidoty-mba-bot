@@ -32,6 +32,9 @@ PAIRS = [
     ("neg", "surface-2", 4.5, "loss text on hover row"),
     ("warn", "warn-soft", 4.5, "caution pill"),
     ("text", "warn-soft", 4.5, "notice text"),
+    ("text", "neg-soft", 4.5, "error banner text"),
+    ("text", "pos-soft", 4.5, "text on gain tint"),
+    ("text", "accent-soft", 4.5, "text on accent tint"),
     ("info", "info-soft", 4.5, "info pill"),
     ("text", "info-soft", 4.5, "info notice text"),
     ("accent-ink", "accent", 4.5, "primary button label"),
@@ -47,7 +50,7 @@ PAIRS = [
     ("muted", "surface", 3.0, "zero baseline vs card (graphic)"),
 ]
 # Fixed colours the shell uses on the rail, which is dark in both themes.
-FIXED = [("#F6AC4D", "nav", 4.5, "active tab colour on rail"), ("#ffffff", "nav-active", 4.5, "active rail item text")]
+FIXED = [("#ffffff", "#dc2626", 4.5, "white text on the red LIVE badge"), ("#F6AC4D", "nav", 4.5, "active tab colour on rail"), ("#ffffff", "nav-active", 4.5, "active rail item text")]
 
 
 def _hex(h):
@@ -102,7 +105,7 @@ def check(css):
             fails += not ok
             rows.append((name, ok, r, need, f"{fg} on {bg}: {what}"))
         for fg, bg, need, what in FIXED:
-            r = ratio(fg, t[bg])
+            r = ratio(fg, bg if bg.startswith("#") else t[bg])
             ok = r >= need
             fails += not ok
             rows.append((name, ok, r, need, f"{fg} on {bg}: {what}"))

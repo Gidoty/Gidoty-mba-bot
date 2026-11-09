@@ -1,0 +1,51 @@
+/* Dark-theme bridge for pages that still use the old fixed colours (slate, white, ink,
+   red, amber, sky, green). Each page PR of the redesign moves its page to the tokens;
+   delete this file when the last old page is moved. It only applies in the dark theme,
+   so the light theme is untouched. Contrast of these pairs rests on the token pairs
+   checked by frontend/tools/contrast_check.py. */
+html[data-theme="dark"] .bg-white { background-color: var(--surface); }
+html[data-theme="dark"] .bg-slate-50 { background-color: var(--bg); }
+html[data-theme="dark"] .bg-slate-100,
+html[data-theme="dark"] .bg-slate-200 { background-color: var(--surface-2); }
+html[data-theme="dark"] .hover\:bg-slate-50:hover { background-color: var(--surface-2); }
+html[data-theme="dark"] .text-ink { color: var(--text); }
+html[data-theme="dark"] .text-slate-700 { color: var(--text); }
+html[data-theme="dark"] .text-slate-300,
+html[data-theme="dark"] .text-slate-400,
+html[data-theme="dark"] .text-slate-500,
+html[data-theme="dark"] .text-slate-600 { color: var(--muted); }
+html[data-theme="dark"] .border-slate-100,
+html[data-theme="dark"] .border-slate-200 { border-color: var(--line); }
+html[data-theme="dark"] .border-slate-300 { border-color: var(--line-strong); }
+html[data-theme="dark"] .bg-red-50,
+html[data-theme="dark"] .bg-red-100 { background-color: var(--neg-soft); }
+html[data-theme="dark"] .text-red-600,
+html[data-theme="dark"] .text-red-700,
+html[data-theme="dark"] .text-red-800,
+html[data-theme="dark"] .text-red-900 { color: var(--neg); }
+html[data-theme="dark"] .border-red-200,
+html[data-theme="dark"] .border-red-300 { border-color: var(--neg-bar); }
+html[data-theme="dark"] .bg-amber-50,
+html[data-theme="dark"] .bg-amber-100 { background-color: var(--warn-soft); }
+html[data-theme="dark"] .text-amber-700,
+html[data-theme="dark"] .text-amber-800,
+html[data-theme="dark"] .text-amber-900 { color: var(--warn); }
+html[data-theme="dark"] .border-amber-200,
+html[data-theme="dark"] .border-amber-300 { border-color: var(--warn); }
+html[data-theme="dark"] .bg-sky-50,
+html[data-theme="dark"] .bg-sky-100 { background-color: var(--info-soft); }
+html[data-theme="dark"] .text-sky-800 { color: var(--info); }
+html[data-theme="dark"] .border-sky-200 { border-color: var(--info); }
+html[data-theme="dark"] .bg-green-50,
+html[data-theme="dark"] .bg-emerald-100 { background-color: var(--pos-soft); }
+html[data-theme="dark"] .text-green-600,
+html[data-theme="dark"] .text-green-800,
+html[data-theme="dark"] .text-emerald-700,
+html[data-theme="dark"] .text-emerald-800 { color: var(--pos); }
+html[data-theme="dark"] .border-green-200 { border-color: var(--pos-bar); }
+html[data-theme="dark"] .text-accent-dark { color: var(--accent-text); }
+/* White text on the amber button reads poorly once the amber is the lighter dark-theme one. */
+html[data-theme="dark"] .bg-accent.text-white { color: var(--accent-ink); }
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea { background-color: var(--surface); color: var(--text); }

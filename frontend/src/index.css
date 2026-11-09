@@ -1,7 +1,36 @@
+@import "./legacy-dark.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+html {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 body {
-  @apply bg-slate-50 text-ink;
+  @apply bg-app text-fg;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+/* The floating help button must clear the bottom tab bar on a phone. */
+@media (max-width: 899px) {
+  body[data-shell] .how-to-fab {
+    bottom: 4.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
