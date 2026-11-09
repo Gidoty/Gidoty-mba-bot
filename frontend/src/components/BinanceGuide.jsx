@@ -12,12 +12,12 @@ export default function BinanceGuide({ className = "" }) {
 
   return (
     <>
-      <div className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 ${className}`}>
-        <p className="text-sm font-medium text-ink">Need help connecting Binance?</p>
+      <div className={`flex flex-wrap items-center justify-between gap-2 rounded-card border border-line border-l-4 border-l-brand-line bg-surface px-4 py-3 ${className}`}>
+        <p className="text-sm font-medium text-fg">Need help connecting Binance?</p>
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark"
+          className="min-h-[40px] rounded-ctl bg-brand px-4 text-sm font-semibold text-brand-ink hover:brightness-105"
         >
           View Step-by-Step Guide
         </button>

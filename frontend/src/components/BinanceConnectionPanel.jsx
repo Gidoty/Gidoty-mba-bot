@@ -2,17 +2,25 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import BinanceGuide from "./BinanceGuide.jsx";
+import { FormField, inputClass, linkButton, primaryButton, secondaryButton } from "./form.jsx";
 import HelpTip from "./HelpTip.jsx";
-import { Badge, Card } from "./ui.jsx";
+import { Card, CardTitle, Notice, Pill } from "./ui.jsx";
+
+const ENVIRONMENT = {
+  mainnet: "Real Binance account",
+  testnet: "Practice (testnet)",
+  unknown: "Unknown",
+};
 
 // The "connected" state of the Binance relationship, plus Manage
 // Connection (Connection Status, Test Connection, Replace Credentials).
 // Deliberately no Disconnect for this release - replacing with a
 // testnet-tagged credential is the only way to step back from live
 // trading, and that's done explicitly through Replace Credentials, not
-// a separate delete action.
-export default function BinanceConnectionPanel({ account, onAccountChanged }) {
-  const [managing, setManaging] = useState(false);
+// a separate delete action. Only the look changed in the redesign: the
+// requests, the fields and what is sent are exactly as before.
+export default function BinanceConnectionPanel({ account, onAccountChanged, defaultOpen = false }) {
+  const [managing, setManaging] = useState(defaultOpen);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const [replacing, setReplacing] = useState(false);
@@ -32,65 +40,58 @@ export default function BinanceConnectionPanel({ account, onAccountChanged }) {
 
   return (
     <Card>
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-ink">Binance</p>
-          <p className="mt-0.5 flex items-center gap-1.5 text-sm text-slate-600">
-            <span className="h-2 w-2 rounded-full bg-accent" /> Connected
+          <p className="text-lg font-semibold text-fg">Binance</p>
+          <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted">
+            <Pill tone="ok">Connected</Pill>
+            Trading connection active
           </p>
         </div>
-        <Badge tone="accent">Trading connection active</Badge>
+        <button type="button" onClick={() => setManaging((v) => !v)} aria-expanded={managing} className={linkButton}>
+          {managing ? "Hide details" : "Manage Connection"}
+        </button>
       </div>
 
-      <button
-        onClick={() => setManaging((v) => !v)}
-        className="mt-3 text-sm font-medium text-accent hover:underline"
-      >
-        {managing ? "Hide" : "Manage Connection"}
-      </button>
-
       {managing && (
-        <div className="mt-4 space-y-4 border-t border-slate-100 pt-4">
+        <div className="mt-5 space-y-6 border-t border-line pt-5">
           <BinanceGuide />
 
-          <div>
-            <p className="text-sm font-medium text-ink">Connection status</p>
-            <p className="mt-1 text-sm text-slate-600">
-              A mainnet Binance API key is on file for this account.{" "}
-              {account.live_trading_enabled_at
-                ? "Live trading is currently enabled."
-                : "Live trading is not enabled yet."}
-            </p>
-          </div>
+          <section>
+            <CardTitle>Connection status</CardTitle>
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              <Item label="API key">A mainnet Binance API key is on file.</Item>
+              <Item label="Environment">{ENVIRONMENT[account.credential_environment] || "Not recorded"}</Item>
+              <Item label="Live trading">{account.live_trading_enabled_at ? "Enabled" : "Not enabled yet"}</Item>
+            </dl>
+            {account.credential_blocked && account.credential_block_message && (
+              <div className="mt-3">
+                <Notice>{account.credential_block_message}</Notice>
+              </div>
+            )}
+          </section>
 
-          <div>
-            <div className="flex items-center gap-1">
-              <p className="text-sm font-medium text-ink">Test Connection</p>
-              <HelpTip text="Confirms Binance accepts this stored key, without placing any order." />
-            </div>
-            <button
-              onClick={testConnection}
-              disabled={testing}
-              className="mt-2 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-ink hover:bg-slate-50 disabled:opacity-60"
-            >
+          <section>
+            <CardTitle right={<HelpTip text="Confirms Binance accepts this stored key, without placing any order." />}>Test connection</CardTitle>
+            <button type="button" onClick={testConnection} disabled={testing} className={secondaryButton}>
               {testing ? "Testing..." : "Test Connection"}
             </button>
             {testResult && testResult.ok && (
-              <p className="mt-2 text-sm text-accent-dark">Connection verified.</p>
+              <p role="status" className="mt-3 flex items-center gap-2 text-sm text-fg">
+                <Pill tone="ok">Verified</Pill> Connection verified.
+              </p>
             )}
             {testResult && !testResult.ok && (
-              <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
-                <p className="text-sm font-medium text-red-800">Binance connection needs attention</p>
-                <p className="mt-0.5 text-sm text-red-700">{testResult.message}</p>
+              <div role="alert" className="mt-3 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3.5 py-3">
+                <p className="text-sm font-semibold text-fg">Binance connection needs attention</p>
+                <p className="mt-0.5 text-sm text-fg">{testResult.message}</p>
               </div>
             )}
-          </div>
+          </section>
 
-          <div>
-            <button
-              onClick={() => setReplacing((v) => !v)}
-              className="text-sm font-medium text-accent hover:underline"
-            >
+          <section>
+            <CardTitle>Replace credentials</CardTitle>
+            <button type="button" onClick={() => setReplacing((v) => !v)} className={linkButton}>
               {replacing ? "Cancel" : "Replace Credentials"}
             </button>
             {replacing && (
@@ -101,10 +102,19 @@ export default function BinanceConnectionPanel({ account, onAccountChanged }) {
                 }}
               />
             )}
-          </div>
+          </section>
         </div>
       )}
     </Card>
+  );
+}
+
+function Item({ label, children }) {
+  return (
+    <div className="rounded-ctl border border-line bg-surface-2 px-3.5 py-3">
+      <dt className="text-xs uppercase tracking-wide text-muted">{label}</dt>
+      <dd className="mt-1 text-fg">{children}</dd>
+    </div>
   );
 }
 
@@ -130,51 +140,29 @@ function ReplaceCredentialsForm({ onDone }) {
   }
 
   return (
-    <form onSubmit={save} className="mt-3 space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-      {environment !== "mainnet" && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Replacing with a testnet key will turn live trading off for this account.
+    <form onSubmit={save} className="mt-3 space-y-4 rounded-ctl border border-line bg-surface-2 p-4">
+      {environment !== "mainnet" && <Notice>Replacing with a testnet key will turn live trading off for this account.</Notice>}
+      {error && (
+        <p role="alert" className="rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm text-fg">
+          {error}
         </p>
       )}
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
-      <label className="block">
-        <span className="text-xs font-medium text-slate-600">New API key</span>
-        <input
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          required
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
-        />
-      </label>
-      <label className="block">
-        <span className="text-xs font-medium text-slate-600">New API secret</span>
-        <input
-          type="password"
-          value={apiSecret}
-          onChange={(e) => setApiSecret(e.target.value)}
-          required
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
-        />
-      </label>
-      <label className="block">
-        <span className="text-xs font-medium text-slate-600">Environment</span>
-        <select
-          value={environment}
-          onChange={(e) => setEnvironment(e.target.value)}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
+      <FormField label="New API key">
+        <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} required className={`${inputClass} font-mono`} />
+      </FormField>
+      <FormField label="New API secret">
+        <input type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} required className={`${inputClass} font-mono`} />
+      </FormField>
+      <FormField
+        label="Environment"
+        hint="Practice keys: Spot uses the Binance Spot Testnet; Futures uses Binance Demo Trading (demo.binance.com)."
+      >
+        <select value={environment} onChange={(e) => setEnvironment(e.target.value)} className={inputClass}>
           <option value="mainnet">Mainnet (real Binance account)</option>
           <option value="testnet">Testnet (practice)</option>
         </select>
-        <span className="mt-1 block text-xs text-slate-500">
-          Practice keys: Spot uses the Binance Spot Testnet; Futures uses Binance Demo Trading (demo.binance.com).
-        </span>
-      </label>
-      <button
-        type="submit"
-        disabled={saving || !apiKey || !apiSecret}
-        className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
-      >
+      </FormField>
+      <button type="submit" disabled={saving || !apiKey || !apiSecret} className={primaryButton}>
         {saving ? "Saving..." : "Save new credentials"}
       </button>
     </form>
