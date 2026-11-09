@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
-import { Card, ErrorBanner, PageHeader } from "../components/ui.jsx";
+import { Card, ErrorBanner, PageHeader, ThemeSwitch } from "../components/ui.jsx";
 import { MARKET_TYPES, UPCOMING_PAIRS } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
@@ -79,6 +79,12 @@ export default function BotSettings() {
     <div>
       <PageHeader title="Bot Settings" subtitle="How your bot is configured." />
       <ErrorBanner message={error} />
+
+      <Card className="mb-4">
+        <p className="text-sm font-medium text-ink">Appearance</p>
+        <p className="mb-3 mt-1 text-sm text-muted">Auto follows your device. Your choice is saved in this browser.</p>
+        <ThemeSwitch />
+      </Card>
 
       <Card className="mb-4">
         <div className="flex items-center gap-1">

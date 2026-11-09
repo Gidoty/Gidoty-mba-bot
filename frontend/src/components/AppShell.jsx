@@ -4,7 +4,7 @@ import { LEGAL_NAV_ITEMS, NAV_ITEMS } from "../constants.js";
 import { navigate } from "../useHashRoute.js";
 import BrandLogo from "./BrandLogo.jsx";
 import NavIcon from "./navIcons.jsx";
-import { Pill, ThemeSwitch } from "./ui.jsx";
+import { Pill } from "./ui.jsx";
 
 // Pages already moved to the wide layout (charts and tables). Each page PR adds its route here.
 const WIDE_ROUTES = new Set(["dashboard", "positions", "trade-history", "performance"]);
@@ -56,11 +56,9 @@ export default function AppShell({ route, onLogout, botCode, children }) {
           <button type="button" onClick={() => navigate("dashboard")} className="text-left">
             <BrandLogo subtitle={botCode || null} />
           </button>
-          <ThemeSwitch />
         </header>
         <div className="hidden items-center justify-end gap-3 px-6 pt-5 shell:flex">
           {botCode && <Pill>{botCode}</Pill>}
-          <ThemeSwitch />
         </div>
         <main className={`mx-auto px-4 pb-28 pt-5 shell:px-6 shell:pb-12 ${wide ? "max-w-[1120px]" : "max-w-3xl"}`}>{children}</main>
       </div>
@@ -152,8 +150,7 @@ function MoreSheet({ route, onClose, onLogout }) {
             </li>
           ))}
         </ul>
-        <div className="mt-4 flex items-center justify-between gap-3 border-t border-line pt-4">
-          <ThemeSwitch />
+        <div className="mt-4 flex items-center justify-end gap-3 border-t border-line pt-4">
           <button type="button" onClick={onLogout} className="rounded-ctl border border-line-strong px-4 py-2 text-sm font-medium text-fg hover:bg-surface-2">
             Log out
           </button>

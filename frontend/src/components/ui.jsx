@@ -102,19 +102,21 @@ export function Notice({ children, tone = "warn" }) {
   );
 }
 
-// "Results are not proven" - shown on every page that shows results.
-export function UnprovenNotice({ closedCount = null, paper = false }) {
-  const record =
-    !closedCount ? null : (
-      <> This account has {closedCount} closed {closedCount === 1 ? "trade" : "trades"}, which is a short record.</>
-    );
+// A plain statement about how to read the figures. Shown on every page that shows results.
+export function UnprovenNotice({ paper = false }) {
   return (
-    <Notice>
-      <strong className="font-semibold">Results are not proven.</strong>
-      {record}{" "}
-      {paper
-        ? "Practice trades are simulated: no order is sent, and there are no fees or slippage, so real trading can differ. Past results do not predict future ones."
-        : "Figures are before exchange fees and funding, so what you keep is lower. Past results do not predict future ones."}
+    <Notice tone="info">
+      {paper ? (
+        <>
+          <strong className="font-semibold">Practice results are simulated.</strong> No order is sent and there are no fees or
+          slippage, so real trading can differ.
+        </>
+      ) : (
+        <>
+          <strong className="font-semibold">Figures are before fees.</strong> Exchange fees and funding are not included, so your
+          Binance balance is the exact figure.
+        </>
+      )}
     </Notice>
   );
 }

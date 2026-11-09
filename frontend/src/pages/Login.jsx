@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import BrandLogo from "../components/BrandLogo.jsx";
-import { ErrorBanner, ThemeSwitch } from "../components/ui.jsx";
+import { ErrorBanner } from "../components/ui.jsx";
 import { navigate } from "../useHashRoute.js";
 import { Field } from "./Signup.jsx";
 
@@ -38,10 +38,10 @@ export default function Login({ onAuthed }) {
         </button>
         <div>
           <h2 className="max-w-[18ch] text-2xl font-semibold leading-tight tracking-tight text-white shell:text-3xl">
-            Your Binance key, your risk limit, your stops.
+            Set it up once. Let the bot watch the market for you.
           </h2>
           <p className="mt-3 max-w-[44ch] text-sm text-rail-text">
-            The bot works with a trade-only Binance key that you create. It cannot withdraw. Live trades use a stop-loss placed at Binance.
+            Metabridge Bot follows the market around the clock, so you can spend your time on everything else.
           </p>
         </div>
         <svg viewBox="0 0 400 120" aria-hidden="true" className="hidden h-auto max-h-44 w-full shell:block">
@@ -54,9 +54,6 @@ export default function Login({ onAuthed }) {
       </section>
 
       <section className="relative flex items-center justify-center px-4 pb-24 pt-10 shell:px-10 shell:pb-10">
-        <div className="absolute right-4 top-4 shell:right-6 shell:top-6">
-          <ThemeSwitch />
-        </div>
         <div className="mt-8 w-full max-w-sm space-y-4 shell:mt-0">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Log in</h1>
