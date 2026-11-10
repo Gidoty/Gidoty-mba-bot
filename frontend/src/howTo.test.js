@@ -39,3 +39,15 @@ test("money is shown as dollars, never a bare currency code, in the settings ste
   const settings = all.find((s) => s.startsWith("Bot Settings"));
   assert.match(settings, /in dollars/);
 });
+
+test("what cannot change while a trade is open is exactly pair, market and pair selection mode (account.py)", () => {
+  const settings = all.find((s) => s.startsWith("Bot Settings"));
+  assert.match(settings, /Pair, market and pair selection mode cannot be changed while a trade is open/);
+  assert.match(settings, /Risk per trade and trading capital can be changed at any time/);
+  assert.ok(!/risk[^.]*cannot be changed while a trade is open/i.test(settings));
+});
+
+test("replacing the key and enabling live trading are both refused while a trade is open, and the steps say so", () => {
+  assert.match(all.find((s) => s.startsWith("Stopping")), /cannot be done while a trade is open/);
+  assert.match(all.find((s) => s.startsWith("Enable live trading")), /cannot be done while a practice trade is open/);
+});

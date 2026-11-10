@@ -68,34 +68,34 @@ if log:
         handle.write(json.dumps({{"argv": args, "has_b2_env": all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY"))}}) + "\\n")
 if not all(os.environ.get(k) for k in ("RCLONE_CONFIG_B2_TYPE", "RCLONE_CONFIG_B2_ACCOUNT", "RCLONE_CONFIG_B2_KEY")):
     sys.stderr.write("no credentials\\n"); sys.exit(1)
-# Real rclone 1.76 rejects flags a command does not have (checked against the real binary): copyto takes --no-check-dest,
-# lsjson takes only these three. Anything else, such as --no-check-bucket (not a b2 option), must fail here too.
-ALLOWED = {{"copyto": {{"--no-check-dest"}}, "lsjson": {{"--hash", "--no-modtime", "--files-only"}}}}
-bad = [a for a in args[1:] if a.startswith("--") and a not in ALLOWED.get(args[0], set())]
+# This stand-in models what the REAL tool does with our key, and refuses what the real tool refuses (rclone 1.76.0 on the server,
+# OWNER-REPORTED via the reviewer after two flags slipped through earlier stand-ins):
+#   * the upload key is Write Only: any command that lists, reads or deletes in the bucket fails with a 403-style error;
+#   * `copyto` takes the one flag we use, --no-check-dest. Any other flag fails with rclone's own "unknown flag" error
+#     (for example --no-check-bucket, which is not a b2 option), and an unknown command fails too;
+#   * `copyto` takes exactly two paths: a local source and a b2: destination.
+# Keep this list to what the real binary accepted when checked; do not add flags to make a test pass.
+ALLOWED_FLAGS = {{"copyto": {{"--no-check-dest"}}}}
+WRITE_ONLY_DENIED = {{"lsjson", "lsf", "ls", "lsl", "lsd", "cat", "size", "check", "sync", "copy", "move", "moveto", "delete", "deletefile", "purge", "rmdir", "rmdirs", "mkdir", "cleanup"}}
+if args[0] in WRITE_ONLY_DENIED:
+    sys.stderr.write("403 unauthorized: this application key is write only and may not list or read the bucket\\n"); sys.exit(1)
+if args[0] not in ALLOWED_FLAGS:
+    sys.stderr.write("Error: unknown command " + args[0] + "\\n"); sys.exit(2)
+bad = [a for a in args[1:] if a.startswith("-") and a not in ALLOWED_FLAGS[args[0]]]
 if bad:
     sys.stderr.write("Error: unknown flag: " + bad[0] + "\\n"); sys.exit(2)
 root = open(os.path.join(here, "root.txt")).read().strip()
-paths = [a for a in args[1:] if not a.startswith("--")]
-if args[0] == "copyto":
-    if os.path.exists(os.path.join(here, "fail_upload")):
-        sys.stderr.write("401 unauthorized for key " + os.environ["RCLONE_CONFIG_B2_KEY"] + "\\n"); sys.exit(1)
-    src, dst = paths
-    assert dst.startswith("b2:")
-    target = os.path.join(root, dst[3:])
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    open(target, "wb").write(open(src, "rb").read())
-elif args[0] == "lsjson":
-    folder = os.path.join(root, paths[0][3:])
-    out = []
-    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
-        data = open(os.path.join(folder, name), "rb").read()
-        sha = hashlib.sha1(data).hexdigest()
-        if os.path.exists(os.path.join(here, "bad_hash")):
-            sha = "0" * 40
-        out.append({{"Name": name, "Size": len(data), "Hashes": {{"sha1": sha}}}})
-    print(json.dumps(out))
-else:
-    sys.exit(2)
+paths = [a for a in args[1:] if not a.startswith("-")]
+if len(paths) != 2:
+    sys.stderr.write("Command copyto needs 2 arguments maximum: you supplied " + str(len(paths)) + "\\n"); sys.exit(1)
+if os.path.exists(os.path.join(here, "fail_upload")):
+    sys.stderr.write("401 unauthorized for key " + os.environ["RCLONE_CONFIG_B2_KEY"] + "\\n"); sys.exit(1)
+src, dst = paths
+if not dst.startswith("b2:"):
+    sys.stderr.write("Failed to create file system for " + dst + ": didn't find section in config file\\n"); sys.exit(1)
+target = os.path.join(root, dst[3:])
+os.makedirs(os.path.dirname(target), exist_ok=True)
+open(target, "wb").write(open(src, "rb").read())
 """
 
 
@@ -333,6 +333,11 @@ def test_the_upload_key_is_write_only_so_the_upload_never_lists_or_reads_the_buc
     calls = rclone_calls(env)
     assert calls and all(call["argv"][0] == "copyto" for call in calls)  # no lsjson, lsf, cat or any other command
     assert all("--no-check-dest" in call["argv"] for call in calls)  # a write-only key may not list the destination first
+    for call in calls:  # exactly the shape the real tool accepts: copyto, one flag, a local file, a b2: destination
+        argv = call["argv"]
+        assert [a for a in argv[1:] if a.startswith("-")] == ["--no-check-dest"]
+        paths = [a for a in argv[1:] if not a.startswith("-")]
+        assert len(paths) == 2 and paths[1].startswith("b2:")
     assert (env.state / "last_offsite_success").exists()
 
 
@@ -649,3 +654,30 @@ def test_the_runbook_matches_the_decisions_and_contains_no_secret():
     assert "AGE-SECRET-KEY-1" not in text and "keyID" not in text.replace("key ID", "")
     for line in text.splitlines():
         assert not line.strip().startswith("RCLONE_CONFIG_B2_KEY=") or "<" in line  # only placeholders
+
+
+def _stand_in(e, *args):
+    return subprocess.run([str(e.bin / "rclone"), *args], env={**os.environ, "RCLONE_CONFIG_B2_TYPE": "b2",
+                          "RCLONE_CONFIG_B2_ACCOUNT": "x", "RCLONE_CONFIG_B2_KEY": "y"}, capture_output=True, text=True)
+
+
+def test_the_stand_in_refuses_what_the_real_rclone_refuses(env, tmp_path):
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"data")
+    ok = _stand_in(env, "copyto", "--no-check-dest", str(src), "b2:bucket/x")
+    assert ok.returncode == 0
+    for args in (
+        ("copyto", "--no-check-bucket", str(src), "b2:bucket/x"),   # not a b2 option in rclone 1.76
+        ("copyto", "--no-check-dest", "--bogus", str(src), "b2:bucket/x"),
+        ("copyto", "--no-check-dest=true", str(src), "b2:bucket/x"),
+        ("copyto", "-v", str(src), "b2:bucket/x"),
+        ("copyto", "--no-check-dest", str(src)),                    # one path
+        ("copyto", "--no-check-dest", str(src), "b2:bucket/x", "b2:bucket/y"),
+        ("copyto", "--no-check-dest", str(src), "/tmp/not-b2"),     # destination is not the b2 remote
+        ("nonsense", "b2:bucket"),
+    ):
+        proc = _stand_in(env, *args)
+        assert proc.returncode != 0, args
+    for command in ("lsjson", "lsf", "ls", "cat", "size", "check", "sync", "delete", "purge"):
+        proc = _stand_in(env, command, "b2:bucket")
+        assert proc.returncode == 1 and "write only" in proc.stderr, command  # the key may not list or read

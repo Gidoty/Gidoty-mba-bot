@@ -27,7 +27,7 @@ export function howToSections(serverIp) {
     {
       title: "Your settings and account",
       steps: [
-        ["Bot Settings", "Trading capital is the most of your Binance balance, in dollars, that the bot may use. Risk per trade is set between 0.1% and 2%. You also choose the pair and the market, spot or futures. Pair, market and risk cannot be changed while a trade is open. Appearance sets Auto, Light or Dark."],
+        ["Bot Settings", "Trading capital is the most of your Binance balance, in dollars, that the bot may use. Risk per trade is set between 0.1% and 2%. You also choose the pair and the market, spot or futures. Pair, market and pair selection mode cannot be changed while a trade is open. Risk per trade and trading capital can be changed at any time. Appearance sets Auto, Light or Dark."],
         ["Notifications", "Telegram messages tell you when a trade opens or closes, when a position needs attention, and a daily summary."],
         ["Account", "Shows your email, your account status and your bot code. Keep the bot code handy: support will ask for it."],
       ],
@@ -35,9 +35,9 @@ export function howToSections(serverIp) {
     {
       title: "Going live",
       steps: [
-        ["Enable live trading", "When Binance is connected, choose Enable Live Trading, read the notice, tick the box and confirm. This allows live orders. It does not start the bot."],
+        ["Enable live trading", "When Binance is connected, choose Enable Live Trading, read the notice, tick the box and confirm. This allows live orders. It does not start the bot. It cannot be done while a practice trade is open."],
         ["Set your capital and start the bot", "Enter your trading capital, then choose Start Bot. From then on the bot runs on our servers. You do not need to keep the page open."],
-        ["Stopping", "There is no Pause button. To step back from live trading, replace your Binance key with a practice (testnet) key on the Exchange Connection page. That turns live trading off for the account. If you need help, contact support with your bot code."],
+        ["Stopping", "There is no Pause button. To step back from live trading, replace your Binance key with a practice (testnet) key on the Exchange Connection page. That turns live trading off for the account. It cannot be done while a trade is open: wait for the trade to close first. If you need help, contact support with your bot code."],
       ],
     },
   ];

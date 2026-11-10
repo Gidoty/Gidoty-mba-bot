@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { dayMonthYearTime, fmt, signed } from "./format.js";
+import { dayMonthYear, dayMonthYearTime, fmt, signed } from "./format.js";
 import { closedTrades, cumulativeSeries, filterRange, dailyBuckets, isThin, monthlyBuckets, summarize, THIN_THRESHOLD } from "./stats.js";
 
 const T = (iso, pnl, status = "closed") => ({ id: iso, status, closed_at: iso, pnl });
@@ -125,4 +125,8 @@ test("filterRange keeps trades inside the window, null keeps all, edge is inclus
   assert.deepEqual(filterRange(closed, 0, now).length, 0);
   const edge = closedTrades([T("2026-11-01T00:00:00Z", 1)]);
   assert.equal(filterRange(edge, 7, now).length, 1); // exactly 7 days before now is inside
+});
+
+test("date without time", () => {
+  assert.equal(dayMonthYear(Date.parse("2026-11-09T23:59:00Z")), "9 Nov 2026");
 });

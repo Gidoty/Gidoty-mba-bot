@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { api } from "../../api/client.js";
 import BinanceGuide from "../../components/BinanceGuide.jsx";
-import { Card, ErrorBanner } from "../../components/ui.jsx";
+import { FormField, inputClass, primaryButton } from "../../components/form.jsx";
+import { Card, ErrorBanner, Notice, PageHeader } from "../../components/ui.jsx";
 
 const STEPS = ["intro", "key", "secret", "verifying", "success"];
 
@@ -37,34 +38,33 @@ export default function ConnectBinance({ onAccountChanged }) {
   }
 
   return (
-    <div>
-      <div className="mb-5">
-        <h1 className="text-xl font-semibold text-ink">Connect Your Binance Account</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Connect your Binance account to allow the Metabridge Trading Bot to execute supported trades on your
-          behalf. Your trading funds remain in your Binance account - they are never transferred to or held by this
-          bot.
-        </p>
-      </div>
+    <div className="grid gap-4">
+      <PageHeader
+        title="Connect Your Binance Account"
+        subtitle="Connect your Binance account to allow the Metabridge Trading Bot to execute supported trades on your behalf. Your trading funds remain in your Binance account - they are never transferred to or held by this bot."
+      />
 
-      <BinanceGuide className="mb-4" />
+      <Notice>
+        <strong className="font-semibold">Trading can lose money.</strong> Only use funds you can afford to lose.
+      </Notice>
+
+      <BinanceGuide />
       <Steps current={stepIndex} />
       <ErrorBanner message={error} />
       {testResult && !testResult.ok && (
-        <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{testResult.message}</p>
+        <p role="alert" className="rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm text-fg">
+          {testResult.message}
+        </p>
       )}
 
       {step === "intro" && (
         <Card>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-fg">
             You'll need an API key from your Binance account with trading permission enabled and{" "}
             <strong>withdrawals switched off</strong>. The bot can never move your funds out of Binance - that's
             enforced by the permissions you grant it, not just by this app.
           </p>
-          <button
-            onClick={() => setStepIndex(1)}
-            className="mt-4 w-full rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark"
-          >
+          <button type="button" onClick={() => setStepIndex(1)} className={`mt-4 w-full ${primaryButton}`}>
             Get Started
           </button>
         </Card>
@@ -72,20 +72,10 @@ export default function ConnectBinance({ onAccountChanged }) {
 
       {step === "key" && (
         <Card>
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">Binance API key</span>
-            <input
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoFocus
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
-            />
-          </label>
-          <button
-            onClick={() => setStepIndex(2)}
-            disabled={!apiKey.trim()}
-            className="mt-4 w-full rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <FormField label="Binance API key">
+            <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoFocus className={`${inputClass} font-mono`} />
+          </FormField>
+          <button type="button" onClick={() => setStepIndex(2)} disabled={!apiKey.trim()} className={`mt-4 w-full ${primaryButton}`}>
             Continue
           </button>
         </Card>
@@ -93,24 +83,10 @@ export default function ConnectBinance({ onAccountChanged }) {
 
       {step === "secret" && (
         <Card>
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">Binance API secret</span>
-            <input
-              type="password"
-              value={apiSecret}
-              onChange={(e) => setApiSecret(e.target.value)}
-              autoFocus
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-mono"
-            />
-          </label>
-          <p className="mt-2 text-xs text-slate-500">
-            Shown by Binance only once, right next to your API key when you create it.
-          </p>
-          <button
-            onClick={connectAndVerify}
-            disabled={!apiSecret.trim() || submitting}
-            className="mt-4 w-full rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <FormField label="Binance API secret" hint="Shown by Binance only once, right next to your API key when you create it.">
+            <input type="password" value={apiSecret} onChange={(e) => setApiSecret(e.target.value)} autoFocus className={`${inputClass} font-mono`} />
+          </FormField>
+          <button type="button" onClick={connectAndVerify} disabled={!apiSecret.trim() || submitting} className={`mt-4 w-full ${primaryButton}`}>
             Verify Connection
           </button>
         </Card>
@@ -118,22 +94,19 @@ export default function ConnectBinance({ onAccountChanged }) {
 
       {step === "verifying" && (
         <Card className="flex flex-col items-center py-8 text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-accent" />
-          <p className="mt-3 text-sm text-slate-600">Verifying your connection with Binance...</p>
+          <div role="status" aria-label="Verifying" className="h-8 w-8 animate-spin rounded-full border-4 border-line border-t-brand-line" />
+          <p className="mt-3 text-sm text-muted">Verifying your connection with Binance...</p>
         </Card>
       )}
 
       {step === "success" && (
         <Card className="flex flex-col items-center py-8 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent/10 text-xl text-accent-dark">
+          <div aria-hidden="true" className="flex h-14 w-14 items-center justify-center rounded-full bg-pos-soft text-2xl text-pos">
             ✓
           </div>
-          <p className="mt-3 text-sm font-semibold text-ink">Connection Successful</p>
-          <p className="mt-1 text-sm text-slate-600">Your Binance account is now connected.</p>
-          <button
-            onClick={onAccountChanged}
-            className="mt-4 rounded-md bg-accent px-6 py-2.5 text-sm font-semibold text-white hover:bg-accent-dark"
-          >
+          <p className="mt-3 text-base font-semibold text-fg">Connection Successful</p>
+          <p className="mt-1 text-sm text-muted">Your Binance account is now connected.</p>
+          <button type="button" onClick={onAccountChanged} className={`mt-4 ${primaryButton} px-8`}>
             Continue
           </button>
         </Card>
@@ -145,19 +118,20 @@ export default function ConnectBinance({ onAccountChanged }) {
 function Steps({ current }) {
   const labels = ["Connect", "API Key", "Secret", "Verify", "Done"];
   return (
-    <div className="mb-4 flex items-center gap-1">
+    <ol className="flex items-center gap-1" aria-label="Progress">
       {labels.map((label, i) => (
-        <div key={label} className="flex flex-1 items-center">
+        <li key={label} className="flex flex-1 items-center last:flex-none" aria-current={i === current ? "step" : undefined}>
           <span
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-              i <= current ? "bg-accent text-white" : "bg-slate-200 text-slate-500"
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+              i <= current ? "bg-brand text-brand-ink" : "bg-surface-2 text-muted"
             }`}
           >
             {i + 1}
           </span>
-          {i < labels.length - 1 && <span className={`mx-1 h-0.5 flex-1 ${i < current ? "bg-accent" : "bg-slate-200"}`} />}
-        </div>
+          <span className="sr-only">{label}</span>
+          {i < labels.length - 1 && <span className={`mx-1 h-0.5 flex-1 ${i < current ? "bg-brand-line" : "bg-line"}`} />}
+        </li>
       ))}
-    </div>
+    </ol>
   );
 }
