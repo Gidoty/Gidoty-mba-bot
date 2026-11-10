@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing.entitlement import is_entitled
 from ...config import Settings
 from ...legal import (
     PRIVACY_VERSION,
@@ -33,12 +34,13 @@ def _login_throttle(settings: Settings) -> LoginThrottle | None:
     return _throttles[key]
 
 
-def _to_customer_out(customer: Customer, db: Session) -> CustomerOut:
+def _to_customer_out(customer: Customer, db: Session, settings: Settings) -> CustomerOut:
     return CustomerOut(
         id=customer.id,
         email=customer.email,
         created_at=customer.created_at,
-        has_paid=customer.has_paid,
+        # What the screens call "activated": is_entitled() is exactly customer.has_paid unless SUBSCRIPTION_BILLING_ENABLED is on.
+        has_paid=is_entitled(customer, settings=settings),
         legal_acceptance_current=has_current_terms_and_privacy(db, customer_id=customer.id),
     )
 
@@ -89,7 +91,7 @@ def signup(
     record_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION)
 
     _set_session_cookie(response, customer_id=customer.id, settings=settings)
-    return _to_customer_out(customer, db)
+    return _to_customer_out(customer, db, settings)
 
 
 @router.post("/login", response_model=CustomerOut)
@@ -115,7 +117,7 @@ def login(
         throttle.record_success(ip, body.email)
 
     _set_session_cookie(response, customer_id=customer.id, settings=settings)
-    return _to_customer_out(customer, db)
+    return _to_customer_out(customer, db, settings)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -126,13 +128,20 @@ def logout(response: Response) -> None:
 
 
 @router.get("/me", response_model=CustomerOut)
-def me(customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)) -> CustomerOut:
-    return _to_customer_out(customer, db)
+def me(
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CustomerOut:
+    return _to_customer_out(customer, db, settings)
 
 
 @router.post("/accept-legal", response_model=CustomerOut)
 def accept_legal(
-    body: AcceptLegalRequest, customer: Customer = Depends(get_current_customer), db: Session = Depends(get_db)
+    body: AcceptLegalRequest,
+    customer: Customer = Depends(get_current_customer),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> CustomerOut:
     """For a customer who is already logged in but whose on-file
     acceptance predates the current Terms/Privacy version - most
@@ -144,4 +153,4 @@ def accept_legal(
         record_acceptance(db, customer_id=customer.id, document_type="terms", version=TERMS_VERSION)
     if not has_current_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION):
         record_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION)
-    return _to_customer_out(customer, db)
+    return _to_customer_out(customer, db, settings)

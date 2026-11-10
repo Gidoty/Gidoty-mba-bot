@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -50,6 +50,8 @@ class Customer(Base):
     paystack_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     account: Mapped["TradingAccount"] = relationship(back_populates="customer", uselist=False, cascade="all, delete-orphan")
+    # Subscription billing (billing/entitlement.py). Absent for every existing customer; read only when SUBSCRIPTION_BILLING_ENABLED is on.
+    subscription: Mapped["Subscription | None"] = relationship(back_populates="customer", uselist=False, cascade="all, delete-orphan")
 
 
 class TradingAccount(Base):
@@ -380,6 +382,51 @@ class PaymentReference(Base):
     amount: Mapped[int] = mapped_column(Integer, nullable=False)  # the price asked for, in minor units
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+class Subscription(Base):
+    """One subscription per customer (designs/03 section 4). Absent for every existing customer: a customer with
+    `has_paid` and no row is a legacy lifetime customer. Holds no card data, no key and no provider secret; the provider
+    reference is an opaque id. Nothing reads or writes this table while SUBSCRIPTION_BILLING_ENABLED is off."""
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (UniqueConstraint("customer_id", name="uq_subscriptions_customer_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # active | cancelled | expired
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(20), nullable=True)  # paystack | nowpayments | manual
+    provider_subscription_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    customer: Mapped["Customer"] = relationship(back_populates="subscription")
+
+
+class BillingPayment(Base):
+    """One issued payment (designs/03 section 4): what we asked for and what came back. Written by the provider
+    stages, not by Stage 0. Holds no card data and no email: the reference is our own opaque token."""
+
+    __tablename__ = "billing_payments"
+    __table_args__ = (UniqueConstraint("provider", "reference", name="uq_billing_payments_provider_reference"),
+                      Index("ix_billing_payments_customer_id", "customer_id"))
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    reference: Mapped[str] = mapped_column(String(100), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    usd_value: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)  # for crypto invoices
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|paid|underpaid|expired|failed|refunded
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
 class TradeTelemetry(Base):
     """Research context recorded when a trade is opened (telemetry.py).
 

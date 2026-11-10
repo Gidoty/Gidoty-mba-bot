@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ... import exchange, pair_catalog, pnl_labels
+from ...billing.entitlement import is_entitled
 from ...botcode import assign_unique_bot_code
 from ...config import Settings, manual_pairs
 from ...crypto_utils import decrypt, encrypt
@@ -48,6 +49,12 @@ def _require_account(customer: Customer) -> TradingAccount:
     if customer.account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no trading account yet - POST /api/account first")
     return customer.account
+
+
+def _paid(customer: Customer, settings: Settings) -> bool:
+    """The one question every handler below asks: may this customer open NEW live trades? Exactly `customer.has_paid`
+    unless SUBSCRIPTION_BILLING_ENABLED is on (billing/entitlement.py)."""
+    return is_entitled(customer, settings=settings)
 
 
 def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> AccountOut:
@@ -182,7 +189,7 @@ def create_account(
     # anyway (resolve_trading_mode's own has_paid gate), but we also
     # don't want a real Binance key sitting in storage for an account
     # that was never meant to have one yet.
-    if body.environment == "mainnet" and not customer.has_paid:
+    if body.environment == "mainnet" and not _paid(customer, settings):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "pay to unlock before connecting a mainnet Binance account")
 
     try:
@@ -223,12 +230,12 @@ def create_account(
                 encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
             )
         )
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 @router.get("", response_model=AccountOut)
-def get_account(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)) -> AccountOut:
-    return _to_account_out(_require_account(customer), has_paid=customer.has_paid, db=db)
+def get_account(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> AccountOut:
+    return _to_account_out(_require_account(customer), has_paid=_paid(customer, settings), db=db)
 
 
 @router.patch("", response_model=AccountOut)
@@ -290,19 +297,20 @@ def update_account(
         # how an already-open position is managed (same reasoning
         # risk_pct above has always been editable under).
         account.allocated_capital = body.allocated_capital
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 @router.post("/live-bypass", response_model=AccountOut)
 def accept_live_trading_bypass(
-    body: LiveBypassRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)
+    body: LiveBypassRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> AccountOut:
     account = _require_account(customer)
     if account.live_bypass_accepted_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "live trading was already accepted for this account")
     account.live_bypass_accepted_at = accept_live_bypass()
     account.live_bypass_disclosure_text = LIVE_TRADING_DISCLOSURE
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 @router.put("/credentials", response_model=AccountOut)
@@ -315,7 +323,7 @@ def update_credentials(
     account = _require_account(customer)
     if not settings.encryption_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
-    if body.environment == "mainnet" and not customer.has_paid:
+    if body.environment == "mainnet" and not _paid(customer, settings):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "pay to unlock before connecting a mainnet Binance account")
 
     # Replacing the credential while a trade is open is exactly as unsafe
@@ -349,7 +357,7 @@ def update_credentials(
         # second safety net this specific line is load-bearing for.
         account.bot_started_at = None
 
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 @router.post("/enable-live-trading", response_model=AccountOut)
@@ -357,6 +365,7 @@ def enable_live_trading_route(
     body: EnableLiveTradingRequest,
     customer: Customer = Depends(require_legal_acceptance),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> AccountOut:
     """The one and only action that can set live_trading_enabled_at -
     paying, finishing the trial, and accepting the bypass are all
@@ -376,7 +385,7 @@ def enable_live_trading_route(
     everything written so far if anything above raises)."""
     account = _require_account(customer)
 
-    if not customer.has_paid:
+    if not _paid(customer, settings):
         raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock live trading before enabling it")
 
     eligible = is_live_eligible(trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at)
@@ -405,12 +414,13 @@ def enable_live_trading_route(
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 @router.post("/start-bot", response_model=AccountOut)
 def start_bot_route(
-    body: StartBotRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)
+    body: StartBotRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> AccountOut:
     """The final, separate action - enabling live trading never starts
     anything by itself (see enable_live_trading_route above); this is
@@ -427,7 +437,7 @@ def start_bot_route(
             "your Binance API key has withdrawal permission enabled - replace it with a trade-only key before starting the bot",
         )
 
-    if not customer.has_paid:
+    if not _paid(customer, settings):
         raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock before starting the bot")
 
     eligible = is_live_eligible(trial_ends_at=account.trial_ends_at, live_bypass_accepted_at=account.live_bypass_accepted_at)
@@ -449,7 +459,7 @@ def start_bot_route(
     _require_no_open_trade(db, account, action="starting the bot")
 
     account.bot_started_at = start_bot()
-    return _to_account_out(account, has_paid=customer.has_paid, db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
 
 
 def _paper_credentials(account: TradingAccount, settings: Settings) -> tuple[str | None, str | None]:
@@ -473,7 +483,7 @@ async def get_balance(
     actually LIVE (reuses the exact same mode computation as every other
     account response, never a separate check that could drift)."""
     account = _require_account(customer)
-    if _to_account_out(account, has_paid=customer.has_paid, db=db).mode != "live":
+    if _to_account_out(account, has_paid=_paid(customer, settings), db=db).mode != "live":
         raise HTTPException(status.HTTP_409_CONFLICT, "balance is only available once live trading is enabled")
     if not settings.encryption_key or account.credential is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable trading credentials are configured")
@@ -509,7 +519,7 @@ async def get_position(
     if open_trade is None:
         return PositionOut(has_position=False)
 
-    is_live = _to_account_out(account, has_paid=customer.has_paid, db=db).mode == "live"
+    is_live = _to_account_out(account, has_paid=_paid(customer, settings), db=db).mode == "live"
     current_price: float | None = None
     try:
         if is_live:

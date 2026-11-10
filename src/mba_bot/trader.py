@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from . import exchange, kill_switch, lifecycle, pair_catalog, pnl_labels, protection_guard, telemetry
 from . import risk as risk_module
+from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
 from .db import get_open_trade, get_trades_closed_on
@@ -55,7 +56,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     trial_state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
-        has_paid=account.customer.has_paid,
+        has_paid=is_entitled(account.customer, settings=settings, now=now),
         live_trading_enabled_at=account.live_trading_enabled_at,
         has_mainnet_credential=account.has_mainnet_credential,
         bot_started_at=account.bot_started_at,
