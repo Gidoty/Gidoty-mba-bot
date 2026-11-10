@@ -167,6 +167,37 @@ def first_payment(c, fake, email="payer@example.com", ref="mbasub_ref1", end=Non
 
 
 # ====================================================================== switch OFF: nothing changes
+def test_with_the_switch_off_a_complete_valid_payment_is_not_acted_on(make_app, fake, sent):
+    with client_for(make_app()) as c:
+        cid = first_payment(c, fake)
+        assert post_event(c, charge_event("mbasub_ref1")).status_code == 200
+        assert post_event(c, {"event": "subscription.create", "data": {"subscription_code": "SUB_1", "customer": {"email": "payer@example.com"}}}).status_code == 200
+        assert row(cid) is None and fake.calls == [] and count(PaymentEvent) == 0
+        with session_scope() as s:
+            assert s.query(BillingPayment).one().status == "pending"
+
+
+def test_a_concurrent_delivery_that_already_recorded_the_payment_wins(app_on, fake):
+    """The payment_events unique key is the last line of replay protection: if another delivery recorded it first, this one grants nothing."""
+    with app_on() as c:
+        cid = first_payment(c, fake)
+        with session_scope() as s:
+            s.add(PaymentEvent(provider="paystack", event_key="sub-charge:mbasub_ref1", reference="mbasub_ref1", customer_id=cid, amount=PRICE, currency="NGN", outcome="applied"))
+        assert post_event(c, charge_event("mbasub_ref1")).status_code == 200
+        assert row(cid) is None and not entitled(cid)
+        with session_scope() as s:
+            assert s.query(BillingPayment).one().status == "pending"
+
+
+@pytest.mark.parametrize("final", ["completed", "cancelled"])
+def test_a_payment_against_a_finished_subscription_grants_nothing(app_on, fake, final):
+    with app_on() as c:
+        cid = first_payment(c, fake)
+        fake.subs["SUB_1"]["status"] = final
+        assert post_event(c, charge_event("mbasub_ref1")).status_code in (200, 503)
+        assert row(cid) is None and not entitled(cid)
+
+
 def test_with_the_switch_off_the_new_route_does_not_exist_and_events_are_ignored(make_app, fake, sent):
     with client_for(make_app()) as c:  # no SUBSCRIPTION_BILLING_ENABLED
         cid = signed_up(c)
@@ -269,8 +300,10 @@ def test_first_payment_creates_the_subscription_from_paystacks_own_date(app_on, 
 def test_a_replayed_event_does_nothing_more(app_on, fake):
     with app_on() as c:
         cid = first_payment(c, fake)
+        assert post_event(c, charge_event("mbasub_ref1")).json() == {"ok": True}
         for _ in range(3):
-            assert post_event(c, charge_event("mbasub_ref1")).status_code == 200
+            r = post_event(c, charge_event("mbasub_ref1"))
+            assert r.status_code == 200 and r.json() == {"ok": True, "duplicate": True}
         assert count(Subscription) == 1 and count(PaymentEvent) == 1 and count(BillingPayment) == 1
         before = row(cid)
         assert post_event(c, {"event": "subscription.create", "data": {"subscription_code": "SUB_1", "customer": {"email": "payer@example.com"}}}).status_code == 200
