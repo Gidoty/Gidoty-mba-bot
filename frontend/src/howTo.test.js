@@ -50,4 +50,5 @@ test("what cannot change while a trade is open is exactly pair, market and pair 
 test("replacing the key and enabling live trading are both refused while a trade is open, and the steps say so", () => {
   assert.match(all.find((s) => s.startsWith("Stopping")), /cannot be done while a trade is open/);
   assert.match(all.find((s) => s.startsWith("Enable live trading")), /cannot be done while a practice trade is open/);
+  assert.match(all.find((s) => s.startsWith("Set your capital and start the bot")), /Start Bot cannot be pressed while a practice trade is open/); // account.py line 449
 });

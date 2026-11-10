@@ -36,7 +36,7 @@ export function howToSections(serverIp) {
       title: "Going live",
       steps: [
         ["Enable live trading", "When Binance is connected, choose Enable Live Trading, read the notice, tick the box and confirm. This allows live orders. It does not start the bot. It cannot be done while a practice trade is open."],
-        ["Set your capital and start the bot", "Enter your trading capital, then choose Start Bot. From then on the bot runs on our servers. You do not need to keep the page open."],
+        ["Set your capital and start the bot", "Enter your trading capital, then choose Start Bot. From then on the bot runs on our servers. You do not need to keep the page open. Start Bot cannot be pressed while a practice trade is open."],
         ["Stopping", "There is no Pause button. To step back from live trading, replace your Binance key with a practice (testnet) key on the Exchange Connection page. That turns live trading off for the account. It cannot be done while a trade is open: wait for the trade to close first. If you need help, contact support with your bot code."],
       ],
     },
