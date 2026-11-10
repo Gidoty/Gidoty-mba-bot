@@ -714,4 +714,5 @@ def test_migration_downgrade_removes_both_and_is_repeatable(tmp_path):
 
 def test_the_chain_has_one_head_and_it_follows_the_telemetry_migration():
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == ["e5b9c2d7f1a4"] and MIG.down_revision == "d4a8f1c3e6b2"
+    # The subscription billing migration (f6c3a9d1b8e2) now sits on top of the kill switch one; this migration is unchanged.
+    assert script.get_heads() == ["f6c3a9d1b8e2"] and MIG.down_revision == "d4a8f1c3e6b2"

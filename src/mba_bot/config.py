@@ -23,6 +23,16 @@ def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
 
 
+def _grace_days_from_env() -> int:
+    raw = os.environ.get("SUBSCRIPTION_GRACE_DAYS")
+    if raw is None:
+        return 5
+    try:
+        return max(0, min(60, int(raw)))
+    except ValueError:
+        return 5
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -270,6 +280,10 @@ class Settings:
     protection_alert_repeat_hours: float = 6.0
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
+    # Subscription billing, Stage 0 (billing/entitlement.py). OFF = is_entitled() is exactly Customer.has_paid and nothing else changes.
+    subscription_billing_enabled: bool = False
+    # Days a subscription stays entitled after its paid period ends (owner decision D2: 5). Malformed or negative counts as the default or 0.
+    subscription_grace_days: int = 5
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -403,6 +417,8 @@ def load_settings() -> Settings:
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
         pnl_labels=_env_bool("PNL_LABELS", False),
+        subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
+        subscription_grace_days=_grace_days_from_env(),
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),
