@@ -1,35 +1,22 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const STEPS = [
-  {
-    title: "1. Create your account",
-    body: "Pick a trading pair, choose spot or futures, and set your risk level. No Binance account is needed yet.",
-  },
-  {
-    title: "2. Try it free, no risk",
-    body: "Every account starts in an unlimited practice mode: the bot reads prices from Binance's practice server and simulates every trade - no orders are sent and no real money is used. There's no time limit and no card required to try it.",
-  },
-  {
-    title: "3. Link Telegram",
-    body: "Tap \"Open Telegram and link\" so the bot can message you when it enters or exits a trade, plus a daily summary.",
-  },
-  {
-    title: "4. Activate when you're ready",
-    body: "Tap \"Activate\" on your dashboard to unlock the full trading environment through a one-time payment. This does not turn on real trading by itself.",
-  },
-  {
-    title: "5. Connect Binance and go live",
-    body: "Once activated, connect a Binance account with a trade-only key, then explicitly enable live trading, set your Trading Capital, and press Start Bot - each a separate, deliberate step with its own confirmation.",
-  },
-  {
-    title: "6. Manage your bot",
-    body: "Once started, the bot runs continuously on our servers - there is no Pause. Adjust your pair, risk, capital, or pair selection mode anytime from Bot Settings. Your bot code in the menu is your reference number - have it ready if you ever contact support.",
-  },
-];
+import { METABRIDGE_SERVER_IP } from "../constants.js";
+import { howToSections } from "../howTo.js";
 
 export default function HowToUseGuide() {
   const [open, setOpen] = useState(false);
+  const closeRef = useRef(null);
+  const sections = howToSections(METABRIDGE_SERVER_IP);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    closeRef.current?.focus();
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  let n = 0;
   return (
     <>
       <button
@@ -44,33 +31,47 @@ export default function HowToUseGuide() {
       </button>
 
       {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-          onClick={() => setOpen(false)}
-        >
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onClick={() => setOpen(false)}>
           <div
-            className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg bg-surface p-6 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="How to use Metabridge Trading Bot"
+            className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-t-card border border-line bg-surface shadow-xl sm:rounded-card"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-fg">How to use Metabridge Trading Bot</h2>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label="Close"
-                className="text-muted hover:text-fg"
-              >
+            <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-lg font-bold tracking-tight text-fg">How to use Metabridge Trading Bot</h2>
+                <p className="mt-0.5 text-xs text-muted">Step by step, in the order you will meet the screens.</p>
+              </div>
+              <button ref={closeRef} type="button" onClick={() => setOpen(false)} aria-label="Close" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-ctl text-fg hover:bg-surface-2">
                 ✕
               </button>
             </div>
-            <ol className="space-y-4 text-sm text-muted">
-              {STEPS.map((step) => (
-                <li key={step.title}>
-                  <p className="font-medium text-fg">{step.title}</p>
-                  <p className="mt-0.5">{step.body}</p>
-                </li>
+
+            <div className="space-y-6 overflow-y-auto px-5 py-5">
+              {sections.map((section) => (
+                <section key={section.title}>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">{section.title}</h3>
+                  <ol className="mt-3 space-y-4">
+                    {section.steps.map(([title, body]) => {
+                      n += 1;
+                      return (
+                        <li key={title} className="flex gap-3">
+                          <span aria-hidden="true" className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-semibold text-brand-ink">
+                            {n}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-fg">{title}</p>
+                            <p className="mt-0.5 text-sm text-muted">{body}</p>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
               ))}
-            </ol>
+            </div>
           </div>
         </div>
       )}
