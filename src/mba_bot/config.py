@@ -284,6 +284,13 @@ class Settings:
     subscription_billing_enabled: bool = False
     # Days a subscription stays entitled after its paid period ends (owner decision D2: 5). Malformed or negative counts as the default or 0.
     subscription_grace_days: int = 5
+    # Stage 1 (Paystack subscriptions). Read only while SUBSCRIPTION_BILLING_ENABLED is on. The plan is created by the
+    # owner in the Paystack dashboard (NGN, monthly); its code and its price in kobo are configuration, never a default
+    # that could charge anyone. 1,500,000 kobo = NGN 15,000.00 (owner decision, 10 Nov).
+    paystack_plan_code: str | None = None
+    paystack_plan_amount: int = 1_500_000
+    # Telegram chat that receives billing alerts for the owner (failed renewals, unexplained amounts, refunds). Unset = log only.
+    billing_alert_chat_id: str | None = None
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -419,6 +426,9 @@ def load_settings() -> Settings:
         pnl_labels=_env_bool("PNL_LABELS", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         subscription_grace_days=_grace_days_from_env(),
+        paystack_plan_code=os.environ.get("PAYSTACK_PLAN_CODE") or None,
+        paystack_plan_amount=max(0, _env_int("PAYSTACK_PLAN_AMOUNT", 1_500_000)),
+        billing_alert_chat_id=os.environ.get("BILLING_ALERT_CHAT_ID") or None,
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),

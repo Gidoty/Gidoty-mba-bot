@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing import subscriptions as sub_billing
 from ...config import Settings
 from ...models import Customer, PaymentEvent, PaymentReference
 from ..deps import get_current_customer, get_db, get_settings
@@ -74,6 +75,53 @@ def initialize_payment(
     return PaymentInitOut(authorization_url=data["authorization_url"])
 
 
+@router.post("/subscription/initialize", response_model=PaymentInitOut)
+def initialize_subscription(
+    customer: Customer = Depends(get_current_customer),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> PaymentInitOut:
+    """Start a monthly Paystack subscription for a NEW customer (designs/03 Stage 1). Does not exist (404) while
+    SUBSCRIPTION_BILLING_ENABLED is off. The price comes from the Paystack PLAN: no amount is sent, so it can never differ
+    from the plan. `/initialize` above is unchanged and stays the activation path until cutover."""
+    if not settings.subscription_billing_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    _require_paystack_configured(settings)
+    if not settings.paystack_plan_code or settings.paystack_plan_amount <= 0:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "PAYSTACK_PLAN_CODE is not configured")
+    if customer.has_paid:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has lifetime access")
+    from ...billing.entitlement import is_entitled
+    if customer.subscription is not None and is_entitled(customer, settings=settings):
+        raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has an active subscription")
+
+    reference = sub_billing.new_reference()
+    sub_billing.record_issued_payment(db, customer.id, reference, settings)  # before the link exists, so a payment can always be matched
+    db.flush()
+    response = httpx.post(
+        f"{_PAYSTACK_API}/transaction/initialize",
+        headers={"Authorization": f"Bearer {settings.paystack_secret_key}"},
+        json={
+            "email": customer.email,
+            "plan": settings.paystack_plan_code,  # no "amount" and no "currency": the plan decides both
+            "reference": reference,
+            "callback_url": settings.frontend_origin,
+            "metadata": {"customer_id": customer.id, "kind": "subscription"},
+        },
+        timeout=15,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    # Paystack answers a create with HTTP 201 in places and 200 in others (verified in test mode): both are success.
+    if response.status_code not in (200, 201) or not isinstance(body, dict) or body.get("status") is not True \
+            or not isinstance((body.get("data") or {}).get("authorization_url"), str):
+        logger.error("paystack subscription initialize failed: http %s", response.status_code)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not start payment with Paystack")
+    return PaymentInitOut(authorization_url=body["data"]["authorization_url"])
+
+
 def apply_payment_event(db: Session, event: dict) -> None:
     """Mark a customer as paid from a verified Paystack event. Looks the
     customer up by the `customer_id` passed as metadata at `/initialize`
@@ -111,6 +159,19 @@ async def billing_webhook(request: Request, db: Session = Depends(get_db), setti
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid webhook signature")
 
     event = json.loads(payload)
+    if settings.subscription_billing_enabled:
+        # Stage 1: subscription events and subscription charges. Returns None for anything else, which then runs the
+        # existing handling below, unchanged. With the switch off this block does not exist for the request.
+        try:
+            handled = await sub_billing.handle_event(db, event, settings)
+        except (sub_billing.ProviderUnavailable, sub_billing.RetryLater) as exc:
+            logger.warning("subscription event not settled yet (%s); asking Paystack to retry", type(exc).__name__)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "not settled yet") from None
+        except Exception:  # noqa: BLE001 - a bug here must not be silent or poison the existing path
+            logger.error("subscription event handler failed")
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
+        if handled is not None:
+            return handled
     mode = settings.paystack_verify_mode
     if mode == "enforce":
         return await _apply_verified_event(db, event, settings)

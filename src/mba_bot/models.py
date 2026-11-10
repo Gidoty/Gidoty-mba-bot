@@ -404,6 +404,22 @@ class Subscription(Base):
     customer: Mapped["Customer"] = relationship(back_populates="subscription")
 
 
+class SubscriptionToken(Base):
+    """The provider's subscription "email token", ENCRYPTED with ENCRYPTION_KEY (designs/03, Stage 1). Paystack needs it to
+    cancel a subscription through the API. It is a secret: never logged, never returned by any endpoint, never in a
+    message. A separate NEW table (not a new column on `subscriptions`) so that deploying this code before the migration
+    runs cannot break the existing table: create_all() makes this table at start, and nothing reads it while
+    SUBSCRIPTION_BILLING_ENABLED is off."""
+
+    __tablename__ = "subscription_tokens"
+    __table_args__ = (UniqueConstraint("subscription_id", name="uq_subscription_tokens_subscription_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    subscription_id: Mapped[str] = mapped_column(String(36), ForeignKey("subscriptions.id"), nullable=False)
+    token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class BillingPayment(Base):
     """One issued payment (designs/03 section 4): what we asked for and what came back. Written by the provider
     stages, not by Stage 0. Holds no card data and no email: the reference is our own opaque token."""
