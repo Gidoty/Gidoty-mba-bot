@@ -127,6 +127,7 @@ export const TERMS_OF_SERVICE = {
       body: [
         "Certain functionality may require payment.",
         "Prices and the features associated with paid access will be displayed before payment or otherwise communicated through the Service.",
+        "Where access is sold as a subscription, cancelling stops the next charge, and your access continues until the end of the period you have already paid for.",
         "Payment for access to the Service is separate from funds held in your cryptocurrency exchange account.",
         "Metabridge Academy does not require users to transfer their trading capital to the platform merely to connect the trading bot to a supported exchange.",
       ],

@@ -64,3 +64,69 @@ can take the write lock.
 * That the customer fetch (`GET /customer/:email`) and the plan fetch return the `id` fields assumed here.
 * Response time: the handler waits for up to two or three Paystack reads before answering (8 s limit each); the reviewer asked for a fast 200.
 * Anything about live mode, the fee at NGN 15,000 (about NGN 15,329 is inferred) and real bank or card behaviour.
+
+---
+
+# Follow-up, 11 Nov 2026: real bodies, more events, customer reminders
+
+Everything below is behind `SUBSCRIPTION_BILLING_ENABLED` (default OFF), like Stage 1. With it off: the new banner route answers
+`{"notice": null}` without reading anything, the reminder job does nothing, the new events fall through to the existing handler,
+and no new table is touched.
+
+## 1. Tests against real bodies
+`tests/fixtures/paystack/` holds real Paystack TEST-mode bodies from the 11 Nov end-to-end run (account and object identifiers
+replaced, see its README). `tests/test_paystack_real_bodies.py` feeds them through the handlers and asserts the outcomes the live run
+produced: first payment (in both live runs `subscription.create` arrived BEFORE `charge.success`), replay, a renewal, `invoice.create`
+and a cancel; plus the whole hourly sequence through the real route with a frozen clock (every answer 200, no 503).
+
+Where the real bodies differed from a naive reading (all already read correctly; now pinned by tests):
+* A renewal `charge.success` has `metadata = {"invoice_action": "create"}` and NO customer id. It is tied to the customer by e-mail, the
+  plan code and a verified payment. A charge body names no subscription code (subscription events do).
+* The webhook's `plan` is an object; the verify answer's `plan` is a plain string (the object is `plan_object`). `event_plan_code` reads both.
+* `invoice.create` carries the transaction reference nested in `data.transaction.reference` and the subscription in `data.subscription`.
+* The renewal was charged price plus fee, same as the first payment (1,532,995 kobo for a 1,500,000 plan).
+No parser change was needed. Not captured, so still invented bodies: `invoice.payment_failed`, `subscription.disable`,
+`subscription.expiring_cards`, `refund.*`.
+
+## 2. Events
+| Event | What happens |
+|---|---|
+| `invoice.create`, `invoice.update` | Ignored (answered 200, nothing read). The payment is handled from `charge.success`. |
+| `invoice.payment_failed` | As before (nothing extended, owner alerted, grace starts when the period ends) plus a notice to the customer (section 3). |
+| `subscription.expiring_cards` | A reminder to the customer, once per period. Body shape UNVERIFIED: read as a list or one object, each item tied to a customer by subscription code or e-mail. |
+| `refund.pending`, `refund.processing`, `refund.processed`, `refund.failed` | All covered by the `refund.` prefix. The owner is alerted. A payment is marked refunded only if Paystack's own transaction record says `reversed`; `reversal pending` and `success` do not mark it. `refund.failed` only alerts. Access is never revoked. |
+
+## 3. Customer reminders (start of Stage 3)
+Paystack does not retry a failed renewal; it e-mails the customer a manual link. So:
+* **Renewal failed:** a Telegram message (if the customer linked Telegram) and an in-app banner with a "Pay now" button, once per failed period
+  (`billing_notices` has a unique key on customer, kind and period). Wording says access continues for the 5-day grace period (the number is `SUBSCRIPTION_GRACE_DAYS`) and gives the date.
+  "Pay now" calls `POST /api/billing/subscription/initialize` again, which is now allowed from the grace window onwards (still refused while the paid period runs).
+* **Card expiring:** reminder, once per period.
+* **3 days before the period end:** for active subscriptions whose provider is not `paystack` (a manual grant, or later crypto); card subscriptions renew by themselves.
+  The job runs from the scheduler at most once an hour, after the trading round, and every failure is caught. No such subscription exists yet, and no non-card payment link exists until Stage 2, so the banner has no button for it.
+* **Cancelled (banner only):** "Cancelling stops the next charge. Your access continues until the end of the month you have already paid for."
+* All texts are fixed strings (no provider text, e-mail or amount). Telegram sends happen after the commit, so no SQLite write lock is held while waiting, and a failed send changes nothing else.
+
+**Subscribing again after a failed renewal.** Initialize creates a NEW Paystack subscription while the old one is still `attention`. When the new payment is verified and the new
+subscription is applied, the old subscription is cancelled (`POST /subscription/disable` with its own stored token), so the customer is not charged by both. Only a failed (`attention`) or due-and-unpaid subscription is ever cancelled; one whose next payment date is still ahead never is. If that call fails, the owner is alerted to cancel it in Paystack. This is the only write this application sends to Paystack.
+
+## 4. OPEN RISK: paying through Paystack's manual retry link (UNKNOWN, do not guess)
+Nobody has seen what Paystack does here. What the code does TODAY (pinned in `tests/test_billing_notices.py`, "retry_link" tests):
+
+| What Paystack does (assumed) | What our code does |
+|---|---|
+| A. Moves `next_payment_date` forward and sends `charge.success` with its own reference and no customer id | Tied to the customer by e-mail and plan, verified, applied. Period end becomes Paystack's new date. Works whether the status is back to `active` or still `attention`. |
+| B. Sends `charge.success` but leaves `next_payment_date` at the old, passed date | NOT applied: the payment is verified, but we will not invent a period end. Answer 503 (Paystack redelivers for up to 72 hours), nothing stored for the payment. The owner is alerted once per 6 hours once the payment is over 10 minutes old (added in this change: before it the failure was silent). The customer gets no extra time; access ends with the grace window. Owner action needed. |
+| C. Sends a different event only (for example `invoice.update`) and no `charge.success` | `invoice.update` is ignored, so nothing is applied. Same customer outcome as B, and no alert (we never see a payment). |
+| D. Pays the invoice but a new subscription is created | Handled like "subscribing again": the new one is applied if it is `active` and the old `attention` one cancelled. |
+
+Still unknown: whether `next_payment_date` advances; which events arrive and with which reference; whether the status returns to `active`; whether `invoice.update` carries the paid status.
+There is no tool yet for the owner to extend a customer by hand (case B); that is a Stage 3 item.
+Proposed owner test (NOT run, needs the owner's yes): an hourly TEST plan, a test customer whose e-mail is an inbox the owner can read, update the card on the subscription to the declined test card through the manage link
+(UNVERIFIED that test mode allows it), wait for the failed renewal, pay through the e-mailed link with a good card, and capture the events, the reference and `next_payment_date` with the e2e launcher.
+
+## 5. Deploy notes
+* Migration `b8e5f2a0c4d6` (additive, idempotent): table `billing_notices`. Not run anywhere by this change.
+* New setting use: `BILLING_ALERT_CHAT_ID` (owner alerts) and, for customer messages, the existing `TELEGRAM_BOT_TOKEN`.
+* The frontend (served from Vercel) now calls `GET /api/billing/notice` on every authenticated page. A frontend built from this change that meets a backend without the route simply shows nothing (the call is caught).
+* Terms: Section 11 gained one sentence ("Where access is sold as a subscription, cancelling stops the next charge, and your access continues until the end of the period you have already paid for"). `TERMS_VERSION` was NOT bumped (a bump forces every customer to accept again before using the account routes). That is a decision for the owner.

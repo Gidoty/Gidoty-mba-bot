@@ -1,0 +1,1725 @@
+{
+ "source": "Paystack TEST mode, 11 Nov 2026. Bodies as received (masked by the capture tool); account and object identifiers replaced; {EMAIL} and {CUSTOMER_ID} are filled in by the tests.",
+ "events": [
+  {
+   "file": "001-subscription.create",
+   "event": "subscription.create",
+   "body": {
+    "event": "subscription.create",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "active",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T06:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": 1,
+      "send_sms": 1,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": null
+    }
+   }
+  },
+  {
+   "file": "002-charge.success",
+   "event": "charge.success",
+   "body": {
+    "event": "charge.success",
+    "data": {
+     "id": 900007,
+     "domain": "test",
+     "status": "success",
+     "reference": "mbasub_fixture_hourly_8",
+     "amount": 1532995,
+     "message": null,
+     "gateway_response": "Successful",
+     "gateway_response_code": "approved",
+     "response_code": "00",
+     "paid_at": "2026-11-11T05:17:14.000Z",
+     "created_at": "2026-11-11T05:16:48.000Z",
+     "channel": "card",
+     "currency": "NGN",
+     "ip_address": "<masked:str>",
+     "metadata": {
+      "customer_id": "{CUSTOMER_ID}",
+      "kind": "subscription"
+     },
+     "fees_breakdown": null,
+     "log": null,
+     "fees": 32995,
+     "fees_split": null,
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null,
+      "receiver_bank_account_number": null,
+      "receiver_bank": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": 1,
+      "send_sms": 1,
+      "currency": "NGN"
+     },
+     "subaccount": {},
+     "split": {},
+     "order_id": null,
+     "paidAt": "2026-11-11T05:17:14.000Z",
+     "requested_amount": 1500000,
+     "pos_transaction_data": null,
+     "source": {
+      "type": "api",
+      "source": "merchant_api",
+      "entry_point": "transaction_initialize",
+      "identifier": null
+     }
+    }
+   }
+  },
+  {
+   "file": "003-charge.success",
+   "event": "charge.success",
+   "body": {
+    "event": "charge.success",
+    "data": {
+     "id": 900009,
+     "domain": "test",
+     "status": "success",
+     "reference": "fixture_renewal_reference_hourly_10",
+     "amount": 1532995,
+     "message": null,
+     "gateway_response": "Approved",
+     "gateway_response_code": null,
+     "response_code": null,
+     "paid_at": "2026-11-11T06:30:15.000Z",
+     "created_at": "2026-11-11T06:30:15.000Z",
+     "channel": "card",
+     "currency": "NGN",
+     "ip_address": null,
+     "metadata": {
+      "invoice_action": "create"
+     },
+     "fees_breakdown": null,
+     "log": null,
+     "fees": 32995,
+     "fees_split": null,
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null,
+      "receiver_bank_account_number": null,
+      "receiver_bank": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": 1,
+      "send_sms": 1,
+      "currency": "NGN"
+     },
+     "subaccount": {},
+     "split": {},
+     "order_id": null,
+     "paidAt": "2026-11-11T06:30:15.000Z",
+     "requested_amount": 1500000,
+     "pos_transaction_data": null,
+     "source": {
+      "type": "api",
+      "source": "merchant_api",
+      "entry_point": "charge",
+      "identifier": null
+     }
+    }
+   }
+  },
+  {
+   "file": "004-invoice.create",
+   "event": "invoice.create",
+   "body": {
+    "event": "invoice.create",
+    "data": {
+     "domain": "test",
+     "invoice_code": "INV_fixture_hourly_11",
+     "amount": 1532995,
+     "period_start": "2026-11-11T06:17:00.000Z",
+     "period_end": "2026-11-11T07:16:59.000Z",
+     "status": "success",
+     "paid": 1,
+     "paid_at": "2026-11-11T06:30:15.000Z",
+     "description": null,
+     "createdAt": "2026-11-11T06:30:14.000Z",
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "subscription": {
+      "status": "active",
+      "subscription_code": "SUB_fixture_hourly_2",
+      "email_token": "<masked:str>",
+      "amount": 1500000,
+      "cron_expression": "17 * * * *",
+      "next_payment_date": "2026-11-11T07:17:00.000Z",
+      "open_invoice": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "transaction": {
+      "reference": "fixture_renewal_reference_hourly_10",
+      "status": "success",
+      "amount": 1532995,
+      "currency": "NGN"
+     }
+    }
+   }
+  },
+  {
+   "file": "005-subscription.not_renew",
+   "event": "subscription.not_renew",
+   "body": {
+    "event": "subscription.not_renew",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "non-renewing",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T07:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": 1,
+      "send_sms": 1,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": null
+    }
+   }
+  }
+ ],
+ "reads": [
+  {
+   "get": "/transaction/verify/mbasub_fixture_hourly_8",
+   "answer": {
+    "status": true,
+    "message": "Verification successful",
+    "data": {
+     "id": 900007,
+     "domain": "test",
+     "status": "success",
+     "reference": "mbasub_fixture_hourly_8",
+     "receipt_number": null,
+     "amount": 1532995,
+     "message": null,
+     "gateway_response": "Successful",
+     "gateway_response_code": "approved",
+     "response_code": "00",
+     "paid_at": "2026-11-11T05:17:14.000Z",
+     "created_at": "2026-11-11T05:16:48.000Z",
+     "channel": "card",
+     "currency": "NGN",
+     "ip_address": "<masked:str>",
+     "metadata": {
+      "customer_id": "{CUSTOMER_ID}",
+      "kind": "subscription"
+     },
+     "log": {
+      "start_time": 1794374222,
+      "time_spent": 14,
+      "attempts": 1,
+      "errors": 0,
+      "success": true,
+      "mobile": false,
+      "input": [],
+      "history": [
+       {
+        "type": "action",
+        "message": "Attempted to pay with card",
+        "time": 13
+       },
+       {
+        "type": "success",
+        "message": "Successfully paid with card",
+        "time": 14
+       }
+      ]
+     },
+     "fees": 32995,
+     "fees_split": null,
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null,
+      "receiver_bank_account_number": null,
+      "receiver_bank": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "plan": "PLN_fixture_hourly",
+     "split": {},
+     "order_id": null,
+     "paidAt": "2026-11-11T05:17:14.000Z",
+     "createdAt": "2026-11-11T05:16:48.000Z",
+     "requested_amount": 1500000,
+     "pos_transaction_data": null,
+     "source": null,
+     "fees_breakdown": null,
+     "connect": null,
+     "transaction_date": "2026-11-11T05:16:48.000Z",
+     "plan_object": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "subaccount": {}
+    }
+   }
+  },
+  {
+   "get": "/transaction/verify/mbasub_fixture_hourly_8",
+   "answer": {
+    "status": true,
+    "message": "Verification successful",
+    "data": {
+     "id": 900007,
+     "domain": "test",
+     "status": "success",
+     "reference": "mbasub_fixture_hourly_8",
+     "receipt_number": null,
+     "amount": 1532995,
+     "message": null,
+     "gateway_response": "Successful",
+     "gateway_response_code": "approved",
+     "response_code": "00",
+     "paid_at": "2026-11-11T05:17:14.000Z",
+     "created_at": "2026-11-11T05:16:48.000Z",
+     "channel": "card",
+     "currency": "NGN",
+     "ip_address": "<masked:str>",
+     "metadata": {
+      "customer_id": "{CUSTOMER_ID}",
+      "kind": "subscription"
+     },
+     "log": {
+      "start_time": 1794374222,
+      "time_spent": 14,
+      "attempts": 1,
+      "errors": 0,
+      "success": true,
+      "mobile": false,
+      "input": [],
+      "history": [
+       {
+        "type": "action",
+        "message": "Attempted to pay with card",
+        "time": 13
+       },
+       {
+        "type": "success",
+        "message": "Successfully paid with card",
+        "time": 14
+       }
+      ]
+     },
+     "fees": 32995,
+     "fees_split": null,
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null,
+      "receiver_bank_account_number": null,
+      "receiver_bank": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "plan": "PLN_fixture_hourly",
+     "split": {},
+     "order_id": null,
+     "paidAt": "2026-11-11T05:17:14.000Z",
+     "createdAt": "2026-11-11T05:16:48.000Z",
+     "requested_amount": 1500000,
+     "pos_transaction_data": null,
+     "source": null,
+     "fees_breakdown": null,
+     "connect": null,
+     "transaction_date": "2026-11-11T05:16:48.000Z",
+     "plan_object": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "subaccount": {}
+    }
+   }
+  },
+  {
+   "get": "/subscription/SUB_fixture_hourly_2",
+   "answer": {
+    "status": true,
+    "message": "Subscription retrieved successfully",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "active",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T06:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "cancelledAt": null,
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoices": [
+      {
+       "id": 900007,
+       "domain": "test",
+       "status": "success",
+       "reference": "mbasub_fixture_hourly_8",
+       "receipt_number": null,
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Successful",
+       "gateway_response_code": "approved",
+       "response_code": "00",
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "created_at": "2026-11-11T05:16:48.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": "<masked:str>",
+       "metadata": {
+        "customer_id": "{CUSTOMER_ID}",
+        "kind": "subscription"
+       },
+       "log": {
+        "start_time": 1794374222,
+        "time_spent": 14,
+        "attempts": 1,
+        "errors": 0,
+        "success": true,
+        "mobile": false,
+        "input": [],
+        "history": [
+         {
+          "type": "action",
+          "message": "Attempted to pay with card",
+          "time": 13
+         },
+         {
+          "type": "success",
+          "message": "Successfully paid with card",
+          "time": 14
+         }
+        ]
+       },
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T05:17:14.000Z",
+       "createdAt": "2026-11-11T05:16:48.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      }
+     ],
+     "invoices_history": [
+      {
+       "id": 900012,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_13",
+       "amount": 1500000,
+       "period_start": "2026-11-11T05:00:00.000Z",
+       "period_end": "2026-11-11T06:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      }
+     ],
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": {
+      "subscription": 900001,
+      "integration": 100000,
+      "domain": "test",
+      "invoice_code": "INV_fixture_hourly_13",
+      "customer": 900005,
+      "transaction": 900007,
+      "amount": 1500000,
+      "period_start": "2026-11-11T05:00:00.000Z",
+      "period_end": "2026-11-11T06:16:59.000Z",
+      "status": "success",
+      "paid": true,
+      "retries": 0,
+      "authorization": 1752796351,
+      "paid_at": "2026-11-11T05:17:14.000Z",
+      "next_notification": "2026-11-11T06:16:59.000Z",
+      "notification_flag": null,
+      "description": null,
+      "id": 900012,
+      "createdAt": "2026-11-11T05:17:14.000Z",
+      "updatedAt": "2026-11-11T05:17:14.000Z"
+     },
+     "metadata": null,
+     "payments_count": 1
+    }
+   }
+  },
+  {
+   "get": "/plan/PLN_fixture_hourly",
+   "answer": {
+    "status": true,
+    "message": "Plan retrieved",
+    "data": {
+     "subscriptions": [
+      {
+       "domain": "test",
+       "status": "active",
+       "quantity": 1,
+       "amount": 1500000,
+       "email_token": "<masked:str>",
+       "subscription_code": "SUB_fixture_hourly_2",
+       "next_payment_date": "2026-11-11T06:17:00.000Z",
+       "open_invoice": null,
+       "split_code": null,
+       "cancelledAt": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "authorization": {
+        "authorization_code": "<masked:str>",
+        "card_type": "<masked:str>",
+        "brand": "<masked:str>",
+        "bank": "<masked:str>",
+        "description": "visa ending with 4081",
+        "last4": "<masked:str>",
+        "channel": "card",
+        "country_name": "Nigeria"
+       },
+       "integration": 100000,
+       "customer": {
+        "first_name": null,
+        "last_name": null,
+        "email": "{EMAIL}",
+        "customer_code": "CUS_fixture_hourly"
+       },
+       "successful_payments": 1,
+       "start": "2026-11-11T05:17:14.000Z"
+      }
+     ],
+     "pages": [],
+     "domain": "test",
+     "name": "e2e hourly test",
+     "plan_code": "PLN_fixture_hourly",
+     "description": "testing",
+     "amount": 1500000,
+     "interval": "hourly",
+     "invoice_limit": 0,
+     "send_invoices": true,
+     "send_sms": true,
+     "hosted_page": false,
+     "hosted_page_url": null,
+     "hosted_page_summary": null,
+     "currency": "NGN",
+     "migrate": false,
+     "is_deleted": false,
+     "is_archived": false,
+     "id": 900003,
+     "integration": 100000,
+     "createdAt": "2026-11-11T05:12:16.000Z",
+     "updatedAt": "2026-11-11T05:12:16.000Z",
+     "pages_count": 0,
+     "subscribers_count": 1,
+     "subscriptions_count": 1,
+     "active_subscriptions_count": 1,
+     "total_revenue": 1532995,
+     "subscribers": [
+      {
+       "customer_code": "CUS_fixture_hourly",
+       "customer_first_name": null,
+       "customer_last_name": null,
+       "customer_email": "{EMAIL}",
+       "subscription_status": "active",
+       "currency": "NGN",
+       "customer_total_amount_paid": 1532995
+      }
+     ]
+    }
+   }
+  },
+  {
+   "get": "/customer/{EMAIL}",
+   "answer": {
+    "status": true,
+    "message": "Customer retrieved",
+    "data": {
+     "transactions": [],
+     "subscriptions": [
+      {
+       "id": 900001,
+       "domain": "test",
+       "status": "active",
+       "subscription_code": "SUB_fixture_hourly_2",
+       "email_token": "<masked:str>",
+       "amount": 1500000,
+       "cron_expression": "17 * * * *",
+       "next_payment_date": "2026-11-11T06:17:00.000Z",
+       "open_invoice": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "integration": 100000,
+       "plan": {},
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "invoices": [],
+       "invoices_history": [],
+       "invoice_limit": 0,
+       "split_code": null,
+       "most_recent_invoice": null,
+       "metadata": null
+      }
+     ],
+     "authorizations": [
+      {
+       "authorization_code": "<masked:str>",
+       "bin": "<masked:str>",
+       "last4": "<masked:str>",
+       "exp_month": "<masked:str>",
+       "exp_year": "<masked:str>",
+       "channel": "card",
+       "card_type": "<masked:str>",
+       "bank": "<masked:str>",
+       "country_code": "<masked:str>",
+       "brand": "<masked:str>",
+       "reusable": true,
+       "signature": "<masked:str>",
+       "account_name": null
+      },
+      {
+       "authorization_code": "<masked:str>",
+       "bin": "<masked:str>",
+       "last4": "<masked:str>",
+       "exp_month": "<masked:str>",
+       "exp_year": "<masked:str>",
+       "channel": "card",
+       "card_type": "<masked:str>",
+       "bank": "<masked:str>",
+       "country_code": "<masked:str>",
+       "brand": "<masked:str>",
+       "reusable": true,
+       "signature": "<masked:str>",
+       "account_name": null
+      }
+     ],
+     "first_name": null,
+     "last_name": null,
+     "email": "{EMAIL}",
+     "phone": null,
+     "metadata": null,
+     "domain": "test",
+     "customer_code": "CUS_fixture_hourly",
+     "risk_action": "default",
+     "id": 900005,
+     "integration": 100000,
+     "createdAt": "2026-11-11T04:25:40.000Z",
+     "updatedAt": "2026-11-11T04:25:40.000Z",
+     "created_at": "2026-11-11T04:25:40.000Z",
+     "updated_at": "2026-11-11T04:25:40.000Z",
+     "total_transactions": 0,
+     "total_transaction_value": [],
+     "dedicated_account": null,
+     "dedicated_accounts": [],
+     "identified": false,
+     "identifications": null
+    }
+   }
+  },
+  {
+   "get": "/subscription?plan=900003&customer=900005&perPage=20",
+   "answer": {
+    "status": true,
+    "message": "Subscriptions retrieved",
+    "data": [
+     {
+      "id": 900001,
+      "domain": "test",
+      "status": "active",
+      "start": 1794374234,
+      "quantity": 1,
+      "subscription_code": "SUB_fixture_hourly_2",
+      "email_token": "<masked:str>",
+      "amount": 1500000,
+      "cron_expression": "17 * * * *",
+      "next_payment_date": "2026-11-11T06:17:00.000Z",
+      "open_invoice": null,
+      "createdAt": "2026-11-11T05:17:14.000Z",
+      "integration": 100000,
+      "plan": {
+       "id": 900003,
+       "domain": "test",
+       "name": "e2e hourly test",
+       "plan_code": "PLN_fixture_hourly",
+       "description": "testing",
+       "amount": 1500000,
+       "interval": "hourly",
+       "send_invoices": true,
+       "send_sms": true,
+       "currency": "NGN",
+       "integration": 100000,
+       "createdAt": "2026-11-11T05:12:16.000Z",
+       "updatedAt": "2026-11-11T05:12:16.000Z"
+      },
+      "authorization": {
+       "authorization_code": "<masked:str>",
+       "bin": "<masked:str>",
+       "last4": "<masked:str>",
+       "exp_month": "<masked:str>",
+       "exp_year": "<masked:str>",
+       "channel": "card",
+       "card_type": "<masked:str>",
+       "bank": "<masked:str>",
+       "country_code": "<masked:str>",
+       "brand": "<masked:str>",
+       "reusable": 1,
+       "signature": "<masked:str>",
+       "account_name": null
+      },
+      "customer": {
+       "id": 900005,
+       "first_name": null,
+       "last_name": null,
+       "email": "{EMAIL}",
+       "customer_code": "CUS_fixture_hourly",
+       "phone": null,
+       "metadata": null,
+       "risk_action": "default",
+       "international_format_phone": null
+      },
+      "invoice_limit": 0,
+      "split_code": null,
+      "metadata": null,
+      "payments_count": 1,
+      "most_recent_invoice": {
+       "subscription": 900001,
+       "integration": 100000,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_13",
+       "customer": 900005,
+       "transaction": 900007,
+       "amount": 1500000,
+       "period_start": "2026-11-11T05:00:00.000Z",
+       "period_end": "2026-11-11T06:16:59.000Z",
+       "status": "success",
+       "paid": 1,
+       "retries": 0,
+       "authorization": 1752796351,
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "next_notification": "2026-11-11T06:16:59.000Z",
+       "notification_flag": null,
+       "description": null,
+       "id": 900012,
+       "created_at": "2026-11-11T05:17:14.000Z",
+       "updated_at": "2026-11-11T05:17:14.000Z"
+      }
+     }
+    ],
+    "meta": {
+     "total": 1,
+     "skipped": 0,
+     "perPage": 20,
+     "page": 1,
+     "pageCount": 1
+    }
+   }
+  },
+  {
+   "get": "/subscription/SUB_fixture_hourly_2",
+   "answer": {
+    "status": true,
+    "message": "Subscription retrieved successfully",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "active",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T06:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "cancelledAt": null,
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoices": [
+      {
+       "id": 900007,
+       "domain": "test",
+       "status": "success",
+       "reference": "mbasub_fixture_hourly_8",
+       "receipt_number": null,
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Successful",
+       "gateway_response_code": "approved",
+       "response_code": "00",
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "created_at": "2026-11-11T05:16:48.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": "<masked:str>",
+       "metadata": {
+        "customer_id": "{CUSTOMER_ID}",
+        "kind": "subscription"
+       },
+       "log": {
+        "start_time": 1794374222,
+        "time_spent": 14,
+        "attempts": 1,
+        "errors": 0,
+        "success": true,
+        "mobile": false,
+        "input": [],
+        "history": [
+         {
+          "type": "action",
+          "message": "Attempted to pay with card",
+          "time": 13
+         },
+         {
+          "type": "success",
+          "message": "Successfully paid with card",
+          "time": 14
+         }
+        ]
+       },
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T05:17:14.000Z",
+       "createdAt": "2026-11-11T05:16:48.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      }
+     ],
+     "invoices_history": [
+      {
+       "id": 900012,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_13",
+       "amount": 1500000,
+       "period_start": "2026-11-11T05:00:00.000Z",
+       "period_end": "2026-11-11T06:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      }
+     ],
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": {
+      "subscription": 900001,
+      "integration": 100000,
+      "domain": "test",
+      "invoice_code": "INV_fixture_hourly_13",
+      "customer": 900005,
+      "transaction": 900007,
+      "amount": 1500000,
+      "period_start": "2026-11-11T05:00:00.000Z",
+      "period_end": "2026-11-11T06:16:59.000Z",
+      "status": "success",
+      "paid": true,
+      "retries": 0,
+      "authorization": 1752796351,
+      "paid_at": "2026-11-11T05:17:14.000Z",
+      "next_notification": "2026-11-11T06:16:59.000Z",
+      "notification_flag": null,
+      "description": null,
+      "id": 900012,
+      "createdAt": "2026-11-11T05:17:14.000Z",
+      "updatedAt": "2026-11-11T05:17:14.000Z"
+     },
+     "metadata": null,
+     "payments_count": 1
+    }
+   }
+  },
+  {
+   "get": "/transaction/verify/fixture_renewal_reference_hourly_10",
+   "answer": {
+    "status": true,
+    "message": "Verification successful",
+    "data": {
+     "id": 900009,
+     "domain": "test",
+     "status": "success",
+     "reference": "fixture_renewal_reference_hourly_10",
+     "receipt_number": "fixture-receipt",
+     "amount": 1532995,
+     "message": null,
+     "gateway_response": "Approved",
+     "gateway_response_code": null,
+     "response_code": null,
+     "paid_at": "2026-11-11T06:30:15.000Z",
+     "created_at": "2026-11-11T06:30:15.000Z",
+     "channel": "card",
+     "currency": "NGN",
+     "ip_address": null,
+     "metadata": {
+      "invoice_action": "create"
+     },
+     "log": null,
+     "fees": 32995,
+     "fees_split": null,
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null,
+      "receiver_bank_account_number": null,
+      "receiver_bank": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "plan": "PLN_fixture_hourly",
+     "split": {},
+     "order_id": null,
+     "paidAt": "2026-11-11T06:30:15.000Z",
+     "createdAt": "2026-11-11T06:30:15.000Z",
+     "requested_amount": 1500000,
+     "pos_transaction_data": null,
+     "source": null,
+     "fees_breakdown": null,
+     "connect": null,
+     "transaction_date": "2026-11-11T06:30:15.000Z",
+     "plan_object": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "subaccount": {}
+    }
+   }
+  },
+  {
+   "get": "/subscription/SUB_fixture_hourly_2",
+   "answer": {
+    "status": true,
+    "message": "Subscription retrieved successfully",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "active",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T07:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "cancelledAt": null,
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoices": [
+      {
+       "id": 900007,
+       "domain": "test",
+       "status": "success",
+       "reference": "mbasub_fixture_hourly_8",
+       "receipt_number": null,
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Successful",
+       "gateway_response_code": "approved",
+       "response_code": "00",
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "created_at": "2026-11-11T05:16:48.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": "<masked:str>",
+       "metadata": {
+        "customer_id": "{CUSTOMER_ID}",
+        "kind": "subscription"
+       },
+       "log": {
+        "start_time": 1794374222,
+        "time_spent": 14,
+        "attempts": 1,
+        "errors": 0,
+        "success": true,
+        "mobile": false,
+        "input": [],
+        "history": [
+         {
+          "type": "action",
+          "message": "Attempted to pay with card",
+          "time": 13
+         },
+         {
+          "type": "success",
+          "message": "Successfully paid with card",
+          "time": 14
+         }
+        ]
+       },
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T05:17:14.000Z",
+       "createdAt": "2026-11-11T05:16:48.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      },
+      {
+       "id": 900009,
+       "domain": "test",
+       "status": "success",
+       "reference": "fixture_renewal_reference_hourly_10",
+       "receipt_number": "fixture-receipt",
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Approved",
+       "gateway_response_code": null,
+       "response_code": null,
+       "paid_at": "2026-11-11T06:30:15.000Z",
+       "created_at": "2026-11-11T06:30:15.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": null,
+       "metadata": {
+        "invoice_action": "create"
+       },
+       "log": null,
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T06:30:15.000Z",
+       "createdAt": "2026-11-11T06:30:15.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      }
+     ],
+     "invoices_history": [
+      {
+       "id": 900014,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_11",
+       "amount": 1532995,
+       "period_start": "2026-11-11T06:17:00.000Z",
+       "period_end": "2026-11-11T07:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T06:30:15.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T06:30:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      },
+      {
+       "id": 900012,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_13",
+       "amount": 1500000,
+       "period_start": "2026-11-11T05:00:00.000Z",
+       "period_end": "2026-11-11T06:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      }
+     ],
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": {
+      "subscription": 900001,
+      "integration": 100000,
+      "domain": "test",
+      "invoice_code": "INV_fixture_hourly_11",
+      "customer": 900005,
+      "transaction": 900009,
+      "amount": 1532995,
+      "period_start": "2026-11-11T06:17:00.000Z",
+      "period_end": "2026-11-11T07:16:59.000Z",
+      "status": "success",
+      "paid": true,
+      "retries": 1,
+      "authorization": 1752796351,
+      "paid_at": "2026-11-11T06:30:15.000Z",
+      "next_notification": "2026-11-08T07:16:59.000Z",
+      "notification_flag": null,
+      "description": null,
+      "id": 900014,
+      "createdAt": "2026-11-11T06:30:14.000Z",
+      "updatedAt": "2026-11-11T06:30:15.000Z"
+     },
+     "metadata": null,
+     "payments_count": 2
+    }
+   }
+  },
+  {
+   "get": "/subscription/SUB_fixture_hourly_2",
+   "answer": {
+    "status": true,
+    "message": "Subscription retrieved successfully",
+    "data": {
+     "id": 900001,
+     "domain": "test",
+     "status": "non-renewing",
+     "subscription_code": "SUB_fixture_hourly_2",
+     "email_token": "<masked:str>",
+     "amount": 1500000,
+     "cron_expression": "17 * * * *",
+     "next_payment_date": "2026-11-11T07:17:00.000Z",
+     "open_invoice": null,
+     "createdAt": "2026-11-11T05:17:14.000Z",
+     "cancelledAt": "2026-11-11T07:17:00.000Z",
+     "integration": 100000,
+     "plan": {
+      "id": 900003,
+      "name": "e2e hourly test",
+      "plan_code": "PLN_fixture_hourly",
+      "description": "testing",
+      "amount": 1500000,
+      "interval": "hourly",
+      "send_invoices": true,
+      "send_sms": true,
+      "currency": "NGN"
+     },
+     "authorization": {
+      "authorization_code": "<masked:str>",
+      "bin": "<masked:str>",
+      "last4": "<masked:str>",
+      "exp_month": "<masked:str>",
+      "exp_year": "<masked:str>",
+      "channel": "card",
+      "card_type": "<masked:str>",
+      "bank": "<masked:str>",
+      "country_code": "<masked:str>",
+      "brand": "<masked:str>",
+      "reusable": true,
+      "signature": "<masked:str>",
+      "account_name": null
+     },
+     "customer": {
+      "id": 900005,
+      "first_name": null,
+      "last_name": null,
+      "email": "{EMAIL}",
+      "customer_code": "CUS_fixture_hourly",
+      "phone": null,
+      "metadata": null,
+      "risk_action": "default",
+      "international_format_phone": null
+     },
+     "invoices": [
+      {
+       "id": 900007,
+       "domain": "test",
+       "status": "success",
+       "reference": "mbasub_fixture_hourly_8",
+       "receipt_number": null,
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Successful",
+       "gateway_response_code": "approved",
+       "response_code": "00",
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "created_at": "2026-11-11T05:16:48.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": "<masked:str>",
+       "metadata": {
+        "customer_id": "{CUSTOMER_ID}",
+        "kind": "subscription"
+       },
+       "log": {
+        "start_time": 1794374222,
+        "time_spent": 14,
+        "attempts": 1,
+        "errors": 0,
+        "success": true,
+        "mobile": false,
+        "input": [],
+        "history": [
+         {
+          "type": "action",
+          "message": "Attempted to pay with card",
+          "time": 13
+         },
+         {
+          "type": "success",
+          "message": "Successfully paid with card",
+          "time": 14
+         }
+        ]
+       },
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T05:17:14.000Z",
+       "createdAt": "2026-11-11T05:16:48.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      },
+      {
+       "id": 900009,
+       "domain": "test",
+       "status": "success",
+       "reference": "fixture_renewal_reference_hourly_10",
+       "receipt_number": "fixture-receipt",
+       "amount": 1532995,
+       "message": null,
+       "gateway_response": "Approved",
+       "gateway_response_code": null,
+       "response_code": null,
+       "paid_at": "2026-11-11T06:30:15.000Z",
+       "created_at": "2026-11-11T06:30:15.000Z",
+       "channel": "card",
+       "currency": "NGN",
+       "ip_address": null,
+       "metadata": {
+        "invoice_action": "create"
+       },
+       "log": null,
+       "fees": 32995,
+       "fees_split": null,
+       "authorization": {
+        "receiver_bank_account_number": null,
+        "receiver_bank": null
+       },
+       "customer": {
+        "international_format_phone": null
+       },
+       "plan": {},
+       "subaccount": {},
+       "split": {},
+       "order_id": null,
+       "paidAt": "2026-11-11T06:30:15.000Z",
+       "createdAt": "2026-11-11T06:30:15.000Z",
+       "requested_amount": 1500000,
+       "pos_transaction_data": null,
+       "source": null,
+       "fees_breakdown": null,
+       "connect": null
+      }
+     ],
+     "invoices_history": [
+      {
+       "id": 900014,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_11",
+       "amount": 1532995,
+       "period_start": "2026-11-11T06:17:00.000Z",
+       "period_end": "2026-11-11T07:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T06:30:15.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T06:30:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      },
+      {
+       "id": 900012,
+       "domain": "test",
+       "invoice_code": "INV_fixture_hourly_13",
+       "amount": 1500000,
+       "period_start": "2026-11-11T05:00:00.000Z",
+       "period_end": "2026-11-11T06:16:59.000Z",
+       "status": "success",
+       "paid": true,
+       "paid_at": "2026-11-11T05:17:14.000Z",
+       "description": null,
+       "createdAt": "2026-11-11T05:17:14.000Z",
+       "authorization": {
+        "exp_month": null,
+        "exp_year": null,
+        "account_name": null
+       },
+       "subscription": {},
+       "customer": {
+        "international_format_phone": null
+       },
+       "transaction": {}
+      }
+     ],
+     "invoice_limit": 0,
+     "split_code": null,
+     "most_recent_invoice": {
+      "subscription": 900001,
+      "integration": 100000,
+      "domain": "test",
+      "invoice_code": "INV_fixture_hourly_11",
+      "customer": 900005,
+      "transaction": 900009,
+      "amount": 1532995,
+      "period_start": "2026-11-11T06:17:00.000Z",
+      "period_end": "2026-11-11T07:16:59.000Z",
+      "status": "success",
+      "paid": true,
+      "retries": 1,
+      "authorization": 1752796351,
+      "paid_at": "2026-11-11T06:30:15.000Z",
+      "next_notification": "2026-11-08T07:16:59.000Z",
+      "notification_flag": null,
+      "description": null,
+      "id": 900014,
+      "createdAt": "2026-11-11T06:30:14.000Z",
+      "updatedAt": "2026-11-11T06:30:15.000Z"
+     },
+     "metadata": null,
+     "payments_count": 2
+    }
+   }
+  }
+ ]
+}

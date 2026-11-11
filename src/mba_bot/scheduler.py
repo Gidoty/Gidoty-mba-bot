@@ -314,12 +314,35 @@ async def run_recovery_forever(settings: Settings) -> None:
                 logger.exception("unexpected error in stop-limit watch")
 
 
+_REMINDER_CHECK_EVERY_SECONDS = 3600.0
+_last_reminder_check = 0.0
+
+
+async def _billing_reminders(settings: Settings) -> None:
+    """Designs/03 Stage 3 start: the 3-days-before reminder for subscriptions not renewed by card. Does NOTHING unless
+    SUBSCRIPTION_BILLING_ENABLED is on, runs at most hourly (a period is only ever notified once anyway), and can never
+    affect a trading cycle: it runs after the round, and every failure is caught here."""
+    global _last_reminder_check
+    if not settings.subscription_billing_enabled:
+        return
+    now = time.monotonic()
+    if _last_reminder_check and now - _last_reminder_check < _REMINDER_CHECK_EVERY_SECONDS:
+        return
+    _last_reminder_check = now
+    try:
+        from .billing.notices import run_reminders_once
+        await run_reminders_once(settings)
+    except Exception:  # noqa: BLE001
+        logger.warning("billing reminder pass failed; it will be tried again later")
+
+
 async def run_poll_forever(settings: Settings) -> None:
     while True:
         try:
             await run_once(settings)
         except Exception:
             logger.exception("unexpected error in scheduler loop")
+        await _billing_reminders(settings)
         await asyncio.sleep(settings.poll_interval_seconds)
 
 
