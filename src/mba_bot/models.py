@@ -420,6 +420,24 @@ class SubscriptionToken(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class BillingNotice(Base):
+    """A customer-facing billing notice that was raised once for one period (designs/03 Stage 3 start): "your renewal failed",
+    "your card is about to expire", "your subscription ends soon". The unique key (customer, kind, period) is what makes a
+    notice go out ONCE per period however often Paystack redelivers the event. Holds fixed codes and dates only: no text from
+    the provider, no email, no secret. Nothing reads or writes it while SUBSCRIPTION_BILLING_ENABLED is off."""
+
+    __tablename__ = "billing_notices"
+    __table_args__ = (UniqueConstraint("customer_id", "kind", "period_key", name="uq_billing_notices_customer_kind_period"),
+                      Index("ix_billing_notices_customer_id", "customer_id"))
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)  # renewal_failed | card_expiring | period_end_soon
+    period_key: Mapped[str] = mapped_column(String(40), nullable=False)  # ISO instant of the period end the notice is about
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class BillingPayment(Base):
     """One issued payment (designs/03 section 4): what we asked for and what came back. Written by the provider
     stages, not by Stage 0. Holds no card data and no email: the reference is our own opaque token."""

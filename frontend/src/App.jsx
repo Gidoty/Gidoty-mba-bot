@@ -5,6 +5,7 @@ import AppShell from "./components/AppShell.jsx";
 import Footer from "./components/Footer.jsx";
 import HowToUseGuide from "./components/HowToUseGuide.jsx";
 import LegalConsentGate from "./components/LegalConsentGate.jsx";
+import BillingNoticeBanner from "./components/BillingNoticeBanner.jsx";
 import TelegramLinkBanner from "./components/TelegramLinkBanner.jsx";
 import { AccountProvider, useAccount } from "./context/AccountContext.jsx";
 import { PRIVACY_POLICY, RISK_DISCLOSURE, TERMS_OF_SERVICE } from "./legalContent.js";
@@ -160,6 +161,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
   return (
     <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code}>
       {needsTelegram && route !== "notifications" && <TelegramLinkBanner />}
+      <BillingNoticeBanner />
       {Page ? (
         <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} />
       ) : (

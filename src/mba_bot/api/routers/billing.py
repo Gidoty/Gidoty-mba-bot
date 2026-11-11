@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing import notices as sub_notices
 from ...billing import subscriptions as sub_billing
 from ...config import Settings
 from ...models import Customer, PaymentEvent, PaymentReference
@@ -91,8 +92,10 @@ def initialize_subscription(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "PAYSTACK_PLAN_CODE is not configured")
     if customer.has_paid:
         raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has lifetime access")
-    from ...billing.entitlement import is_entitled
-    if customer.subscription is not None and is_entitled(customer, settings=settings):
+    from ...billing.entitlement import EntitlementState, entitlement_state
+    # A customer whose paid period is still running (active, or cancelled but paid up) is refused. One in the grace window or
+    # past it MAY start again: that is how a failed renewal is paid ("pay now" in the banner and in the Telegram message).
+    if customer.subscription is not None and entitlement_state(customer, settings=settings) in (EntitlementState.ACTIVE, EntitlementState.CANCELLED):
         raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has an active subscription")
 
     reference = sub_billing.new_reference()
@@ -120,6 +123,20 @@ def initialize_subscription(
         logger.error("paystack subscription initialize failed: http %s", response.status_code)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not start payment with Paystack")
     return PaymentInitOut(authorization_url=body["data"]["authorization_url"])
+
+
+@router.get("/notice")
+def billing_notice(
+    customer: Customer = Depends(get_current_customer),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The one billing banner the dashboard may show (renewal failed, card expiring, ends soon, cancelled). Always
+    `{"notice": null}` while SUBSCRIPTION_BILLING_ENABLED is off, without reading anything."""
+    if not settings.subscription_billing_enabled:
+        return {"notice": None}
+    from datetime import datetime, timezone
+    return {"notice": sub_notices.active_notice(db, customer, settings, datetime.now(timezone.utc))}
 
 
 def apply_payment_event(db: Session, event: dict) -> None:

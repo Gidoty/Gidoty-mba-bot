@@ -53,6 +53,25 @@ async def get_json(path: str, settings: Settings) -> dict | None:
     return body
 
 
+async def post_json(path: str, body: dict, settings: Settings) -> tuple[int, dict | None]:
+    """The ONE write this application ever sends to Paystack: cancelling a superseded subscription. Nothing else is allowed.
+    Returns (HTTP status, decoded JSON or None). Raises ProviderUnavailable if Paystack cannot be reached."""
+    if path != "/subscription/disable":
+        raise ProviderUnavailable("blocked path")
+    if not settings.paystack_secret_key:
+        raise ProviderUnavailable("not configured")
+    try:
+        async with httpx.AsyncClient(timeout=READ_TIMEOUT_SECONDS) as client:
+            response = await client.post(PAYSTACK_API + path, json=body, headers={"Authorization": f"Bearer {settings.paystack_secret_key}"})
+    except httpx.HTTPError as exc:
+        raise ProviderUnavailable(type(exc).__name__) from None
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    return response.status_code, data if isinstance(data, dict) else None
+
+
 # ----------------------------------------------------------------- tolerant readers
 
 def dig(value, *path):
@@ -93,6 +112,14 @@ def event_name(event) -> str | None:
 def event_data(event) -> dict:
     data = event.get("data") if isinstance(event, dict) else None
     return data if isinstance(data, dict) else {}
+
+
+def event_items(event) -> list[dict]:
+    """`data` as a list of objects: some Paystack events (subscription.expiring_cards) carry a list, most carry one object."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if isinstance(data, list):
+        return [i for i in data if isinstance(i, dict)]
+    return [data] if isinstance(data, dict) else []
 
 
 def event_reference(data: dict) -> str | None:

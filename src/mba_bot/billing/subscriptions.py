@@ -31,6 +31,7 @@ from ..config import Settings
 from ..models import BillingPayment, Customer, PaymentEvent, Subscription, SubscriptionToken
 from ..notifications.telegram import TelegramNotifier
 from ..protection_guard import should_alert
+from . import notices
 from . import paystack_sub as ps
 from .paystack_sub import ProviderUnavailable  # noqa: F401  (re-exported for the router)
 
@@ -38,10 +39,23 @@ logger = logging.getLogger(__name__)
 
 PROVIDER = "paystack"
 SUBSCRIPTION_EVENTS = frozenset({"subscription.create", "subscription.not_renew", "subscription.disable", "invoice.payment_failed"})
+IGNORED_EVENTS = frozenset({"invoice.create", "invoice.update"})  # seen in the real test run; nothing to do: charge.success carries the payment
 ALERT_REPEAT_HOURS = 6.0
 PENDING_APPLY_ALERT_AFTER = timedelta(minutes=10)
 
+class Out(list):
+    """Alerts for the owner, as (code, customer id) pairs, plus what must happen AFTER the commit: messages to customers and
+    the cancelling of a superseded subscription. A list subclass so the alert code reads as before."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[tuple[str, str]] = []  # (customer id, fixed text)
+        self.disable: list[tuple[str, str, str | None]] = []  # (old subscription code, token, customer id)
+
+
 ALERTS = {
+    "refund_failed": "Billing: Paystack reported that a refund FAILED. The payment stays as it was; please review it.",
+    "old_subscription_not_disabled": "Billing: a customer's earlier subscription could not be cancelled after they subscribed again. Cancel it in Paystack so they are not charged twice.",
     "amount_underpaid": "Billing: a verified payment was LESS than the price. No access was granted.",
     "amount_problem": "Billing: a verified payment amount could not be explained by the price and Paystack's fee. No access was granted.",
     "payment_rejected": "Billing: a payment failed a safety check (customer, currency, plan or reference). No access was granted.",
@@ -191,29 +205,37 @@ def as_amount(tx: dict) -> int | None:
 
 async def _find_subscription(customer: Customer, row: Subscription | None, hint_code: str | None, need_new: bool,
                              settings: Settings) -> ps.SubInfo | None:
-    """The customer's Paystack subscription, as Paystack reports it now. With a new payment waiting to be applied, only an
-    active subscription will do (an old cancelled one cannot carry the new payment), so a re-subscription is found by listing."""
+    """The customer's Paystack subscription, as Paystack reports it now. With a new payment waiting to be applied, an `active`
+    subscription is preferred (an `attention` one, whose last renewal failed, is the fallback: it is what a manual retry
+    payment lands on), so a customer who subscribed AGAIN after a failed renewal is matched to the NEW subscription."""
     code = hint_code or (row.provider_subscription_ref if row is not None else None)
+    fallback = None
     if code:
         data = await ps.fetch_subscription(code, settings)
         info = ps.read_subscription(data) if data else None
-        if info is not None and (not need_new or info.status in ("active", "attention")):
-            return info
+        if info is not None and (not need_new or info.status == "active"):
+            end = _aware(row.current_period_end) if row is not None else None
+            stale = need_new and end is not None and info.next_payment_date is not None and info.next_payment_date <= end
+            if not stale:
+                return info
+            fallback = info  # Paystack's date has not moved past ours: a NEWER active subscription, if there is one, is the better match
+        elif info is not None and info.status == "attention":
+            fallback = info
     if not (settings.paystack_plan_code and need_new):
-        return None
+        return fallback
     plan_id = await ps.fetch_plan_numeric_id(settings.paystack_plan_code, settings)
     cust = await ps.fetch_customer(customer.email, settings)
     cust_id = ps.as_int(cust.get("id")) if cust else None
     if plan_id is None or cust_id is None:
-        return None
+        return fallback
     candidates = [i for i in await ps.list_customer_subscriptions(plan_id, cust_id, settings)
-                  if ps.as_str(i.get("status")) in ps.LIVE_STATUSES and ps.as_str(i.get("subscription_code"))]
-    candidates.sort(key=lambda i: (ps.as_str(i.get("status")) in ("active", "attention"),
+                  if ps.as_str(i.get("status")) in ("active", "attention") and ps.as_str(i.get("subscription_code"))]
+    candidates.sort(key=lambda i: (ps.as_str(i.get("status")) == "active",
                                    ps.parse_dt(i.get("createdAt")) or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
     if not candidates:
-        return None
+        return fallback
     data = await ps.fetch_subscription(candidates[0]["subscription_code"], settings)
-    return ps.read_subscription(data) if data else None
+    return ps.read_subscription(data) if data else fallback
 
 
 def _store_token(db: Session, row: Subscription, token: str | None, settings: Settings) -> None:
@@ -277,13 +299,26 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
         new_end = None if final_cancel else info.next_payment_date
         if new_end is not None and new_end > now + timedelta(days=ps.MAX_PERIOD_DAYS):
             new_end = None
+        old_to_disable = None
+        if unapplied_times and row is not None and row.provider_subscription_ref and row.provider_subscription_ref != info.code:
+            # The customer subscribed AGAIN (after a failed renewal). The earlier subscription is `attention`: cancel it once the new
+            # one is applied, so the customer is not charged by both. Only an `attention` one is ever cancelled.
+            old = await ps.fetch_subscription(row.provider_subscription_ref, settings)
+            old_next = ps.parse_dt(old.get("next_payment_date")) if old else None
+            if old and (old.get("status") == "attention" or (old.get("status") == "active" and old_next is not None and old_next <= now)):
+                old_to_disable = row.provider_subscription_ref  # failed, or due and never paid. A good subscription (date ahead) is never cancelled.
         if unapplied_times:
             old_end = _aware(row.current_period_end) if row is not None else None
             if new_end is None:
                 alerts.append(("period_end_out_of_range", customer.id))
                 raise RetryLater("no usable next payment date")
             if new_end <= now or (old_end is not None and new_end <= old_end):
-                raise RetryLater("period not advanced yet")  # Paystack's record has not caught up with the payment
+                # Paystack's record has not caught up with the payment (or never will, for a payment shape nobody has seen yet).
+                # Not applied, and the webhook is answered 503 so it is delivered again. A payment this old is no longer "early":
+                # the owner is told (once per 6 hours), because the customer has paid and nothing here extended them.
+                if now - unapplied_times[0] > PENDING_APPLY_ALERT_AFTER:
+                    alerts.append(("payment_pending_apply", customer.id))
+                raise RetryLater("period not advanced yet")
 
     # ---- PHASE B: writes only, no await
     if not _settle(db, customer, verdicts, now, alerts):
@@ -312,6 +347,17 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
             row.status = status_ours
     else:
         return {"ok": True}
+    if old_to_disable:
+        old_token = None
+        try:
+            tok = db.query(SubscriptionToken).filter_by(subscription_id=row.id).first()
+            old_token = crypto_utils.decrypt(tok.token_enc, key=settings.encryption_key) if tok is not None and settings.encryption_key else None
+        except crypto_utils.DecryptionFailed:
+            old_token = None
+        if old_token:
+            alerts.disable.append((old_to_disable, old_token, customer.id))
+        else:
+            alerts.append(("old_subscription_not_disabled", customer.id))
     _store_token(db, row, info.email_token, settings)
     return {"ok": True}
 
@@ -321,8 +367,19 @@ def _settle_only(db: Session, verdicts: list, now: datetime, alerts: list, custo
     return {"ok": True}
 
 
+def _begin_write(db: Session) -> None:
+    """Start the write transaction explicitly. With pysqlite a SAVEPOINT taken before any write begins (and RELEASE then commits) its
+    own transaction, so a row written inside begin_nested() would SURVIVE a later error: a payment could be recorded as processed and
+    never applied. Beginning first makes everything Phase B writes commit, or roll back, together. BEGIN IMMEDIATE takes the write
+    lock now, in a short synchronous stretch with no await. Other databases are left alone."""
+    raw = getattr(db.connection().connection, "driver_connection", None)
+    if getattr(raw, "in_transaction", None) is False:
+        raw.execute("BEGIN IMMEDIATE")
+
+
 def _settle(db: Session, customer: Customer, verdicts: list, now: datetime, alerts: list) -> bool:
     """Write the outcome of each verified payment. False if a concurrent delivery of the same payment already won."""
+    _begin_write(db)
     for bp, tx, verdict, reason in verdicts:
         if bp.id is None or db.get(BillingPayment, bp.id) is None:
             try:
@@ -389,11 +446,40 @@ async def _on_subscription_event(db: Session, name: str, data: dict, settings: S
     result = await reconcile(db, customer, settings, now, alerts, hint_code=ps.event_subscription_code(data))
     if name == "invoice.payment_failed":
         alerts.append(("renewal_failed", customer.id))  # a missed period: nothing is extended
+        row = customer.subscription
+        end = _aware(row.current_period_end) if row is not None else None
+        if row is not None and end is not None and notices.create_notice(
+                db, customer.id, notices.KIND_RENEWAL_FAILED, end.isoformat(), notices.grace_end(row, settings.subscription_grace_days)):
+            alerts.messages.append((customer.id, notices.message_for(notices.KIND_RENEWAL_FAILED, settings, row)))  # once per failed period
     return result
 
 
-async def _on_refund(db: Session, data: dict, settings: Settings, now: datetime, alerts: list) -> dict:
+async def _on_expiring_cards(db: Session, event: dict, settings: Settings, now: datetime, alerts: Out) -> dict:
+    """subscription.expiring_cards: a reminder to the customer, once per period. The event body shape is UNVERIFIED (no real capture):
+    it is read as a list or a single object, and each item is tied to a customer by subscription code or e-mail."""
+    matched = False
+    for item in ps.event_items(event):
+        customer = customer_for_event(db, item)
+        row = customer.subscription if customer is not None else None
+        end = _aware(row.current_period_end) if row is not None else None
+        if customer is None or row is None or end is None:
+            continue
+        matched = True
+        if row.provider == PROVIDER and row.status == "active" and notices.create_notice(db, customer.id, notices.KIND_CARD_EXPIRING, end.isoformat(), end):
+            alerts.messages.append((customer.id, notices.message_for(notices.KIND_CARD_EXPIRING, settings, row)))
+    if not matched:
+        alerts.append(("unknown_customer", None))
+    return {"ok": True}
+
+
+async def _on_refund(db: Session, name: str, data: dict, settings: Settings, now: datetime, alerts: list) -> dict:
+    """refund.pending / refund.processing / refund.processed / refund.failed (Paystack's written list, 11 Nov). Only a transaction
+    Paystack itself reports as `reversed` is marked refunded; `reversal pending` is not, and refund.failed only alerts."""
     ref = ps.event_reference(data)
+    if name == "refund.failed":
+        bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=ref).first() if ref else None
+        alerts.append(("refund_failed", bp.customer_id if bp is not None else None))
+        return {"ok": True}
     bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=ref).first() if ref else None
     if bp is None:
         alerts.append(("refund_unmatched", None))
@@ -412,7 +498,9 @@ async def handle_event(db: Session, event: dict, settings: Settings, now: dateti
         return None
     data = ps.event_data(event)
     now = now or datetime.now(timezone.utc)
-    alerts: list = []
+    alerts = Out()
+    if name in IGNORED_EVENTS:
+        return {"ok": True, "ignored": name}
     try:
         if name == "charge.success":
             try:
@@ -425,8 +513,10 @@ async def handle_event(db: Session, event: dict, settings: Settings, now: dateti
             result = await _on_charge(db, data, settings, now, alerts)
         elif name in SUBSCRIPTION_EVENTS:
             result = await _on_subscription_event(db, name, data, settings, now, alerts)
+        elif name == "subscription.expiring_cards":
+            result = await _on_expiring_cards(db, event, settings, now, alerts)
         elif name.startswith("refund."):
-            result = await _on_refund(db, data, settings, now, alerts)
+            result = await _on_refund(db, name, data, settings, now, alerts)
         else:
             return None
     except RetryLater:
@@ -434,4 +524,17 @@ async def handle_event(db: Session, event: dict, settings: Settings, now: dateti
         raise
     db.commit()  # release the write lock BEFORE any network wait for the alerts
     await _send_alerts(settings, alerts, now)
+    await notices.deliver_messages(db, settings, alerts.messages)
+    for code, token, customer_id in alerts.disable:
+        if not await _disable_superseded(settings, code, token):
+            await alert_owner(settings, "old_subscription_not_disabled", customer_id, now)
     return result
+
+
+async def _disable_superseded(settings: Settings, code: str, token: str) -> bool:
+    """Cancel an earlier subscription that a new one has replaced. The token is used here and never logged. Never raises."""
+    try:
+        status_code, body = await ps.post_json("/subscription/disable", {"code": code, "token": token}, settings)
+    except ps.ProviderUnavailable:
+        return False
+    return status_code == 200 and isinstance(body, dict) and body.get("status") is True
