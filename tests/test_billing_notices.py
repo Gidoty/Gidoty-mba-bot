@@ -365,13 +365,14 @@ def test_the_three_day_reminder_goes_out_once_for_non_card_subscriptions_only(ap
         add_sub(card, "paystack", now + timedelta(days=2))  # renews by itself: no reminder
         add_sub(far, "manual", now + timedelta(days=4))
         add_sub(ended, "manual", now - timedelta(hours=1))
-        assert asyncio.run(notices.run_reminders_once(load_settings(), now)) == 1
+        # two notices: the one ending in 2 days ("ends on") and the one that ended an hour ago and is in grace ("period ended on")
+        assert asyncio.run(notices.run_reminders_once(load_settings(), now)) == 2
         assert len(tg.to_customer) == 1 and "ends on" in tg.to_customer[0] and "5-day grace period" in tg.to_customer[0] and "/#/dashboard" in tg.to_customer[0]
-        assert len(tg.log) == 1
+        assert len(tg.log) == 2 and any("period ended on" in m for t, m in tg.log if t != TG)
         # again, an hour later and the next day: once per period
         assert asyncio.run(notices.run_reminders_once(load_settings(), now + timedelta(hours=1))) == 0
         assert asyncio.run(notices.run_reminders_once(load_settings(), now + timedelta(hours=12))) == 0
-        assert len(tg.to_customer) == 1 and count(BillingNotice) == 1
+        assert len(tg.to_customer) == 1 and count(BillingNotice) == 2
         # once the far one comes into range (4 days out, +1 day 2 hours later) it is notified, and the first is not notified again
         assert asyncio.run(notices.run_reminders_once(load_settings(), now + timedelta(days=1, hours=2))) == 1
         n = notice_for(manual, now + timedelta(hours=1))

@@ -29,7 +29,8 @@ export default function BillingNoticeBanner() {
     setBusy(true);
     setError(null);
     try {
-      const { authorization_url } = await api.post("/billing/subscription/initialize");
+      const path = notice.action === "pay_crypto" ? "/billing/crypto/initialize" : "/billing/subscription/initialize";
+      const { authorization_url } = await api.post(path);
       window.location.href = authorization_url;
     } catch (err) {
       setError(err.message);
@@ -48,7 +49,7 @@ export default function BillingNoticeBanner() {
             {error}
           </p>
         )}
-        {notice.action === "pay" && (
+        {(notice.action === "pay" || notice.action === "pay_crypto") && (
           <div className="mt-3">
             <button type="button" onClick={payNow} disabled={busy} className={primaryButton}>
               {busy ? "Opening payment..." : "Pay now"}
