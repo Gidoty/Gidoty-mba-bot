@@ -402,6 +402,33 @@ def test_wrong_or_malformed_signatures_never_verify_and_never_raise(secret, head
     assert npay.verify_signature(secret, raw, header) is None
 
 
+@pytest.mark.parametrize("header", ["é", "\u00e9" * 128, "０" * 128, "ab\u0000cd", " \u2028 ", "\ud800".encode("utf-8", "surrogatepass").decode("utf-8", "surrogatepass")])
+def test_a_non_ascii_signature_header_is_no_match_and_never_raises(header):
+    assert npay.verify_signature(SECRET, b'{"a":1}', header) is None
+
+
+def test_non_ascii_characters_are_never_ignored_so_a_valid_signature_with_junk_does_not_verify():
+    sig = hmac_of('{"a":1}')
+    assert npay.verify_signature(SECRET, b'{"a":1}', sig) is not None
+    for junk in (sig + "é", "é" + sig, sig[:60] + "é" + sig[60:], sig + "\u200b", sig.replace("a", "\uff41", 1) if "a" in sig else sig + "\uff41"):
+        assert npay.verify_signature(SECRET, b'{"a":1}', junk) is None
+
+
+def test_enforce_answers_400_and_observe_logs_for_a_non_ascii_signature_header(app, fake):
+    with app() as c:
+        cid = customer(c)
+        issue(cid)
+        fake.payments["5077125051"] = record("mbacrypto_ref1")
+        body = json.dumps(trigger("mbacrypto_ref1")).encode()
+        for raw_header in ("é".encode("utf-8"), "é".encode("latin-1") * 128, b"\xff\xfe", "０".encode("utf-8") * 128):  # the client sends bytes; the server reads them as latin-1 text
+            r = c.post("/api/billing/nowpayments/ipn", content=body, headers={"x-nowpayments-sig": raw_header})
+            assert r.status_code == 400, raw_header
+        assert fake.calls == [] and sub_row(cid) is None and bp_state()[0] == "pending"
+    with app(NOWPAYMENTS_IPN_MODE="observe") as c2:
+        r = c2.post("/api/billing/nowpayments/ipn", content=body, headers={"x-nowpayments-sig": "é".encode("utf-8")})
+        assert r.status_code == 200 and r.json() == {"ok": True, "observed": "bad_signature"} and fake.calls == []
+
+
 def test_a_tampered_body_does_not_verify():
     sig = hmac_of('{"actually_paid":10.04,"order_id":"x","payment_status":"waiting"}')
     assert npay.verify_signature(SECRET, b'{"order_id":"x","payment_status":"waiting","actually_paid":10.04}', sig) is not None
