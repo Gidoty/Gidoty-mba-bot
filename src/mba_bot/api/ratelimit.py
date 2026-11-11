@@ -13,7 +13,7 @@ from collections import deque
 from starlette.responses import JSONResponse
 
 # Never limited: the providers' callbacks and the health probe.
-EXEMPT_PATHS = frozenset({"/api/health", "/api/billing/webhook", "/api/telegram/webhook"})
+EXEMPT_PATHS = frozenset({"/api/health", "/api/billing/webhook", "/api/billing/nowpayments/ipn", "/api/telegram/webhook"})
 AUTH_PATHS = frozenset({"/api/auth/login", "/api/auth/signup"})
 _MAX_KEYS = 20_000
 

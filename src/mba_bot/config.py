@@ -76,6 +76,31 @@ _VERIFY_ENFORCE = ("1", "true", "yes", "on", "enforce")
 _VERIFY_OFF = ("", "0", "false", "no", "off")
 
 
+def parse_ipn_mode(raw: str | None) -> str:
+    """off | observe | enforce. Anything unrecognised is OFF, never enforce by accident."""
+    value = (raw or "").strip().lower()
+    return value if value in ("observe", "enforce") else "off"
+
+
+def _price_from_env(raw: str | None) -> str:
+    """The USD price as a decimal string. A malformed, zero or negative value falls back to 10 (the owner's decision)."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        value = Decimal((raw or "10").strip())
+    except InvalidOperation:
+        return "10"
+    return str(value) if value.is_finite() and value > 0 else "10"
+
+
+def _tolerance_from_env(raw: str | None) -> float:
+    """The underpay tolerance in percent: 0 to 10, malformed or out of range means the decided 1.0."""
+    try:
+        value = float((raw or "1.0").strip())
+    except ValueError:
+        return 1.0
+    return value if 0.0 <= value <= 10.0 else 1.0
+
+
 def parse_verify_mode(raw: str | None) -> str:
     """off | log | enforce. Anything unrecognised is OFF (today's behaviour), never enforce by accident."""
     value = (raw or "").strip().lower()
@@ -291,6 +316,17 @@ class Settings:
     paystack_plan_amount: int = 1_500_000
     # Telegram chat that receives billing alerts for the owner (failed renewals, unexplained amounts, refunds). Unset = log only.
     billing_alert_chat_id: str | None = None
+    # Stage 2 (NOWPayments, USDT on BSC). Every one of these is read only while SUBSCRIPTION_BILLING_ENABLED is on, and the crypto
+    # routes also need NOWPAYMENTS_ENABLED. Default OFF. The API key and the IPN secret are entered by the owner in the server .env
+    # himself; they are never in git, logs, messages or chat. See docs/security/billing_nowpayments.md.
+    nowpayments_enabled: bool = False
+    nowpayments_ipn_mode: str = "off"  # off | observe | enforce (anything unrecognised is off)
+    nowpayments_api_key: str | None = field(default=None, repr=False)
+    nowpayments_ipn_secret: str | None = field(default=None, repr=False)
+    nowpayments_pay_currency: str | None = None  # the code found by the probe, for example usdtbsc. Unset = the routes answer 503
+    nowpayments_price_usd: str = "10"  # a decimal string
+    nowpayments_underpay_tolerance_pct: float = 1.0  # owner decision D8
+    nowpayments_ipn_url: str | None = None  # the public URL of POST /api/billing/nowpayments/ipn, sent with each invoice
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
     # with all of them off the application behaves exactly as before they existed.
     # F-01: verify each Paystack charge with Paystack's API, match the reference issued at
@@ -429,6 +465,14 @@ def load_settings() -> Settings:
         paystack_plan_code=os.environ.get("PAYSTACK_PLAN_CODE") or None,
         paystack_plan_amount=max(0, _env_int("PAYSTACK_PLAN_AMOUNT", 1_500_000)),
         billing_alert_chat_id=os.environ.get("BILLING_ALERT_CHAT_ID") or None,
+        nowpayments_enabled=_env_bool("NOWPAYMENTS_ENABLED", False),
+        nowpayments_ipn_mode=parse_ipn_mode(os.environ.get("NOWPAYMENTS_IPN_MODE")),
+        nowpayments_api_key=os.environ.get("NOWPAYMENTS_API_KEY") or None,
+        nowpayments_ipn_secret=os.environ.get("NOWPAYMENTS_IPN_SECRET") or None,
+        nowpayments_pay_currency=(os.environ.get("NOWPAYMENTS_PAY_CURRENCY") or "").strip().lower() or None,
+        nowpayments_price_usd=_price_from_env(os.environ.get("NOWPAYMENTS_PRICE_USD")),
+        nowpayments_underpay_tolerance_pct=_tolerance_from_env(os.environ.get("NOWPAYMENTS_UNDERPAY_TOLERANCE_PCT")),
+        nowpayments_ipn_url=os.environ.get("NOWPAYMENTS_IPN_URL") or None,
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),

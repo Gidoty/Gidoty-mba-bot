@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing import nowpayments as now_pay
 from ...billing import notices as sub_notices
 from ...billing import subscriptions as sub_billing
 from ...config import Settings
@@ -123,6 +124,43 @@ def initialize_subscription(
         logger.error("paystack subscription initialize failed: http %s", response.status_code)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "could not start payment with Paystack")
     return PaymentInitOut(authorization_url=body["data"]["authorization_url"])
+
+
+@router.post("/crypto/initialize", response_model=PaymentInitOut)
+def initialize_crypto(
+    customer: Customer = Depends(get_current_customer),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> PaymentInitOut:
+    """Start a NOWPayments (USDT on BSC) invoice for one month (designs/03 addendum 5). 404 while SUBSCRIPTION_BILLING_ENABLED or
+    NOWPAYMENTS_ENABLED is off, 503 until the API key, currency and IPN URL are configured."""
+    if not (settings.subscription_billing_enabled and settings.nowpayments_enabled):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    try:
+        return PaymentInitOut(authorization_url=now_pay.start_checkout(db, customer, settings))
+    except now_pay.NotConfigured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "crypto payment is not available yet") from None
+    except now_pay.CheckoutRefused as exc:
+        raise HTTPException(exc.status_code, exc.detail) from None
+
+
+@router.post("/nowpayments/ipn", status_code=status.HTTP_200_OK)
+async def nowpayments_ipn(request: Request, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict:
+    """NOWPayments' payment notification. Raw bytes first: the signature is checked before anything is read. 404 while off. Answers 200
+    for every final outcome and 503 only when NOWPayments could not be asked, so it sends the notification again."""
+    if not (settings.subscription_billing_enabled and settings.nowpayments_enabled):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    raw = await request.body()
+    try:
+        return await now_pay.handle_ipn(db, raw, request.headers.get(now_pay.SIGNATURE_HEADER), settings)
+    except now_pay.BadSignature:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid signature") from None
+    except (now_pay.NotConfigured, sub_billing.ProviderUnavailable, sub_billing.RetryLater) as exc:
+        logger.warning("nowpayments ipn not settled yet (%s); asking NOWPayments to retry", type(exc).__name__)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "not settled yet") from None
+    except Exception:  # noqa: BLE001 - never silent, never a 500 with a body
+        logger.error("nowpayments ipn handler failed")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
 
 
 @router.get("/notice")

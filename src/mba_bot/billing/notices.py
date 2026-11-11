@@ -36,8 +36,11 @@ KIND_RENEWAL_FAILED = "renewal_failed"
 KIND_CARD_EXPIRING = "card_expiring"
 KIND_PERIOD_END = "period_end_soon"
 KIND_CANCELLED = "cancelled"
+KIND_PERIOD_ENDED = "period_ended"  # no provider failure event exists for crypto: the period simply ended unpaid
 REMINDER_DAYS = 3
 CARD_PROVIDER = "paystack"
+CRYPTO_PROVIDER = "nowpayments"
+CRYPTO_RENEWAL_WINDOW_DAYS = 7  # keep equal to nowpayments.RENEWAL_WINDOW_DAYS (D10)
 
 # The cancel wording (owner request, 11 Nov): Paystack's own cancel page says access is lost; ours must not.
 CANCEL_NOTE = "Cancelling stops the next charge. Your access continues until the end of the month you have already paid for."
@@ -69,6 +72,11 @@ def message_for(kind: str, settings: Settings, sub: Subscription, *, link: bool 
         tail = f" Your dashboard: {dashboard_link(settings)}" if link else ""
         return (f"Your Metabridge subscription ends on {_date(end)}. Renew before then to avoid a break. "
                 f"If you do not, your access continues for the {grace} after that date.{tail}")
+    if kind == KIND_PERIOD_ENDED:
+        gend = grace_end(sub, settings.subscription_grace_days)
+        tail = f"pay now from your dashboard: {dashboard_link(settings)}" if link else "pay now."
+        return (f"Your Metabridge subscription period ended on {_date(end)}. Your access continues for the {grace}, until {_date(gend)}. "
+                f"To keep your access, {tail}")
     if kind == KIND_CARD_EXPIRING:
         return (f"The card used for your Metabridge subscription is about to expire. Please update it before your next payment on "
                 f"{_date(end)} so the renewal can go through. If a renewal fails, your access continues for the {grace}. "
@@ -100,15 +108,27 @@ def active_notice(db: Session, customer: Customer, settings: Settings, now: date
     state = entitlement_state(customer, settings=settings, now=now)
     stored = {n.kind for n in db.query(BillingNotice).filter_by(customer_id=customer.id, period_key=end.isoformat()).all()
               if _aware(n.expires_at) > now}
-    can_pay = state in (EntitlementState.GRACE, EntitlementState.EXPIRED)  # the same rule the initialize route applies
+    crypto = sub.provider == CRYPTO_PROVIDER
+    in_window = state == EntitlementState.ACTIVE and end - now <= timedelta(days=CRYPTO_RENEWAL_WINDOW_DAYS)
+    # The same rule the matching initialize route applies: card (Paystack) from the grace window onwards; crypto also from 7 days before the end.
+    if crypto:
+        can_pay = state in (EntitlementState.GRACE, EntitlementState.EXPIRED) or in_window
+        pay_action = "pay_crypto"
+    else:
+        can_pay = state in (EntitlementState.GRACE, EntitlementState.EXPIRED)
+        pay_action = "pay"
     if KIND_RENEWAL_FAILED in stored and state in (EntitlementState.GRACE, EntitlementState.ACTIVE):
         return {"kind": KIND_RENEWAL_FAILED, "message": message_for(KIND_RENEWAL_FAILED, settings, sub, link=False),
-                "action": "pay" if can_pay else None}
+                "action": pay_action if can_pay else None}
+    if KIND_PERIOD_ENDED in stored and state == EntitlementState.GRACE:
+        return {"kind": KIND_PERIOD_ENDED, "message": message_for(KIND_PERIOD_ENDED, settings, sub, link=False),
+                "action": pay_action if can_pay else None}
     if KIND_CARD_EXPIRING in stored and state == EntitlementState.ACTIVE:
         return {"kind": KIND_CARD_EXPIRING, "message": message_for(KIND_CARD_EXPIRING, settings, sub), "action": None}
     if (state == EntitlementState.ACTIVE and sub.provider != CARD_PROVIDER and sub.status == "active"
             and now < end <= now + timedelta(days=REMINDER_DAYS)):
-        return {"kind": KIND_PERIOD_END, "message": message_for(KIND_PERIOD_END, settings, sub, link=False), "action": None}
+        return {"kind": KIND_PERIOD_END, "message": message_for(KIND_PERIOD_END, settings, sub, link=False),
+                "action": pay_action if can_pay else None}
     if state == EntitlementState.CANCELLED:
         return {"kind": KIND_CANCELLED, "message": message_for(KIND_CANCELLED, settings, sub), "action": None}
     return None
@@ -157,13 +177,29 @@ def due_period_end_reminders(db: Session, settings: Settings, now: datetime) -> 
     return out
 
 
+def due_period_ended_notices(db: Session, settings: Settings, now: datetime) -> list[tuple[str, str]]:
+    """Raise a period_ended notice (once per period) for every active subscription not paid by card renewal whose period has ended
+    and whose grace window is still open. Crypto has no failure event, so the end of the period is the trigger."""
+    out: list[tuple[str, str]] = []
+    rows = (db.query(Subscription).filter(Subscription.provider.isnot(None), Subscription.provider != CARD_PROVIDER,
+                                          Subscription.status == "active").all())
+    for sub in rows:
+        end = _aware(sub.current_period_end)
+        gend = grace_end(sub, settings.subscription_grace_days) if end is not None else None
+        if end is None or gend is None or not (end <= now < gend):
+            continue
+        if create_notice(db, sub.customer_id, KIND_PERIOD_ENDED, end.isoformat(), gend):
+            out.append((sub.customer_id, message_for(KIND_PERIOD_ENDED, settings, sub)))
+    return out
+
+
 async def run_reminders_once(settings: Settings, now: datetime | None = None) -> int:
     """One pass of the reminder job. Safe to run as often as you like: a period is only ever notified once."""
     if not settings.subscription_billing_enabled:
         return 0
     now = now or datetime.now(timezone.utc)
     with session_scope() as db:
-        due = due_period_end_reminders(db, settings, now)
+        due = due_period_end_reminders(db, settings, now) + due_period_ended_notices(db, settings, now)
         targets = [(telegram_target(db, cid), text) for cid, text in due]
     for target, text in targets:  # after the commit
         await send_to_customer(settings, target, text)

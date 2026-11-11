@@ -60,6 +60,8 @@ def secrets_from_settings(settings) -> list[str]:
         "demo_futures_api_key",
         "demo_futures_api_secret",
         "telegram_webhook_secret",
+        "nowpayments_api_key",
+        "nowpayments_ipn_secret",
     )
     values = [getattr(settings, name, None) for name in names]
     return [v for v in values if isinstance(v, str) and len(v) >= _MIN_SECRET_LENGTH]
