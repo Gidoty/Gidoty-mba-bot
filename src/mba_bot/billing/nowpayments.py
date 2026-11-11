@@ -161,14 +161,17 @@ def verify_signature(secret: str | None, raw: bytes, header: str | None) -> str 
     """The label of the serialisation that matched, or None. Never raises on a malformed body."""
     if not secret or not header:
         return None
-    given = header.strip().lower()
+    try:
+        given = header.strip().lower().encode("ascii")  # a hex digest is ASCII: anything else cannot match (and compare_digest raises on a non-ASCII str)
+    except UnicodeEncodeError:
+        return None
     try:
         variants = signature_variants(raw)
     except (ValueError, RecursionError):
         return None
     matched = None
     for label, body in variants:  # every variant is compared; no early exit
-        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha512).hexdigest()
+        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha512).hexdigest().encode("ascii")
         if hmac.compare_digest(expected, given) and matched is None:
             matched = label
     return matched
