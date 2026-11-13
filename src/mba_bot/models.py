@@ -438,6 +438,27 @@ class BillingNotice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class StrategyPause(Base):
+    """A strategy paused for one account and mode by a strategy guard (docs/safety/strategy_guards.md): a loss streak, or a negative
+    expectancy over the last trades. Only written in enforce mode. A pause is active while `released_at` is empty and `resume_at` is
+    empty or in the future; an expectancy pause has no `resume_at`, so it ends ONLY when the owner releases it
+    (`python -m mba_bot.strategy_pause release`). After a pause ends, only trades closed after that moment count towards the same
+    guard again. Holds codes, numbers and times only: no secret, no e-mail."""
+
+    __tablename__ = "strategy_pauses"
+    __table_args__ = (Index("ix_strategy_pauses_account_strategy", "account_id", "strategy_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    strategy_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    code: Mapped[str] = mapped_column(String(40), nullable=False)  # strategy_loss_streak_pause | strategy_expectancy_pause
+    is_paper: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    paused_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    resume_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detail: Mapped[str | None] = mapped_column(String(200), nullable=True)  # short numbers, for the owner
+
+
 class BillingPayment(Base):
     """One issued payment (designs/03 section 4): what we asked for and what came back. Written by the provider
     stages, not by Stage 0. Holds no card data and no email: the reference is our own opaque token."""

@@ -119,6 +119,13 @@ _GUARD_OFF = ("0", "false", "no", "off")
 GUARD_MODES = ("off", "observe", "enforce")
 
 
+def parse_strategy_guards_mode(raw: str | None) -> str:
+    """off | observe | enforce for the strategy guards. UNSET, empty or unrecognised is OFF: this family changes what a customer's bot
+    does only when the owner asks for observe or enforce by name. Never enforce by accident."""
+    value = (raw or "").strip().lower()
+    return value if value in ("observe", "enforce") else "off"
+
+
 def parse_guard_mode(raw: str | None) -> str:
     """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
     value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
@@ -303,6 +310,24 @@ class Settings:
     protection_unclassified_window_hours: float = 24.0
     # How often the same blocking reason may alert the customer again (in memory; one alert after a restart).
     protection_alert_repeat_hours: float = 6.0
+    # Strategy guards (docs/safety/strategy_guards.md). off = the bot behaves exactly as before (the default); observe = every guard
+    # computes and LOGS what it would have refused, nothing is blocked and nothing is written; enforce = a guard that fires blocks the
+    # NEW entry (open positions are never touched). A threshold of 0 switches that one guard off. The operator kill switch is checked
+    # first and stays authoritative: a guard can only ever add a refusal, never lift one. All numbers are provisional until tuned.
+    strategy_guards_mode: str = "off"
+    ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
+    ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
+    fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
+    fee_guard_fee_bps: float = 5.0  # taker fee per side, basis points (research assumption; the account's real tier is not read here)
+    fee_guard_slippage_bps: float = 11.0  # round-trip slippage, basis points (research assumption: 3 on entry, 8 on a stop exit)
+    fee_guard_expected_move_atr: float = 1.0  # expected gross move of a trade in ATRs (the strategy has no profit target: a proxy)
+    max_open_positions: int = 1  # open positions per account across all strategies (0 = no cap). Structurally 1 today (unique index)
+    max_total_risk_pct: float = 2.0  # sum of the risk % of open positions plus the new one (0 = no cap)
+    strategy_daily_loss_pct: float = 0.0  # stop NEW entries for the rest of the UTC day once the day's net loss reaches this % of capital (0 = off)
+    strategy_pause_after_losses: int = 0  # pause the strategy for the account after this many consecutive net losses (0 = off)
+    strategy_streak_pause_hours: float = 24.0  # a loss-streak pause lasts this long (0 = until the owner releases it)
+    strategy_expectancy_window: int = 20  # pause, until the owner releases it, if net expectancy over this many trades is negative (0 = off)
+    owner_alert_chat_id: str | None = None  # Telegram chat for owner alerts from the strategy guards (falls back to BILLING_ALERT_CHAT_ID)
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
     # Subscription billing, Stage 0 (billing/entitlement.py). OFF = is_entitled() is exactly Customer.has_paid and nothing else changes.
@@ -459,6 +484,20 @@ def load_settings() -> Settings:
         protection_fail_limit=max(0, _env_int("PROTECTION_FAIL_LIMIT", 2)),
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
+        strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("STRATEGY_GUARDS_MODE")),
+        ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
+        ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
+        fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),
+        fee_guard_fee_bps=min(100.0, max(0.0, _env_float("FEE_GUARD_FEE_BPS", 5.0))),
+        fee_guard_slippage_bps=min(500.0, max(0.0, _env_float("FEE_GUARD_SLIPPAGE_BPS", 11.0))),
+        fee_guard_expected_move_atr=min(20.0, max(0.0, _env_float("FEE_GUARD_EXPECTED_MOVE_ATR", 1.0))),
+        max_open_positions=min(50, max(0, _env_int("MAX_OPEN_POSITIONS", 1))),
+        max_total_risk_pct=min(100.0, max(0.0, _env_float("MAX_TOTAL_RISK_PCT", 2.0))),
+        strategy_daily_loss_pct=min(100.0, max(0.0, _env_float("STRATEGY_DAILY_LOSS_PCT", 0.0))),
+        strategy_pause_after_losses=min(100, max(0, _env_int("STRATEGY_PAUSE_AFTER_LOSSES", 0))),
+        strategy_streak_pause_hours=min(8760.0, max(0.0, _env_float("STRATEGY_STREAK_PAUSE_HOURS", 24.0))),
+        strategy_expectancy_window=min(1000, max(0, _env_int("STRATEGY_EXPECTANCY_WINDOW", 20))),
+        owner_alert_chat_id=(os.environ.get("OWNER_ALERT_CHAT_ID") or os.environ.get("BILLING_ALERT_CHAT_ID") or None),
         pnl_labels=_env_bool("PNL_LABELS", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         subscription_grace_days=_grace_days_from_env(),
