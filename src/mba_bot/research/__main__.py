@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 import os
 import sys
 from pathlib import Path
@@ -106,6 +107,17 @@ def main(argv: list[str] | None = None) -> int:
 
     tc = sub.add_parser("telemetry-check", help="read-only telemetry health check")
     tc.add_argument("--database", required=True)
+
+    g3 = sub.add_parser("guards", help="Phase 3: measure the strategy guards (tune on the first 4 months of 6, then ONE look at the last 2)")
+    g3.add_argument("action", choices=["plan", "tune", "confirm"])
+    g3.add_argument("--root", default="research_data")
+    g3.add_argument("--out", default="research_out/guards")
+    g3.add_argument("--mode", choices=["replay", "closed"], default="replay")
+    g3.add_argument("--pairs", default=None, help="comma list (default BTC, ETH, BNB, XRP)")
+    g3.add_argument("--expect-plan-hash", default=None, help="refuse to run if the plan differs from the registered one")
+    g3.add_argument("--confirm", action="store_true", help="confirm: required; opens the sealed final months, once")
+    g3.add_argument("--reason", default="", help="confirm: why it is being opened")
+    g3.add_argument("--second-look", action="store_true", help="confirm: allow a second look; the result is labelled contaminated")
 
     rg = sub.add_parser("registry", help="show the experiment ledger")
     rg.add_argument("--path", default="research_out/trials.jsonl")
@@ -310,6 +322,26 @@ def main(argv: list[str] | None = None) -> int:
         from . import telemetry_check as TC
 
         print(TC.render(TC.check(args.database)), end="")
+        return 0
+
+    if args.cmd == "guards":
+        from . import phase3_guards as P3
+        from .engine import MODE_CLOSED, MODE_REPLAY
+
+        opts = P3.Phase3Options(dev_pairs=tuple(_pairs(args.pairs, P3.ORIGINAL_FOUR)), mode=MODE_REPLAY if args.mode == "replay" else MODE_CLOSED)
+        out = Path(args.out)
+        say = lambda m: print(m, flush=True)
+        if args.action == "plan":
+            print(json.dumps({"plan_hash": P3.plan_hash(opts), "rules_sha256": P3.rules_sha256(), "arms": [a.name for a in opts.arms], "rule": asdict(opts.rule),
+                              "months": [opts.total_months, opts.sealed_months, opts.embargo_days], "pairs": list(opts.dev_pairs), "mode": opts.mode}, indent=1))
+            return 0
+        if args.action == "tune":
+            res = P3.run_tune(Path(args.root), out, opts, expect_plan_hash=args.expect_plan_hash, progress=say)
+            print((out / "tune_report.md").read_text())
+            print(f"written: {out / 'tune_results.json'}, {out / 'selected.json'}, {out / 'tune_report.md'}")
+            return 0
+        res = P3.run_confirm(Path(args.root), out, opts, reason=args.reason, confirm=args.confirm, second_look=args.second_look, progress=say)
+        print((out / "final_report.md").read_text())
         return 0
 
     if args.cmd == "registry":
