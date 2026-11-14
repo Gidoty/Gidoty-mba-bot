@@ -38,6 +38,9 @@ Rollback: set `STRATEGY_GUARDS_MODE` to off (or unset it) and restart. Pauses al
 * Reason codes (decision log and journal): `ema_gap_below_minimum` (a signal filter, never sent to the customer), `stop_loss_cooldown`, `fee_guard_expected_move_too_small`, `portfolio_cap_reached`, `strategy_daily_loss_limit`, `strategy_loss_streak_pause`, `strategy_expectancy_pause`, `strategy_paused`, `strategy_guard_unreadable`.
 * Customer wording is fixed text with no numbers from the customer's own results.
 
+## One rules file, shared with the backtester
+The pure decisions (every boundary above) live in `src/mba_bot/strategy_guard_rules.py`: plain numbers in, a verdict out, no database, configuration, network or clock (a test pins its imports). The live path and the research backtester use this same file; the research branch carries a byte-identical copy and its pre-registration pins the hash. Current SHA-256: `3338f7d35d429705dd25ab4d4f701e47dd4dfddc69f102bdfca82aebf29bec3d`. A test fails if this line is stale.
+
 ## Weaknesses, mitigations, effect and what remains
 Backtest effect: NOT MEASURED for every row. A runner that tunes on the first 4 months only and reports the last 2 months untouched, under a
 new pre-registration, is delivered separately on the research branch; the owner runs it on his own data and the column is filled from his

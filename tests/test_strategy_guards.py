@@ -441,10 +441,8 @@ def test_a_pause_is_saved_even_if_the_rest_of_the_cycle_fails(db, monkeypatch, o
 
 def test_enforce_daily_loss_limit(db, monkeypatch, owner):
     st, client, aid = setup_cycle(db, monkeypatch, strategy_guards_mode="enforce", strategy_daily_loss_pct=3.0, strategy_expectancy_window=0)
-    now = datetime.now(U)
-    add_trades(aid, [trade_row(pnl=-35.0, closed=now - timedelta(minutes=1), entry=100.0, stop=90.0)])  # allocated capital in the fixture is 1000
-    if now.hour == 0 and now.minute < 2:
-        pytest.skip("too close to UTC midnight")
+    midnight = datetime.now(U).replace(hour=0, minute=0, second=0, microsecond=0)  # a trade closed at 00:00:00 UTC today counts, whatever the time of day
+    add_trades(aid, [trade_row(pnl=-35.0, closed=midnight, entry=100.0, stop=90.0)])  # allocated capital in the fixture is 1000
     n = run_cycle(aid, st)
     assert orders(client) == [] and ("rejected", g.R_DAILY_LOSS) in decisions() and any("daily loss limit" in t for t in n.texts)
     assert len(owner) == 1
@@ -567,3 +565,22 @@ def test_the_weakness_table_covers_every_strategy_and_says_what_remains():
     doc = (ROOT / "docs/safety/strategy_guards.md").read_text()
     for needle in ("ema_cross_atr_v1", "rsi_mr_v1", "Donchian", "False crossovers", "Late entries", "Fee drag", "Losing streaks", "Overfitting", "stops working", "Remaining risk", "NOT MEASURED"):
         assert needle in doc, needle
+
+
+# ====================================================================== the pure rules are one file, shared with the backtester
+def test_the_rules_module_is_pure_and_its_hash_is_written_in_the_doc():
+    import ast
+    import hashlib
+    path = ROOT / "src/mba_bot/strategy_guard_rules.py"
+    tree = ast.parse(path.read_text())
+    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module} | {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert mods <= {"__future__", "dataclasses", "datetime"}, mods  # no database, configuration, network, clock or order code
+    assert "datetime.now" not in path.read_text() and "time.time" not in path.read_text()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest in (ROOT / "docs/safety/strategy_guards.md").read_text(), "update the SHA-256 in docs/safety/strategy_guards.md (and re-register the backtest) when the rules change"
+
+
+def test_the_live_module_re_exports_the_same_rule_objects():
+    from mba_bot import strategy_guard_rules as rules
+    for name in ("GuardHit", "ema_gap_hit", "fee_guard_hit", "portfolio_hit", "cooldown_hit", "daily_loss_hit", "loss_streak_hit", "expectancy_hit", "consecutive_losses", "ALL_CODES", "MESSAGES"):
+        assert getattr(g, name) is getattr(rules, name), name
