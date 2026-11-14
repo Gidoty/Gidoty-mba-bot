@@ -8,16 +8,18 @@ customer's bad data or exchange error never stops another customer's loop.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, kill_switch, lifecycle, pair_catalog, pnl_labels, protection_guard, strategy_guards, telemetry
+from . import exchange, kill_switch, lifecycle, multi_trade, pair_catalog, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
 from .crypto_utils import decrypt
-from .db import get_open_trade, get_trades_closed_on
+from .db import get_open_trade, get_trades_closed_on, list_open_trades
+from .indicators import atr as atr_series
 from .models import PROTECTION_PROTECTED, TRADE_OPEN, Trade, TradingAccount
 from .notifications import Notifier
 from .onboarding import TradingMode, resolve_trading_mode
@@ -93,8 +95,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     # would silently switch a real open position onto testnet
     # credentials/market data and skip its real closing order - leaving
     # it resting on Binance with zero stop-loss/exit monitoring.
-    open_trade = get_open_trade(session, account.id)
-    effective_is_paper = open_trade.is_paper if open_trade is not None else is_paper
+    open_trades = list_open_trades(session, account.id)
+    open_trade = open_trades[0] if open_trades else None
+    # With more than one open trade (a paper multi-trade account, or an unexpected live pair) the client is a live one if ANY is live.
+    effective_is_paper = all(t.is_paper for t in open_trades) if open_trades else is_paper
 
     api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper)
     if api_key is None:
@@ -125,6 +129,12 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             withdrawal_detected = await exchange.has_withdrawal_permission(client)
             if withdrawal_detected:
                 await _flag_withdrawal_block(session, account, notifier, now=now)
+
+        if _use_multi(account, settings, is_paper, open_trades):
+            # More than one trade, or a PAPER multi-trade account (MAX_OPEN_POSITIONS above 1 and an owner-set pair list). With
+            # the defaults (one trade, one pair) this is never true and the single-trade path below runs exactly as before.
+            await _process_multi(session, account, client, open_trades, settings, notifier, is_paper=is_paper, now=now)
+            return
 
         if open_trade is not None and not open_trade.is_paper:
             # A live position is reconciled against Binance FIRST, before
@@ -343,14 +353,14 @@ def _limit_message(account: TradingAccount, hit) -> str:
     )
 
 
-async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog) -> bool:
+async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog, pair: str | None = None) -> bool:
     """The strategy guards (strategy_guards.py), reached only when STRATEGY_GUARDS_MODE is observe or enforce. True if a NEW entry is
     refused here (and the refusal has been recorded). The operator kill switch was checked before this and stays authoritative: this
     can only add a refusal. In observe mode nothing is blocked and nothing is written; in enforce mode the first guard that fires blocks
     the entry, a pause guard also writes its pause, and the owner is told once. An unreadable guard input refuses in enforce mode."""
     mode = settings.strategy_guards_mode
     try:
-        hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now)
+        hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now, pair=pair)
     except Exception as exc:  # noqa: BLE001 - fail closed in enforce, silent in observe; never raise into the cycle
         logger.warning("account %s: strategy guards could not be evaluated (%s)", account.id, type(exc).__name__)
         if mode != "enforce":
@@ -620,7 +630,8 @@ def _note_scan(scan_out: dict, scanned: list, ranked: list, settings: Settings) 
         pass
 
 
-async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None):
+async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None):
+    pair = pair or account.pair  # a multi-trade paper account enters on the pair it scanned; every other caller passes none
     if signal.signal == SignalType.BULLISH_CROSSOVER:
         side = "long"
     elif signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type == "futures":
@@ -632,13 +643,13 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         # Research telemetry only; no-op unless TRADE_TELEMETRY is on. Never raises.
         telemetry.log_decision(
             session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=outcome, reason=reason,
-            is_paper=is_paper, ctx=tctx, now=now, detail=detail or None,
+            is_paper=is_paper, ctx=tctx, now=now, detail=detail or None, pair=pair,
         )
 
     if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
         return
 
-    if account.pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
+    if pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
         # Fail closed: never open a NEW position on a pair that is not currently selectable for
         # this market (e.g. an extra Futures pair after the expansion was switched off). Managing
         # an already-open trade never goes through here - it always uses the trade's own pair.
@@ -649,7 +660,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         return
 
     if settings.strategy_guards_mode != "off" and await _strategy_guards_block(
-        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog
+        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog, pair=pair
     ):
         return
 
@@ -734,6 +745,14 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     if size.quantity <= 0:
         _tlog(telemetry.REJECTED, telemetry.R_SIZE_ZERO)
         return
+
+    if multi is not None and is_paper:
+        size, refusal = _multi_paper_limits(session, account, settings, size, current_price, multi)
+        if refusal is not None:
+            code, detail = refusal
+            _tlog(telemetry.REJECTED, code, **detail)
+            logger.info("account %s: multi-trade entry on %s skipped (%s) %s", account.id, pair, code, detail)
+            return
 
     if not is_paper:
         # The risk-% formula alone has no opinion on notional - a tight
@@ -897,7 +916,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         stop_loss_price=stop_price,
         status=TRADE_OPEN,
         opened_at=now,
-        pair=account.pair,
+        pair=pair,
+        strategy_id=multi_trade.EMA_STRATEGY_ID,
     )
     session.add(trade)
     if tctx is not None:
@@ -916,13 +936,190 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     mode_label = "PAPER" if is_paper else "LIVE"
     await notifier.send(
         account.notification_target,
-        f"[{mode_label}] Entered {side.upper()} {account.pair}\n"
+        f"[{mode_label}] Entered {side.upper()} {pair}\n"
         f"Entry: {current_price:.4f}  Qty: {size.quantity:.6f}  Stop: {stop_price:.4f}\n"
-        f"Risk: {size.risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
+        f"Risk: {size.risk_amount:.2f} ({account.risk_pct:.2f}% of balance)"
+        + (f"\nStrategy: {multi_trade.EMA_STRATEGY_ID}  Open trades: {multi.n_open + 1} of {multi.cap}" if multi is not None else ""),
     )
 
 
-async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None):
+# ====================================================================== multi-trade (PAPER accounts; docs/safety/multi_trade.md)
+
+
+@dataclass(frozen=True)
+class MultiInfo:
+    """What the multi-trade cycle tells _maybe_enter: how many slots, how many already used, and why (the grade)."""
+    cap: int
+    n_open: int
+    grade: multi_trade.Grade
+
+
+def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open_trades: list[Trade]) -> bool:
+    """True when this cycle must handle more than one trade. With the defaults (MAX_OPEN_POSITIONS 1, no pair_list) and any live
+    account this is False unless the database already holds more than one non-terminal trade for the account (which is then managed,
+    never ignored)."""
+    if len(open_trades) > 1:
+        return True
+    if not is_paper or any(not t.is_paper for t in open_trades):
+        return False
+    return multi_trade.configured_cap(settings.max_open_positions) > 1 and len(multi_trade.trading_pairs(account)) > 1
+
+
+def _market_grade(session, account: TradingAccount, settings: Settings, candles, *, now: datetime) -> multi_trade.Grade:
+    """Gather the grade's inputs for a PAPER account and grade the market. Any failure to read an input is grade 1."""
+    try:
+        highs, lows, closes = [c.high for c in candles], [c.low for c in candles], [c.close for c in candles]
+        values = atr_series(highs, lows, closes, settings.atr_period)
+        cur = values[-1]
+        pcts = [a / c for a, c in zip(values[-settings.atr_rolling_window:], closes[-settings.atr_rolling_window:]) if a is not None and c]
+        atr_pct = (cur / closes[-1]) if cur is not None and closes[-1] else None
+        avg = (sum(pcts) / len(pcts)) if pcts else None
+        fee_bps = settings.fee_guard_fee_bps
+        need = max(settings.grade2_min_trades, settings.grade3_min_trades)
+        recent = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, limit=need)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1))
+        paused = any(strategy_guards.is_active(p, now) for p in strategy_guards.pauses(session, account.id, strategy_guards.STRATEGY_ID, True))
+        inputs = multi_trade.GradeInputs(
+            atr_pct=atr_pct, atr_avg_pct=avg, flat_threshold=settings.atr_flat_threshold,
+            nets_newest_first=tuple(r.net for r in recent), pause_active=paused, daily_pnl=sum(r.net for r in today),
+            capital=account.paper_balance, daily_loss_limit_pct=settings.strategy_daily_loss_pct,
+        )
+        return multi_trade.grade_from(inputs, multi_trade.GradeThresholds(
+            grade2_min_trades=settings.grade2_min_trades, grade3_min_trades=settings.grade3_min_trades,
+            extreme_atr_multiple=settings.grade_extreme_atr, daily_loss_fraction=settings.grade_daily_loss_fraction,
+        ))
+    except Exception as exc:  # noqa: BLE001 - an unreadable input is grade 1, never an assumption that the market is fine
+        logger.warning("account %s: market grade could not be computed (%s); grade 1", account.id, type(exc).__name__)
+        return multi_trade.Grade(1, ("input_error",))
+
+
+def _multi_paper_limits(session, account: TradingAccount, settings: Settings, size, current_price: float, multi: MultiInfo):
+    """Checks for a 2nd or 3rd PAPER entry: slot still free, free capital, minimum order size, total open risk. Returns
+    (size, None) to go ahead, possibly with the quantity trimmed to the free capital, or (size, (reason_code, detail)) to skip.
+    The first trade of an account is never touched by this."""
+    open_ts = list_open_trades(session, account.id)
+    if not open_ts:
+        return size, None
+    if len(open_ts) >= multi.cap:
+        return size, (multi_trade.R_SLOT_FULL, {"open": len(open_ts), "cap": multi.cap, "grade": multi.grade.level})
+    balance = account.paper_balance
+    open_pct = multi_trade.open_risk_pct([abs(t.entry_price - t.stop_loss_price) * t.quantity for t in open_ts], balance)
+    if open_pct is None:
+        return size, (multi_trade.R_TOTAL_RISK_CAP, {"reason": "open risk unreadable"})  # fail closed
+    free = multi_trade.free_capital(balance, [t.entry_price * t.quantity for t in open_ts])
+    if not free > 0:
+        return size, (multi_trade.R_CAPITAL_SHORT, {"free": round(free, 2)})
+    size = apply_exposure_ceiling(size, entry_price=current_price, effective_capital=free, max_notional_multiplier=1.0)
+    notional = size.quantity * current_price
+    if size.quantity <= 0 or notional < settings.paper_min_notional:
+        return size, (multi_trade.R_CAPITAL_SHORT, {"free": round(free, 2), "notional": round(notional, 2), "minimum": settings.paper_min_notional})
+    hit = strategy_guard_rules.portfolio_hit(
+        open_positions=len(open_ts), open_risk_pct=open_pct, new_risk_pct=size.risk_amount / balance * 100.0,
+        max_positions=0, max_total_risk_pct=settings.max_total_risk_pct,
+    )
+    if hit is not None:
+        return size, (multi_trade.R_TOTAL_RISK_CAP, dict(hit.detail))
+    return size, None
+
+
+async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now) -> None:
+    live = [t for t in open_trades if not t.is_paper]
+    if live:
+        await _process_multi_live(session, account, client, live, settings, notifier, now=now)
+        return
+
+    pairs = multi_trade.trading_pairs(account)
+    cache: dict[str, list] = {}
+
+    async def candles_for(pair: str):
+        if pair not in cache:
+            ohlcv = await client.fetch_ohlcv(
+                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit
+            )
+            cache[pair] = candles_from_ohlcv(ohlcv)
+        return cache[pair]
+
+    def signal_for(candles):
+        return generate_signal(
+            candles, ema_fast_period=settings.ema_fast_period, ema_slow_period=settings.ema_slow_period, atr_period=settings.atr_period,
+            atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
+        )
+
+    # 1. Manage every open trade on its own pair, whatever the grade is.
+    for t in open_trades:
+        pair = t.pair or account.pair
+        candles = await candles_for(pair)
+        if not candles:
+            logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
+            await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
+            continue
+        await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
+                          settings=settings, multi_label=True)
+
+    # 2. At most ONE new entry per cycle, only if the grade leaves a slot.
+    open_now = list_open_trades(session, account.id)
+    taken = {t.pair or account.pair for t in open_now}
+    free_pairs = [p for p in pairs if p not in taken]
+    primary = await candles_for(pairs[0])
+    if primary:
+        sig0 = signal_for(primary)
+        account.last_signal = sig0.signal.value
+        account.last_signal_at = now
+        account.last_error = None
+        account.last_error_at = None
+    if free_pairs and primary and is_paper:
+        grade = _market_grade(session, account, settings, primary, now=now)
+        cap = multi_trade.slot_cap(is_paper=is_paper, configured=settings.max_open_positions, grade=grade.level)
+        if len(open_now) >= cap:
+            if protection_guard.should_alert(account.id, "-", f"multi:slots_full:{len(open_now)}:{cap}", now=now, repeat_hours=6.0):
+                logger.info("account %s: %d of %d trade slots used, %s; no new entry", account.id, len(open_now), cap, grade.text())
+        else:
+            for pair in free_pairs:
+                candles = await candles_for(pair)
+                if not candles:
+                    continue
+                signal = signal_for(candles)
+                if signal.signal == SignalType.NONE:
+                    continue
+                tctx = None
+                if telemetry.enabled(settings):
+                    tctx = telemetry.build_entry_context(candles, signal, settings, now=now, scan=None)
+                    telemetry.signal_stage(session, settings, account, tctx, signal, is_paper=True, now=now, pair=pair)
+                await _maybe_enter(session, account, client, signal, candles[-1].close, settings, notifier, is_paper=True, now=now,
+                                   tctx=tctx, pair=pair, multi=MultiInfo(cap=cap, n_open=len(open_now), grade=grade))
+                if len(list_open_trades(session, account.id)) > len(open_now):
+                    break  # one new entry per cycle; a refused pair (a guard, the cooldown) does not stop the next pair being tried
+    session.commit()
+    await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+
+
+async def _process_multi_live(session, account, client, live_trades: list[Trade], settings, notifier, *, now) -> None:
+    """More than one non-terminal LIVE trade exists. Code never opens that (a live account holds one), so this is a recovery path:
+    reconcile and monitor EACH live trade on its own pair, open nothing new. A paper trade on the same account is left for later."""
+    logger.warning("account %s: %d non-terminal live trades on one account; managing each, no new entries", account.id, len(live_trades))
+    for t in live_trades:
+        t, ctx = await _manage_live_trade(session, account, client, t, settings, notifier, now=now)
+        if t.status != TRADE_OPEN or t.protection_status != PROTECTION_PROTECTED:
+            continue  # closed this cycle, or unhealthy and worked by the reconciler: no strategy decision on unverified protection
+        pair = t.pair or account.pair
+        ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+        candles = candles_from_ohlcv(ohlcv)
+        if not candles:
+            logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
+            continue
+        signal = generate_signal(
+            candles, ema_fast_period=settings.ema_fast_period, ema_slow_period=settings.ema_slow_period, atr_period=settings.atr_period,
+            atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
+        )
+        opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
+        await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=candles[-1].close)
+    account.last_error = None
+    account.last_error_at = None
+    await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+
+
+async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None, multi_label=False):
     """PAPER trades only. A live trade's exit is lifecycle.execute_exit /
     lifecycle.monitor_trade - never a bare market order from here."""
     if not is_paper:
@@ -955,11 +1152,12 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     mode_label = "PAPER"
     await notifier.send(
         account.notification_target,
-        f"[{mode_label}] Exited {open_trade.side.upper()} {account.pair} ({open_trade.close_reason})\n"
+        f"[{mode_label}] Exited {open_trade.side.upper()} {open_trade.pair or account.pair} ({open_trade.close_reason})\n"
         + pnl_labels.exit_line(
             open_trade.entry_price, exit_price, pnl, on=bool(settings and settings.pnl_labels), paper=True,
-            quote=pnl_labels.quote_of(account.pair),
-        ),
+            quote=pnl_labels.quote_of(open_trade.pair or account.pair),
+        )
+        + (f"\nStrategy: {multi_trade.strategy_of(open_trade)}" if multi_label else ""),
     )
 
 
@@ -1007,6 +1205,7 @@ async def reconcile_account(
     notifier: Notifier,
     *,
     current_price: float | None = None,
+    pair: str | None = None,
 ) -> None:
     """Reconcile this account's live trade (if any) against Binance and do
     nothing else - no scan, no entry. Used at startup and by the fast
@@ -1015,8 +1214,10 @@ async def reconcile_account(
     protection-health check also runs: if the price has gone through a
     resting stop-limit's executable limit, the lifecycle cancels it,
     confirms, and market-closes the remainder."""
-    trade = get_open_trade(session, account.id)
-    if trade is None or trade.is_paper:
+    live_trades = [t for t in list_open_trades(session, account.id) if not t.is_paper]
+    if current_price is not None and pair is not None:
+        live_trades = [t for t in live_trades if (t.pair or account.pair) == pair]  # the fast watch's price belongs to one pair
+    if not live_trades:
         return
     now = datetime.now(timezone.utc)
     api_key, api_secret = _resolve_credentials(account, settings, is_paper=False)
@@ -1032,9 +1233,12 @@ async def reconcile_account(
         # because this path's venue cannot place an entry.
         if await exchange.has_withdrawal_permission(client):
             await _flag_withdrawal_block(session, account, notifier, now=now)
-        trade, ctx = await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
-        if current_price is not None:
-            await lifecycle.monitor_trade(ctx, trade, crossover_exit=False, current_price=current_price)
+        # Normally one trade. A live account is capped at one in code, but if more than one non-terminal live trade exists
+        # (a manual database change, a lowered cap) every one of them is reconciled: none is skipped, none is orphaned.
+        for trade in live_trades:
+            trade, ctx = await _manage_live_trade(session, account, client, trade, settings, notifier, now=now)
+            if current_price is not None:
+                await lifecycle.monitor_trade(ctx, trade, crossover_exit=False, current_price=current_price)
     finally:
         await client.close()
 

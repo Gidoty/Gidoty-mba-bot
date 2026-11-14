@@ -394,7 +394,7 @@ def record_entry(
 
 
 def signal_stage(
-    session, settings: Settings, account, ctx: EntryContext | None, signal: StrategySignal, *, is_paper: bool, now: datetime
+    session, settings: Settings, account, ctx: EntryContext | None, signal: StrategySignal, *, is_paper: bool, now: datetime, pair: str | None = None
 ) -> None:
     """Log what the strategy concluded when the account is flat: an actionable
     crossover, a crossover rejected by the flat-market filter, or a bearish
@@ -406,19 +406,19 @@ def signal_stage(
             if "flat" in (signal.reason or ""):
                 log_decision(
                     session, settings, account, stage=STAGE_SIGNAL, outcome=REJECTED, reason=R_FLAT_MARKET, is_paper=is_paper,
-                    ctx=ctx, now=now,
+                    ctx=ctx, now=now, pair=pair,
                     detail={"atr_pct": signal.atr_pct, "fast": signal.fast_ema, "slow": signal.slow_ema},
                 )
             return
         if signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type != "futures":
             log_decision(
                 session, settings, account, stage=STAGE_SIGNAL, outcome=SKIPPED, reason=R_SPOT_LONG_ONLY, is_paper=is_paper,
-                ctx=ctx, now=now,
+                ctx=ctx, now=now, pair=pair,
             )
             return
         log_decision(
             session, settings, account, stage=STAGE_SIGNAL, outcome=ACCEPTED, reason=R_SIGNAL_ACTIONABLE, is_paper=is_paper,
-            ctx=ctx, now=now,
+            ctx=ctx, now=now, pair=pair,
             detail={"atr_pct": signal.atr_pct, "gap_atr": (ctx.features.get("ema_gap_atr") if ctx else None)},
         )
     except Exception as exc:  # noqa: BLE001

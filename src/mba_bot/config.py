@@ -321,12 +321,18 @@ class Settings:
     fee_guard_fee_bps: float = 5.0  # taker fee per side, basis points (research assumption; the account's real tier is not read here)
     fee_guard_slippage_bps: float = 11.0  # round-trip slippage, basis points (research assumption: 3 on entry, 8 on a stop exit)
     fee_guard_expected_move_atr: float = 1.0  # expected gross move of a trade in ATRs (the strategy has no profit target: a proxy)
-    max_open_positions: int = 1  # open positions per account across all strategies (0 = no cap). Structurally 1 today (unique index)
+    max_open_positions: int = 1  # open positions per account (0 = no cap in the guards). Also the multi-trade setting: PAPER accounts only, clamped to 1..3 (multi_trade.py)
     max_total_risk_pct: float = 2.0  # sum of the risk % of open positions plus the new one (0 = no cap)
     strategy_daily_loss_pct: float = 0.0  # stop NEW entries for the rest of the UTC day once the day's net loss reaches this % of capital (0 = off)
     strategy_pause_after_losses: int = 0  # pause the strategy for the account after this many consecutive net losses (0 = off)
     strategy_streak_pause_hours: float = 24.0  # a loss-streak pause lasts this long (0 = until the owner releases it)
     strategy_expectancy_window: int = 20  # pause, until the owner releases it, if net expectancy over this many trades is negative (0 = off)
+    # Multi-trade market grade (multi_trade.py). STARTING VALUES, not tuned on any data. Only used by PAPER accounts with MAX_OPEN_POSITIONS > 1.
+    grade2_min_trades: int = 10  # closed trades judged for grade 2 (fewer = grade 1)
+    grade3_min_trades: int = 20  # closed trades judged for grade 3
+    grade_extreme_atr: float = 3.0  # ATR% above this many times its rolling average = extreme volatility = grade 1
+    grade_daily_loss_fraction: float = 0.5  # grade 3 needs today's loss under this fraction of STRATEGY_DAILY_LOSS_PCT
+    paper_min_notional: float = 10.0  # paper multi-trade: skip a 2nd or 3rd entry whose notional is below this (stand-in for the exchange minimum)
     owner_alert_chat_id: str | None = None  # Telegram chat for owner alerts from the strategy guards (falls back to BILLING_ALERT_CHAT_ID)
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
@@ -497,6 +503,11 @@ def load_settings() -> Settings:
         strategy_pause_after_losses=min(100, max(0, _env_int("STRATEGY_PAUSE_AFTER_LOSSES", 0))),
         strategy_streak_pause_hours=min(8760.0, max(0.0, _env_float("STRATEGY_STREAK_PAUSE_HOURS", 24.0))),
         strategy_expectancy_window=min(1000, max(0, _env_int("STRATEGY_EXPECTANCY_WINDOW", 20))),
+        grade2_min_trades=min(200, max(1, _env_int("GRADE2_MIN_TRADES", 10))),
+        grade3_min_trades=min(500, max(1, _env_int("GRADE3_MIN_TRADES", 20))),
+        grade_extreme_atr=min(20.0, max(1.0, _env_float("GRADE_EXTREME_ATR", 3.0))),
+        grade_daily_loss_fraction=min(1.0, max(0.0, _env_float("GRADE_DAILY_LOSS_FRACTION", 0.5))),
+        paper_min_notional=min(100_000.0, max(0.0, _env_float("PAPER_MIN_NOTIONAL", 10.0))),
         owner_alert_chat_id=(os.environ.get("OWNER_ALERT_CHAT_ID") or os.environ.get("BILLING_ALERT_CHAT_ID") or None),
         pnl_labels=_env_bool("PNL_LABELS", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),

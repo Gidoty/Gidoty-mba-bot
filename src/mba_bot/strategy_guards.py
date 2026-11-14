@@ -139,7 +139,7 @@ def open_position_numbers(session: Session, account_id: str, default_risk_pct: f
     return n, n * default_risk_pct
 
 
-def evaluate(session: Session, account, settings: Settings, *, signal, is_paper: bool, now: datetime, strategy_id: str = STRATEGY_ID) -> list[GuardHit]:
+def evaluate(session: Session, account, settings: Settings, *, signal, is_paper: bool, now: datetime, strategy_id: str = STRATEGY_ID, pair: str | None = None) -> list[GuardHit]:
     """Every guard's verdict for a NEW entry, most decisive first. Pure with respect to trading: it reads and decides. In observe mode the
     caller logs all of them; in enforce mode it acts on the first. Raises only if the database cannot be read; the caller treats that as
     a refusal in enforce mode."""
@@ -162,7 +162,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
 
     if settings.ema_stop_cooldown_hours > 0:
         recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=settings.ema_stop_cooldown_hours), limit=50)
-        stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, account.pair))]
+        stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, pair or account.pair))]
         h = cooldown_hit(max(stops) if stops else None, now, settings.ema_stop_cooldown_hours)
         if h:
             hits.append(h)

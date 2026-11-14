@@ -74,6 +74,10 @@ class TradingAccount(Base):
     # auto-selection, a scheduler-side check independent of the
     # API-layer one in api/routers/account.py).
     pair_selection_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="manual", server_default="manual")
+    # Extra pairs for a multi-trade PAPER test account (comma separated, e.g. "ETH/USDT,BNB/USDT"), set by the owner directly in the
+    # database; no API or screen writes it. Used only when MAX_OPEN_POSITIONS is above 1 and the account is in paper mode.
+    # NULL or empty = the single `pair`, exactly as before. Read it through multi_trade.trading_pairs(account).
+    pair_list: Mapped[str | None] = mapped_column(String(80), nullable=True)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
@@ -270,18 +274,31 @@ PROTECTION_CANCELLED = "cancelled"
 class Trade(Base):
     __tablename__ = "trades"
     __table_args__ = (
-        # The database-level one-position rule: at most ONE non-terminal
-        # trade per account, regardless of what any code path believes.
-        # A second concurrent entry (double scheduler, retry after an
-        # uncertain order) fails at the write-ahead INSERT, before any
-        # order is sent. Partial unique index - supported by SQLite and
-        # PostgreSQL, the only two databases this project targets.
+        # The database-level position rule: at most ONE non-terminal trade per
+        # (account, pair). Before the multi-trade foundation this was one per
+        # account; that rule now lives in code (multi_trade.slot_cap: a LIVE
+        # account is capped at 1 whatever the setting says; open_live_trade
+        # refuses a second non-terminal trade before any write). The index still
+        # stops a double entry on the same pair (double scheduler, retry after an
+        # uncertain order) at the write-ahead INSERT, before any order is sent.
+        # A second index keeps the old rule for rows with NO pair (from before that
+        # column existed; SQLite and PostgreSQL treat NULLs as distinct in the first
+        # index): at most one such non-terminal trade per account. New rows always
+        # carry a pair. Partial unique indexes - supported by SQLite and PostgreSQL.
         Index(
-            "uq_trades_one_nonterminal_per_account",
+            "uq_trades_one_nonterminal_per_pair",
             "account_id",
+            "pair",
             unique=True,
             sqlite_where=text("status NOT IN ('closed', 'void')"),
             postgresql_where=text("status NOT IN ('closed', 'void')"),
+        ),
+        Index(
+            "uq_trades_one_nonterminal_no_pair",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status NOT IN ('closed', 'void') AND pair IS NULL"),
+            postgresql_where=text("status NOT IN ('closed', 'void') AND pair IS NULL"),
         ),
     )
 
@@ -307,6 +324,11 @@ class Trade(Base):
     # it never depends on whatever account.pair says later. NULL on rows
     # from before this column existed; callers fall back to account.pair.
     pair: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Which strategy opened the trade. NULL (also for every row from before this
+    # column) means ema_cross_atr_v1; there is no backfill. Read it through
+    # multi_trade.strategy_of(trade), never as a bare column.
+    strategy_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     # Exchange identifiers. Client order ids are NOT stored: they are a pure
     # function of trade.id (lifecycle.client_id), which is what makes every
