@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, kill_switch, lifecycle, pair_catalog, pnl_labels, protection_guard, telemetry
+from . import exchange, kill_switch, lifecycle, pair_catalog, pnl_labels, protection_guard, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -343,6 +343,44 @@ def _limit_message(account: TradingAccount, hit) -> str:
     )
 
 
+async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog) -> bool:
+    """The strategy guards (strategy_guards.py), reached only when STRATEGY_GUARDS_MODE is observe or enforce. True if a NEW entry is
+    refused here (and the refusal has been recorded). The operator kill switch was checked before this and stays authoritative: this
+    can only add a refusal. In observe mode nothing is blocked and nothing is written; in enforce mode the first guard that fires blocks
+    the entry, a pause guard also writes its pause, and the owner is told once. An unreadable guard input refuses in enforce mode."""
+    mode = settings.strategy_guards_mode
+    try:
+        hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now)
+    except Exception as exc:  # noqa: BLE001 - fail closed in enforce, silent in observe; never raise into the cycle
+        logger.warning("account %s: strategy guards could not be evaluated (%s)", account.id, type(exc).__name__)
+        if mode != "enforce":
+            return False
+        tlog(telemetry.REJECTED, strategy_guards.R_UNREADABLE, mode="enforce")
+        await _block_entry(notifier, account, settings, strategy_guards.R_UNREADABLE, strategy_guards.MESSAGES[strategy_guards.R_UNREADABLE], now=now)
+        return True
+    if not hits:
+        return False
+    if mode == "observe":
+        for hit in hits:
+            tlog(telemetry.OBSERVED, hit.code, mode="observe", would_block=True, **hit.detail)
+            _observe_line(account, settings, hit.code, now, "account %s: [observe] strategy guard %s would refuse a %s entry (%s); entry NOT blocked",
+                          account.id, hit.code, account.pair, hit.detail)
+        return False
+    hit = hits[0]
+    tlog(telemetry.REJECTED, hit.code, mode="enforce", **hit.detail)
+    if hit.creates_pause:
+        strategy_guards.create_pause(session, account.id, strategy_guards.STRATEGY_ID, hit, is_paper=is_paper, now=now)
+    if hit.owner_alert and (hit.creates_pause or protection_guard.should_alert(
+            account.id, "-", hit.code + ":" + now.strftime("%Y-%m-%d"), now=now, repeat_hours=24.0)):
+        await strategy_guards.alert_owner(settings, strategy_guards.owner_text(account.id, strategy_guards.STRATEGY_ID, hit))
+    message = hit.message
+    if message is None:  # a signal filter: logged like the flat-market filter, no customer message
+        logger.info("account %s: new %s entry skipped (%s)", account.id, account.pair, hit.code)
+    else:
+        await _block_entry(notifier, account, settings, hit.code, message, now=now)
+    return True
+
+
 async def _kill_switch_blocks(session, settings: Settings, notifier: Notifier, account: TradingAccount, tlog, *, now: datetime, stage: str) -> bool:
     """True if the operator kill switch stops a NEW live entry here (and the refusal has been recorded). `stage` says which
     of the checks fired. Reads are retried for a few seconds before the fail-closed rule applies (see kill_switch)."""
@@ -608,6 +646,11 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         await _record_error(
             notifier, account, "This pair is not currently available for trading, so no new trade was opened.", now=now
         )
+        return
+
+    if settings.strategy_guards_mode != "off" and await _strategy_guards_block(
+        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog
+    ):
         return
 
     stop_price = compute_stop_loss(
