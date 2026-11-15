@@ -76,4 +76,7 @@ position API.
 2. Before any restart, run `python -m mba_bot.restart_gate` from the app directory: exit 0 means no live trade is open, 3 means do NOT restart,
    2 means the database could not be read. It only reads. It prints counts, no ids.
 3. For a paper test account: set `pair_list` in the database (and, for the new strategies, `extra_strategies`; see rsi_mr_v1.md and donchian_breakout_v1.md), set `MAX_OPEN_POSITIONS=2` or `3`, restart in a quiet moment, watch the journal.
-4. Rollback: set `MAX_OPEN_POSITIONS=1` (existing trades are still managed). Downgrading the migration needs every account at one non-terminal trade.
+4. Rollback: set `MAX_OPEN_POSITIONS=1` (existing trades are still managed). Downgrading the migrations needs every account at one non-terminal trade (the `a1d7c4e9b2f6` downgrade refuses otherwise).
+   **What a database downgrade loses** (audit M6): `trades.strategy_id` (an open rsi_mr_v1 or donchian_breakout_v1 paper trade is then relabelled as ema_cross_atr_v1 after a later re-upgrade and is exited by the EMA rules; close such trades first),
+   `trading_accounts.pair_list` and `trading_accounts.extra_strategies` (every account is EMA only with one pair), and the live-trade and per-pair indexes (back to one trade per account). The `c9f6a3b1d5e7` downgrade, which would also drop all strategy pauses,
+   refuses while an active pause exists (see strategy_guards.md). Prefer switching the features off (`MAX_OPEN_POSITIONS=1`, the strategy switches off) over downgrading.

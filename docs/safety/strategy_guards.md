@@ -26,6 +26,7 @@ unrecognised means off. A threshold of 0 switches that single guard off. Enable 
 | STRATEGY_EXPECTANCY_WINDOW | 20 | pause until the owner releases it if modelled net expectancy over the last N trades is negative (0 = off) |
 | OWNER_ALERT_CHAT_ID | falls back to BILLING_ALERT_CHAT_ID | Telegram chat for owner alerts; without a bot token and a chat the alerts only go to the log |
 Rollback: set `STRATEGY_GUARDS_MODE` to off (or unset it) and restart. Pauses already written stay in the table and are ignored while the mode is off.
+Rolling back the DATABASE (downgrading migration `c9f6a3b1d5e7`) drops the `strategy_pauses` table and with it every pause, including an expectancy pause that is documented to end only when the owner releases it. The downgrade therefore refuses, changing nothing, while any active pause exists (audit M6); release them first with `python -m mba_bot.strategy_pause release`, if that is really what is wanted. What is lost by a downgrade: all pause rows (released ones too) and the history of why a strategy was paused.
 
 ## How it works
 * New code: `src/mba_bot/strategy_guards.py` (pure decisions plus the few reads they need), one call in `trader._maybe_enter`, a `gap_atr` field on the strategy signal, a table `strategy_pauses` (migration `c9f6a3b1d5e7`, additive and idempotent, written only in enforce mode) and an owner command `python -m mba_bot.strategy_pause status|release`.
