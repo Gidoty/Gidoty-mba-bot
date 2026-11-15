@@ -88,3 +88,9 @@ and the old code does not know the new columns' meaning); deploying the new code
    **What a database downgrade loses** (audit M6): `trades.strategy_id` (an open rsi_mr_v1 or donchian_breakout_v1 paper trade is then relabelled as ema_cross_atr_v1 after a later re-upgrade and is exited by the EMA rules; close such trades first),
    `trading_accounts.pair_list` and `trading_accounts.extra_strategies` (every account is EMA only with one pair), and the live-trade and per-pair indexes (back to one trade per account). The `c9f6a3b1d5e7` downgrade, which would also drop all strategy pauses,
    refuses while an active pause exists (see strategy_guards.md). Prefer switching the features off (`MAX_OPEN_POSITIONS=1`, the strategy switches off) over downgrading.
+
+## Noted by the independent audit, NOT changed (docs note only)
+
+* **L3 (`risk.py`, existing code):** `compute_stop_loss` and `compute_position_size` pass a NaN through, and the `quantity <= 0` refusal does not fire on NaN; `rsi_mr.signal_from_values` would return "long" for a NaN close. Binance does not send NaN candles in practice. Not touched in this stack.
+* **L5 (`a1d7c4e9b2f6` downgrade):** it uses a plain `drop_column`, which needs SQLite 3.35 or newer. It worked on 3.53 in the audit; the SQLite version on the server was not checked.
+* **L7 (daily loss limit):** `STRATEGY_DAILY_LOSS_PCT` is applied per strategy, so with three strategies an account can lose up to three times that percentage in one UTC day. The customer message for a daily-loss refusal says "The daily loss limit was reached", which is true for the strategy that hit it, not necessarily for the account.
