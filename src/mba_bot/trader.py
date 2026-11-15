@@ -1165,16 +1165,30 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             order = ([donchian.STRATEGY_ID] if don_on else []) + [multi_trade.EMA_STRATEGY_ID] + ([rsi_mr.STRATEGY_ID] if rsi_on else [])
             allow_short = account.market_type == "futures"
 
+            window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+
+            def fresh(strategy: str, pair: str, closed: list, tf_ms: int) -> bool:
+                """Audit M5: take the entry only if the signal candle is the latest closed candle and closed within the window; otherwise skip and log."""
+                age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+                if 0 <= age_ms <= window_ms:
+                    return True
+                if protection_guard.should_alert(account.id, pair, f"stale:{strategy}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+                    logger.info("account %s: %s signal on %s skipped (signal_stale): the signal candle closed %.0f minutes ago, the window is %g",
+                                account.id, strategy, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+                    telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.SKIPPED, reason="signal_stale", is_paper=True,
+                                           now=now, pair=pair, strategy_id=strategy, detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})
+                return False
+
             async def signal_of(strategy: str, pair: str):
                 """(signal object, price, candles) for one strategy on one pair, or None if it has no actionable signal."""
                 if strategy == donchian.STRATEGY_ID:
                     closed = await don_closed_for(pair)
                     sig = donchian.signal_from_candles(closed, don_p, allow_short=allow_short)
-                    return (sig, closed[-1].close, closed) if (sig.side and closed) else None
+                    return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, don_tf_ms)) else None
                 if strategy == rsi_mr.STRATEGY_ID:
                     closed = await rsi_closed_for(pair)
                     sig = rsi_mr.generate_signal(closed, rsi_p, allow_short=allow_short)
-                    return (sig, closed[-1].close, closed) if (sig.side and closed) else None
+                    return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, rsi_tf_ms)) else None
                 candles = await candles_for(pair)
                 if not candles:
                     return None

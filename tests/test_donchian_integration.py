@@ -43,7 +43,7 @@ def db(tmp_path):
 
 def raw(candles, *, forming=False):
     """ccxt rows [ts, o, h, l, c, v] for `candles`, re-timed so the last one has just CLOSED (or is still forming with forming=True)."""
-    end = int(time.time() * 1000) // HOUR * HOUR + (HOUR if forming else 0)
+    end = int(time.time() * 1000) - 60_000 + (HOUR if forming else 0)  # a fresh signal candle closed a minute ago (audit M5)
     n = len(candles)
     return [[end - (n - i) * HOUR, c.open, c.high, c.low, c.close, c.volume] for i, c in enumerate(candles)]
 
@@ -427,9 +427,9 @@ def exit_setup(db, monkeypatch, rows, *, entry=103.0, stop=100.0, side="long", p
     install(monkeypatch, client)
     monkeypatch.setattr(trader, "generate_signal", lambda *a, **k: NO_EMA)
     aid = paper_account(st)
-    end = int(time.time() * 1000) // HOUR * HOUR  # the last candle has just closed; the first row started len(rows) hours earlier
+    end = int(time.time() * 1000) - 60_000  # the last candle closed a minute ago; the first row started len(rows) hours earlier
     first_row_start = end - len(rows) * HOUR
-    seed_don_trade(aid, entry=entry, stop=stop, side=side, opened=datetime.fromtimestamp((first_row_start + 60_000) / 1000, tz=U))  # entered a minute into it
+    seed_don_trade(aid, entry=entry, stop=stop, side=side, opened=datetime.fromtimestamp((first_row_start - 5000) / 1000, tz=U))  # entered five seconds before the open of the first row
     return st, client, aid
 
 

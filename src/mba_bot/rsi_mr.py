@@ -129,7 +129,7 @@ class Exit:
 
 
 def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: list, tf_ms: int, p: RsiParams = RsiParams()) -> Exit | None:
-    """Walk the closed candles that ended after the entry, oldest first, and return the FIRST exit event, or None.
+    """Walk the closed candles that started at or after the entry, oldest first, and return the FIRST exit event, or None.
 
     Per candle: the stop (low/high through it) first, then the profit target, then at the close the RSI line, then the time stop.
     When a candle touches both the stop and the target the stop wins (the conservative reading). The result depends only on the
@@ -142,8 +142,8 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
     target = target_price(entry, stop, side, p)
     n = 0
     for i, c in enumerate(closed):
-        if c.timestamp + tf_ms <= opened_ms:
-            continue  # ended before the entry
+        if c.timestamp < opened_ms:
+            continue  # started before the entry: the candle the entry happened in is not judged (the part before the entry never was ours)
         n += 1
         if side == "long":
             if c.low <= stop:

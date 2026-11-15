@@ -125,7 +125,7 @@ class Exit:
 
 def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: list, tf_ms: int, p: DonchianParams = DonchianParams(),
                atr_values: list | None = None) -> Exit | None:
-    """Walk the closed candles that ended after the entry, oldest first, and return the FIRST exit event, or None.
+    """Walk the closed candles that started at or after the entry, oldest first, and return the FIRST exit event, or None.
 
     Per candle: the stop (the initial stop, or the trailing stop once it is tighter) is checked against the candle's low/high FIRST, using the
     level set by the candles before it; then the trailing stop is moved with this candle (extreme since entry -/+ trail_atr x ATR, never loosened);
@@ -138,8 +138,8 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
     extreme = entry
     trail: float | None = None
     for i, c in enumerate(closed):
-        if c.timestamp + tf_ms <= opened_ms:
-            continue  # ended before the entry
+        if c.timestamp < opened_ms:
+            continue  # started before the entry: the candle the entry happened in is not judged (the part before the entry never was ours)
         if side == "long":
             level = stop if (trail is None or not trail > stop) else trail
             if c.low <= level:

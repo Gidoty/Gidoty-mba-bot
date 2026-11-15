@@ -30,7 +30,7 @@ def db(tmp_path):
 
 
 def raw(candles):
-    end = int(time.time() * 1000) // HOUR * HOUR
+    end = int(time.time() * 1000) - 60_000
     n = len(candles)
     return [[end - (n - i) * HOUR, c.open, c.high, c.low, c.close, c.volume] for i, c in enumerate(candles)]
 

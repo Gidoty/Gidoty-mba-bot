@@ -26,6 +26,10 @@ the specification, not a tuned or measured value. Backtest results: NOT MEASURED
 Readings of the specification, for your confirmation: "close back inside the opposite 10-candle channel" is implemented as a close beyond the opposite 10-candle extreme (the classic
 turtle exit). The 20-candle volume average and the "rolling average" of ATR% both use the 20 candles BEFORE the breakout candle.
 
+## Entry freshness and the exit start (audit M5)
+
+A paper entry is taken only if the signal candle is the latest closed candle and closed no more than `NEW_STRATEGY_ENTRY_WINDOW_MINUTES` (default 10, 1 to 59) ago; otherwise it is skipped and logged as `signal_stale` (journal and decision log). So a trade is never booked at a close the market left long ago (a slot that frees late, an ended cooldown, a restart, the switch turned on). The exit check judges only candles that start at or after the entry, so the candle the entry happened in is not judged (its low/high before the entry never belonged to the trade); an exit that candle would have caused is seen one candle later.
+
 ## Switches
 
 | Setting | Default | Meaning |

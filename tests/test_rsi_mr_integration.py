@@ -38,7 +38,7 @@ def db(tmp_path):
 
 def raw(closes, *, spread=0.4, forming=False):
     """ccxt rows [ts, o, h, l, c, v] whose last candle has just CLOSED (or, with forming=True, whose last candle is still forming)."""
-    end = int(time.time() * 1000) // HOUR * HOUR
+    end = int(time.time() * 1000) - 60_000  # the last candle closed a minute ago (a signal candle must be fresh, audit M5)
     if forming:
         end += HOUR
     out = []
@@ -408,7 +408,7 @@ def seed_rsi_trade(aid, *, entry, stop, qty=1.0, side="long", pair="BTC/USDT", o
 
 def candles_after_entry(rows):
     """Rows (o, h, l, c) for candles that start after the entry. The entry is 'now - 1 minute', the last candle closed at the top of this hour."""
-    end = int(time.time() * 1000) // HOUR * HOUR
+    end = int(time.time() * 1000) - 60_000
     pre = [104.0 - 0.1 * i for i in range(40)]  # a gentle fall into the entry: RSI far below the 50 line
     out = []
     n = len(pre) + len(rows)
@@ -426,7 +426,8 @@ def exit_setup(db, monkeypatch, rows, *, entry=100.0, stop=97.0, side="long", op
     install(monkeypatch, client)
     monkeypatch.setattr(trader, "generate_signal", lambda *a, **k: NO_EMA)
     aid = paper_account(st)
-    opened = datetime.now(U) - timedelta(hours=(opened_hours_ago if opened_hours_ago is not None else len(rows) + 0.5))
+    end = int(time.time() * 1000) - 60_000
+    opened = datetime.fromtimestamp((end - len(rows) * HOUR - 5000) / 1000, tz=U)  # five seconds before the open of the first row: the exit check judges candles from the one AFTER the entry candle (audit M5)
     seed_rsi_trade(aid, entry=entry, stop=stop, side=side, opened=opened)
     return st, client, aid
 
