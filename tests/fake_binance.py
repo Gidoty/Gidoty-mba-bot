@@ -199,6 +199,8 @@ class FakeBinance:
         # `canWithdraw` here is Binance's ACCOUNT-level flag: observed True on a real account whose key has
         # `enableWithdrawals=False`. It must never influence the bot, so the fake pins it True regardless of the key.
         out: dict = {"free": dict(self.free), "info": {"canWithdraw": True, "canTrade": True}}
+        if getattr(self, "total_margin_balance", None) is not None:  # Futures: Binance's wallet balance plus unrealised profit (a test sets it)
+            out["info"]["totalMarginBalance"] = self.total_margin_balance
         for asset in set(self.free) | set(self.used):
             out[asset] = {"free": self.free.get(asset, 0.0), "used": self.used.get(asset, 0.0)}
         return out

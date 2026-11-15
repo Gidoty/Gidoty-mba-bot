@@ -332,6 +332,13 @@ class Settings:
     new_strategy_entry_window_minutes: float = 10.0
     # EMA decides on CLOSED candles only (docs/safety/ema_closed_candle.md). Off = today's behaviour: the still-forming last candle feeds the signal.
     ema_closed_candle_only: bool = False
+    # Account-wide daily loss pause (docs/safety/account_daily_loss.md), LIVE accounts only. 0 = off. New entries stop for the rest of the account's local day once its
+    # equity (exchange balance plus open positions at mark) is this percent below the day-start equity. Open trades keep their stops and exits.
+    account_daily_loss_pct: float = 0.0
+    account_day_timezone: str = "Africa/Lagos"  # the day boundary (00:00 to 23:59 local); an invalid name blocks new live entries (fail closed)
+    # Futures ceiling (docs/safety/account_daily_loss.md). 0 = off. Above 0: a new live Futures entry is refused when the Binance leverage on the pair is higher than this
+    # or the margin mode is not isolated (or cannot be read). The bot only READS leverage and margin mode; it never sets either.
+    futures_max_leverage: float = 0.0
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
@@ -543,6 +550,9 @@ def load_settings() -> Settings:
         new_strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("NEW_STRATEGY_GUARDS_MODE")),
         new_strategy_entry_window_minutes=min(59.0, max(1.0, _env_float("NEW_STRATEGY_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_closed_candle_only=_env_bool("EMA_CLOSED_CANDLE_ONLY", False),
+        account_daily_loss_pct=min(50.0, max(0.0, _env_float("ACCOUNT_DAILY_LOSS_PCT", 0.0))),
+        account_day_timezone=(os.environ.get("ACCOUNT_DAY_TIMEZONE") or "Africa/Lagos").strip() or "Africa/Lagos",
+        futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),

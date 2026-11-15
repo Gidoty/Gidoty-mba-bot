@@ -494,6 +494,44 @@ class StrategyPause(Base):
     detail: Mapped[str | None] = mapped_column(String(200), nullable=True)  # short numbers, for the owner
 
 
+class AccountDayEquity(Base):
+    """The equity an account started its local day with (ACCOUNT_DAILY_LOSS_PCT, docs/safety/account_daily_loss.md), persisted so a restart mid-day does not reset the
+    reference. One row per account and local day. `last_equity` / `last_equity_at` is the most recent sample taken that day: the next day's start is taken from it when
+    it was sampled within an hour of midnight, otherwise from the first read of the day (`approximate`). Numbers and times only."""
+
+    __tablename__ = "account_day_equity"
+    __table_args__ = (UniqueConstraint("account_id", "day_key", name="uq_account_day_equity_account_day"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    day_key: Mapped[str] = mapped_column(String(10), nullable=False)  # local calendar day, YYYY-MM-DD
+    start_equity: Mapped[float] = mapped_column(Float, nullable=False)
+    approximate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_equity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AccountLossPause(Base):
+    """Audit row for an account-wide daily loss pause: new entries stop until `ends_at` (the next local midnight). Written once per account and local day.
+    It ends by itself; nothing releases it earlier. Numbers and times only."""
+
+    __tablename__ = "account_loss_pauses"
+    __table_args__ = (UniqueConstraint("account_id", "kind", "day_key", name="uq_account_loss_pauses_account_kind_day"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # daily_loss
+    day_key: Mapped[str] = mapped_column(String(10), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    start_equity: Mapped[float] = mapped_column(Float, nullable=False)
+    equity_at_hit: Mapped[float] = mapped_column(Float, nullable=False)
+    loss_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    limit_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    timezone_name: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class BillingPayment(Base):
     """One issued payment (designs/03 section 4): what we asked for and what came back. Written by the provider
     stages, not by Stage 0. Holds no card data and no email: the reference is our own opaque token."""

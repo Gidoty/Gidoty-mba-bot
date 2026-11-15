@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import donchian, exchange, kill_switch, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, donchian, exchange, kill_switch, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -219,6 +219,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
             )
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            await _account_equity_tick(session, account, client, settings, now=now, positions=_spot_positions([open_trade], {(open_trade.pair or ""): candles[-1].close}))
             await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
             return
 
@@ -279,6 +280,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             signal = _ema_generate(sig_candles, settings)
 
         current_price = candles[-1].close
+        if not is_paper and open_trade is None:
+            await _account_equity_tick(session, account, client, settings, now=now, positions=[])
         # A successful evaluation, whatever it concluded, is a healthy
         # cycle - record the signal and clear any previously-recorded
         # error so "Error" status doesn't linger past the problem itself.
@@ -328,6 +331,73 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         raise
     finally:
         await client.close()
+
+
+def _spot_positions(trades: list, marks: dict[str, float]) -> list[tuple[float, float]] | None:
+    """[(quantity, mark)] for the bot's open Spot positions, or None if a mark is missing (the equity read then fails closed)."""
+    out = []
+    for t in trades:
+        mark = marks.get(t.pair or "")
+        if mark is None:
+            return None
+        out.append((t.quantity, mark))
+    return out
+
+
+async def _account_equity(client, account: TradingAccount, positions: list[tuple[float, float]] | None) -> float | None:
+    return await exchange.fetch_account_equity(client, account.pair, account.market_type, positions if account.market_type == "spot" else None)
+
+
+async def _account_equity_tick(session, account: TradingAccount, client, settings: Settings, *, now: datetime, positions: list[tuple[float, float]] | None = None) -> None:
+    """Record one equity sample for a LIVE account when the daily loss pause is on, so a new day can start from the last sample before midnight. Never raises
+    and never decides anything: the decision is `_account_loss_blocks`."""
+    if settings.account_daily_loss_pct <= 0:
+        return
+    try:
+        tz = account_loss.zone(settings.account_day_timezone)
+        if tz is None:
+            return
+        equity = await _account_equity(client, account, positions)
+        if equity is not None:
+            account_loss.record_sample(session, account.id, equity, now, tz)
+    except Exception:  # noqa: BLE001
+        logger.warning("account %s: could not record an equity sample this cycle", account.id)
+
+
+async def _account_loss_blocks(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, tlog, *, now: datetime) -> bool:
+    """True when a NEW live entry must not be opened because of the account-wide daily loss pause (docs/safety/account_daily_loss.md). Fail closed: an invalid time
+    zone or an unreadable equity also blocks. Off (ACCOUNT_DAILY_LOSS_PCT = 0) never blocks and reads nothing. Open trades are not touched by any of this."""
+    limit = settings.account_daily_loss_pct
+    if limit <= 0:
+        return False
+    tz = account_loss.zone(settings.account_day_timezone)
+    if tz is None:
+        tlog(telemetry.REJECTED, account_loss.R_TIMEZONE_INVALID)
+        await _block_entry(notifier, account, settings, account_loss.R_TIMEZONE_INVALID, account_loss.CUSTOMER_MESSAGE_TIMEZONE, now=now)
+        return True
+    existing = account_loss.active_pause(session, account.id, now, tz)
+    if existing is not None:
+        tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_DAILY_PAUSE, loss_pct=round(existing.loss_pct, 3), limit_pct=existing.limit_pct, ends_at=existing.ends_at.isoformat())
+        account.last_error = account_loss.CUSTOMER_MESSAGE_PAUSE
+        account.last_error_at = now
+        return True
+    equity = await _account_equity(client, account, [] if account.market_type == "spot" else None)
+    if equity is None:
+        tlog(telemetry.REJECTED, account_loss.R_EQUITY_UNREADABLE)
+        await _block_entry(notifier, account, settings, account_loss.R_EQUITY_UNREADABLE, account_loss.CUSTOMER_MESSAGE_UNREADABLE, now=now)
+        return True
+    row = account_loss.record_sample(session, account.id, equity, now, tz)
+    hit = account_loss.daily_loss_hit(start_equity=row.start_equity, equity=equity, limit_pct=limit)
+    if hit is None:
+        return False
+    pause = account_loss.write_pause(session, account.id, hit, limit_pct=limit, now=now, tz=tz, tz_name=settings.account_day_timezone)
+    detail = dict(loss_pct=round(pause.loss_pct, 3), limit_pct=limit, day=pause.day_key, approximate_start=bool(row.approximate), ends_at=pause.ends_at.isoformat())
+    tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_DAILY_PAUSE, **detail)
+    logger.warning("account %s: daily loss pause (%s) loss %.2f%% limit %g%%; no new entries until %s", account.id, pause.day_key, pause.loss_pct, limit, pause.ends_at.isoformat())
+    account.last_error = account_loss.CUSTOMER_MESSAGE_PAUSE
+    account.last_error_at = now
+    await _notify_safe(notifier, account, f"MBA Bot: {account_loss.CUSTOMER_MESSAGE_PAUSE} (down {pause.loss_pct:.1f}% today, limit {limit:g}%)")
+    return True
 
 
 async def _notify_safe(notifier: Notifier, account: TradingAccount, message: str) -> None:
@@ -718,6 +788,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
 
     if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
         return
+    if not is_paper and await _account_loss_blocks(session, account, client, settings, notifier, _tlog, now=now):
+        return  # account-wide daily loss pause: no NEW live entry today; open trades keep their stops and exits
 
     if pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
         # Fail closed: never open a NEW position on a pair that is not currently selectable for
@@ -920,6 +992,21 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     now=now,
                 )
                 return
+            if settings.futures_max_leverage > 0:
+                # Owner ceiling (docs/safety/account_daily_loss.md): the bot only READS leverage and margin mode and refuses; it never sets either on Binance.
+                # Checked before the pre-entry protection check below, which then judges the stop against the liquidation price.
+                if leverage > settings.futures_max_leverage + 1e-9:
+                    _tlog(telemetry.REJECTED, telemetry.R_FUTURES_LEVERAGE_CEILING, leverage=leverage, ceiling=settings.futures_max_leverage)
+                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_LEVERAGE_CEILING,
+                                       f"your Binance Futures leverage on {account.pair} ({leverage:g}x) is above the limit of {settings.futures_max_leverage:g}x set for this service. "
+                                       "Lower it for this pair on Binance. MBA Bot never changes it for you.", now=now)
+                    return
+                if margin_mode != "isolated":
+                    _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode)
+                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED,
+                                       f"your Binance Futures margin mode on {account.pair} is not isolated (or could not be read), and this service trades isolated margin only. "
+                                       "Switch the pair to isolated margin on Binance. MBA Bot never changes it for you.", now=now)
+                    return
             size = apply_margin_ceiling(
                 size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
             )
