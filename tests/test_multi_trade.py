@@ -721,6 +721,8 @@ def test_startup_recovery_picks_up_an_account_with_three_live_trades_once(db, mo
 
 @pytest.mark.parametrize("n", [2, 3])
 def test_restart_gate_counts_every_live_trade_not_every_account(db, monkeypatch, capsys, n):
+    from mba_bot import db as db_mod
+    monkeypatch.setenv("DATABASE_URL", db_mod._engine.url.render_as_string(hide_password=False))  # the gate opens its own connection from DATABASE_URL
     st, routed, fakes, aid, ids = live_trades_on_pairs(monkeypatch, n)
     assert restart_gate.main([]) == restart_gate.EXIT_LIVE_TRADES_OPEN
     out = capsys.readouterr().out
@@ -733,6 +735,8 @@ def test_restart_gate_counts_every_live_trade_not_every_account(db, monkeypatch,
 
 
 def test_restart_gate_ignores_paper_trades_and_fails_closed_when_the_database_cannot_be_read(db, monkeypatch, capsys):
+    from mba_bot import db as db_mod
+    monkeypatch.setenv("DATABASE_URL", db_mod._engine.url.render_as_string(hide_password=False))
     st = paper_settings()
     aid = paper_account(st)
     with session_scope() as s:
