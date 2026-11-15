@@ -78,6 +78,9 @@ class TradingAccount(Base):
     # database; no API or screen writes it. Used only when MAX_OPEN_POSITIONS is above 1 and the account is in paper mode.
     # NULL or empty = the single `pair`, exactly as before. Read it through multi_trade.trading_pairs(account).
     pair_list: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Which of the NEW strategies this account has been opted in to (comma separated: rsi_mr_v1, donchian_breakout_v1). Set by the owner directly in the
+    # database; no API, screen or onboarding step writes it. NULL or empty means EMA only, exactly as before. Read it through multi_trade.account_strategies.
+    extra_strategies: Mapped[str | None] = mapped_column(String(80), nullable=True)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
@@ -292,6 +295,16 @@ class Trade(Base):
             unique=True,
             sqlite_where=text("status NOT IN ('closed', 'void')"),
             postgresql_where=text("status NOT IN ('closed', 'void')"),
+        ),
+        # The LIVE rule, back in the database (audit B1): at most one non-terminal LIVE trade per account whatever its pair. Without it two
+        # scheduler processes could each pass the SELECT in lifecycle.open_live_trade and insert a live trade on a different pair. Paper rows
+        # (is_paper true) are outside it, so paper multi-trade is unaffected.
+        Index(
+            "uq_trades_one_live_nonterminal_per_account",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
+            postgresql_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
         ),
         Index(
             "uq_trades_one_nonterminal_no_pair",

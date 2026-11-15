@@ -53,6 +53,16 @@ class RsiSignal:
     gap_atr: float | None = None  # not used by this strategy; the guards read it for the EMA gap rule only
 
 
+SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")  # the candle sizes Binance offers that this bot can size (audit L4)
+
+
+def normalize_timeframe(timeframe) -> tuple[str, bool]:
+    """(timeframe to use, was it supported). Anything not in SUPPORTED_TIMEFRAMES (a week, a month, a typo, nothing) is 1h and the caller logs it."""
+    raw = timeframe.strip() if isinstance(timeframe, str) else ""
+    value = "" if raw.endswith("M") else raw.lower()  # a capital M is Binance's MONTH ("1M"); it is not "1m" (one minute)
+    return (value, True) if value in SUPPORTED_TIMEFRAMES else ("1h", False)
+
+
 _TF = re.compile(r"^(\d{1,3})([mhd])$")
 _UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
 
@@ -129,7 +139,7 @@ class Exit:
 
 
 def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: list, tf_ms: int, p: RsiParams = RsiParams()) -> Exit | None:
-    """Walk the closed candles that ended after the entry, oldest first, and return the FIRST exit event, or None.
+    """Walk the closed candles that started at or after the entry, oldest first, and return the FIRST exit event, or None.
 
     Per candle: the stop (low/high through it) first, then the profit target, then at the close the RSI line, then the time stop.
     When a candle touches both the stop and the target the stop wins (the conservative reading). The result depends only on the
@@ -142,18 +152,18 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
     target = target_price(entry, stop, side, p)
     n = 0
     for i, c in enumerate(closed):
-        if c.timestamp + tf_ms <= opened_ms:
-            continue  # ended before the entry
+        if c.timestamp < opened_ms:
+            continue  # started before the entry: the candle the entry happened in is not judged (the part before the entry never was ours)
         n += 1
         if side == "long":
             if c.low <= stop:
-                return Exit(EXIT_STOP, stop, c.timestamp)
+                return Exit(EXIT_STOP, min(stop, c.open), c.timestamp)  # a candle that OPENS below the stop fills at the open, the worse price (audit L6)
             if c.high >= target:
                 return Exit(EXIT_TARGET, target, c.timestamp)
             line_hit = r[i] is not None and r[i] >= p.exit_rsi
         else:
             if c.high >= stop:
-                return Exit(EXIT_STOP, stop, c.timestamp)
+                return Exit(EXIT_STOP, max(stop, c.open), c.timestamp)
             if c.low <= target:
                 return Exit(EXIT_TARGET, target, c.timestamp)
             line_hit = r[i] is not None and r[i] <= p.exit_rsi

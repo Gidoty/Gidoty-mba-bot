@@ -38,7 +38,7 @@ def db(tmp_path):
 
 def raw(closes, *, spread=0.4, forming=False):
     """ccxt rows [ts, o, h, l, c, v] whose last candle has just CLOSED (or, with forming=True, whose last candle is still forming)."""
-    end = int(time.time() * 1000) // HOUR * HOUR
+    end = int(time.time() * 1000) - 60_000  # the last candle closed a minute ago (a signal candle must be fresh, audit M5)
     if forming:
         end += HOUR
     out = []
@@ -49,7 +49,7 @@ def raw(closes, *, spread=0.4, forming=False):
 
 
 def settings(**over):
-    base = dict(KEYS, rsi_mr_enabled=True, strategy_guards_mode="enforce", fee_guard_margin=0.5, strategy_expectancy_window=0, max_total_risk_pct=5.0,
+    base = dict(KEYS, rsi_mr_enabled=True, strategy_guards_mode="enforce", new_strategy_guards_mode="enforce", fee_guard_margin=0.5, strategy_expectancy_window=0, max_total_risk_pct=5.0,
                 max_notional_multiplier=100.0, trade_telemetry=True)
     base.update(over)
     return make_settings(**base)
@@ -61,6 +61,7 @@ def paper_account(st, email="rsi@example.com", pair_list=None, market="spot", ri
         a = s.get(TradingAccount, aid)
         a.bot_started_at = None  # PAPER
         a.pair_list = pair_list
+        a.extra_strategies = "rsi_mr_v1,donchian_breakout_v1"  # opted in by the owner (audit H2)
         a.risk_pct = risk
     return aid
 
@@ -93,7 +94,7 @@ def test_defaults_are_off_and_paper_only():
 
 
 def test_environment_overrides_are_clamped(monkeypatch):
-    for k, v in {"RSI_MR_ENABLED": "true", "RSI_MR_RISK_PCT": "99", "RSI_MR_ADX_MAX": "-5", "RSI_MR_TIME_STOP_CANDLES": "0", "RSI_MR_TIMEFRAME": " 15M "}.items():
+    for k, v in {"RSI_MR_ENABLED": "true", "RSI_MR_RISK_PCT": "99", "RSI_MR_ADX_MAX": "-5", "RSI_MR_TIME_STOP_CANDLES": "0", "RSI_MR_TIMEFRAME": " 15m "}.items():
         monkeypatch.setenv(k, v)
     s = load_settings()
     assert s.rsi_mr_enabled and s.rsi_mr_risk_pct == 2.0 and s.rsi_mr_adx_max == 1.0 and s.rsi_mr_time_stop_candles == 1 and s.rsi_mr_timeframe == "15m"
@@ -217,7 +218,7 @@ def test_the_forming_candle_is_ignored_in_the_cycle(db, monkeypatch):
 
 
 def test_it_does_not_trade_without_the_guards_or_the_fee_guard(db, monkeypatch, caplog):
-    st, client, aid = setup(db, monkeypatch, raw(LONG), strategy_guards_mode="off")
+    st, client, aid = setup(db, monkeypatch, raw(LONG), new_strategy_guards_mode="off")
     with caplog.at_level(logging.WARNING, logger="mba_bot.trader"):
         run_cycle(aid, st)
     assert all_trades(aid) == [] and any(("rsi_guards_off" in r.getMessage()) and "@" not in r.getMessage() for r in caplog.records)
@@ -249,11 +250,11 @@ def test_the_fee_guard_uses_the_market_fees_and_the_strategy_target(db):
     assert not [h for h in fut if h.code == g.R_FEE_GUARD]  # 0.25 >= 0.20
 
 
-def test_observe_mode_logs_but_does_not_block(db, monkeypatch):
-    st, client, aid = setup(db, monkeypatch, raw(LONG), strategy_guards_mode="observe", fee_guard_margin=50.0)
+def test_observe_mode_does_not_let_the_strategy_trade(db, monkeypatch):
+    """Audit M1: observe blocks nothing, so it must not satisfy "needs the guards". The strategy trades only in enforce mode of NEW_STRATEGY_GUARDS_MODE."""
+    st, client, aid = setup(db, monkeypatch, raw(LONG), new_strategy_guards_mode="observe", fee_guard_margin=50.0)
     run_cycle(aid, st)
-    assert [t.strategy_id for t in all_trades(aid)] == ["rsi_mr_v1"]
-    assert any(d[3] == g.R_FEE_GUARD and d[2] == "observed" and d[0] == "rsi_mr_v1" for d in decisions())
+    assert all_trades(aid) == [] and ("rsi_mr_v1", "BTC/USDT", "rejected", "rsi_guards_not_enforced") in decisions()
 
 
 # ====================================================================== guards per strategy and per pair
@@ -407,7 +408,7 @@ def seed_rsi_trade(aid, *, entry, stop, qty=1.0, side="long", pair="BTC/USDT", o
 
 def candles_after_entry(rows):
     """Rows (o, h, l, c) for candles that start after the entry. The entry is 'now - 1 minute', the last candle closed at the top of this hour."""
-    end = int(time.time() * 1000) // HOUR * HOUR
+    end = int(time.time() * 1000) - 60_000
     pre = [104.0 - 0.1 * i for i in range(40)]  # a gentle fall into the entry: RSI far below the 50 line
     out = []
     n = len(pre) + len(rows)
@@ -425,7 +426,8 @@ def exit_setup(db, monkeypatch, rows, *, entry=100.0, stop=97.0, side="long", op
     install(monkeypatch, client)
     monkeypatch.setattr(trader, "generate_signal", lambda *a, **k: NO_EMA)
     aid = paper_account(st)
-    opened = datetime.now(U) - timedelta(hours=(opened_hours_ago if opened_hours_ago is not None else len(rows) + 0.5))
+    end = int(time.time() * 1000) - 60_000
+    opened = datetime.fromtimestamp((end - len(rows) * HOUR - 5000) / 1000, tz=U)  # five seconds before the open of the first row: the exit check judges candles from the one AFTER the entry candle (audit M5)
     seed_rsi_trade(aid, entry=entry, stop=stop, side=side, opened=opened)
     return st, client, aid
 

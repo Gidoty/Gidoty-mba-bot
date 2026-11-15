@@ -297,6 +297,17 @@ async def _notify_safe(notifier: Notifier, account: TradingAccount, message: str
         logger.exception("account %s: failed to send a status notification", account.id)
 
 
+class _SafeNotifier:
+    """Wraps a notifier so that a failed message is logged (through _notify_safe) and swallowed. The multi-trade cycle uses it so that one failed
+    message cannot stop the other open trades from being managed (audit L8). It only ever sends to the account's own notification target."""
+
+    def __init__(self, inner: Notifier, account: TradingAccount):
+        self._inner, self._account = inner, account
+
+    async def send(self, target, message) -> None:
+        await _notify_safe(self._inner, self._account, message)
+
+
 async def _record_error(notifier: Notifier, account: TradingAccount, message: str, *, now: datetime) -> None:
     """Persists a short, already-sanitized message (see
     exchange.safe_error_message - never raw exception text) and notifies
@@ -354,12 +365,12 @@ def _limit_message(account: TradingAccount, hit) -> str:
 
 
 async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog, pair: str | None = None,
-                                 strategy_id: str = strategy_guards.STRATEGY_ID) -> bool:
+                                 strategy_id: str = strategy_guards.STRATEGY_ID, mode: str | None = None) -> bool:
     """The strategy guards (strategy_guards.py), reached only when STRATEGY_GUARDS_MODE is observe or enforce. True if a NEW entry is
     refused here (and the refusal has been recorded). The operator kill switch was checked before this and stays authoritative: this
     can only add a refusal. In observe mode nothing is blocked and nothing is written; in enforce mode the first guard that fires blocks
     the entry, a pause guard also writes its pause, and the owner is told once. An unreadable guard input refuses in enforce mode."""
-    mode = settings.strategy_guards_mode
+    mode = mode or settings.strategy_guards_mode  # the new strategies pass NEW_STRATEGY_GUARDS_MODE; EMA keeps STRATEGY_GUARDS_MODE
     try:
         hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now, pair=pair, strategy_id=strategy_id)
     except Exception as exc:  # noqa: BLE001 - fail closed in enforce, silent in observe; never raise into the cycle
@@ -638,14 +649,16 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     strategy_id = rsi_mr.STRATEGY_ID if is_rsi else (donchian.STRATEGY_ID if is_don else multi_trade.EMA_STRATEGY_ID)
     if is_don:
         # donchian_breakout_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever DONCHIAN_PAPER_ONLY or any other setting says.
-        if not is_paper or not settings.donchian_enabled or signal.side not in ("long", "short") or signal.stop is None:
+        if (not is_paper or not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account)
+                or signal.side not in ("long", "short") or signal.stop is None):
             return
         if signal.side == "short" and account.market_type != "futures":
             return
         side = signal.side
     elif is_rsi:
         # rsi_mr_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever RSI_MR_PAPER_ONLY or any other setting says.
-        if not is_paper or not settings.rsi_mr_enabled or signal.side not in ("long", "short"):
+        if (not is_paper or not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account)
+                or signal.side not in ("long", "short")):
             return
         if signal.side == "short" and account.market_type != "futures":
             return
@@ -677,17 +690,20 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         )
         return
 
-    if (is_rsi or is_don) and (settings.strategy_guards_mode == "off" or settings.fee_guard_margin <= 0):
-        # Fail closed: these strategies do not trade without the guards of PR #45 and the fee guard. Logged once per day, not every cycle.
+    new_strategy = is_rsi or is_don
+    guards_mode = settings.new_strategy_guards_mode if new_strategy else settings.strategy_guards_mode
+    if new_strategy and (guards_mode != "enforce" or settings.fee_guard_margin <= 0):
+        # Fail closed (audit M1): these strategies trade only when THEIR guard mode is enforce (observe blocks nothing, so it would let an unguarded
+        # strategy trade) and the fee guard is on. Logged once per day, not every cycle.
         prefix = "rsi" if is_rsi else "donchian"
-        code = f"{prefix}_guards_off" if settings.strategy_guards_mode == "off" else f"{prefix}_fee_guard_off"
+        code = (f"{prefix}_guards_off" if guards_mode == "off" else f"{prefix}_guards_not_enforced" if guards_mode == "observe" else f"{prefix}_fee_guard_off")
         _tlog(telemetry.REJECTED, code)
         if protection_guard.should_alert(account.id, "-", f"{code}:{now.strftime('%Y-%m-%d')}", now=now, repeat_hours=24.0):
-            logger.warning("account %s: %s skipped (%s): set STRATEGY_GUARDS_MODE to observe or enforce and FEE_GUARD_MARGIN above 0", account.id, strategy_id, code)
+            logger.warning("account %s: %s skipped (%s): set NEW_STRATEGY_GUARDS_MODE=enforce and FEE_GUARD_MARGIN above 0", account.id, strategy_id, code)
         return
 
-    if settings.strategy_guards_mode != "off" and await _strategy_guards_block(
-        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog, pair=pair, strategy_id=strategy_id
+    if guards_mode != "off" and await _strategy_guards_block(
+        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog, pair=pair, strategy_id=strategy_id, mode=guards_mode
     ):
         return
 
@@ -997,16 +1013,16 @@ def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open
     never ignored)."""
     if len(open_trades) > 1:
         return True
+    if open_trades and all(t.is_paper for t in open_trades) and any(multi_trade.strategy_of(t) in multi_trade.NEW_STRATEGY_IDS for t in open_trades):
+        # A paper trade that rsi_mr_v1 or donchian_breakout_v1 opened is managed by ITS OWN rules, even if its switch was turned off since and even if the account
+        # now resolves as LIVE (audit L1; refusing would leave the trade with no exit). It runs on the paper environment, places no order and enters nothing new
+        # (a live-mode account never enters from this path).
+        return True
     if not is_paper or any(not t.is_paper for t in open_trades):
         return False
-    if any(multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID for t in open_trades):
-        return True  # a trade rsi_mr_v1 opened is managed by its own rules even if the switch was turned off since
-    if any(multi_trade.strategy_of(t) == donchian.STRATEGY_ID for t in open_trades):
-        return True  # same for donchian_breakout_v1
-    if settings.donchian_enabled:
-        return True  # donchian_breakout_v1 runs only on this path too, and only for PAPER accounts
-    if settings.rsi_mr_enabled:
-        return True  # rsi_mr_v1 runs only on this path, and only for PAPER accounts (the line above sends every live account away)
+    opted = multi_trade.account_strategies(account)
+    if (settings.donchian_enabled and donchian.STRATEGY_ID in opted) or (settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted):
+        return True  # the new strategies run only on this path, only for PAPER accounts the owner opted in (audit H2); others keep the EMA path and Auto Select
     return multi_trade.configured_cap(settings.max_open_positions) > 1 and len(multi_trade.trading_pairs(account)) > 1
 
 
@@ -1020,10 +1036,11 @@ def _market_grade(session, account: TradingAccount, settings: Settings, candles,
         atr_pct = (cur / closes[-1]) if cur is not None and closes[-1] else None
         avg = (sum(pcts) / len(pcts)) if pcts else None
         fee_bps = settings.fee_guard_fee_bps
+        costs = strategy_guards.costs_for(settings, account.market_type)
         need = max(settings.grade2_min_trades, settings.grade3_min_trades)
-        recent = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, limit=need)
+        recent = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, limit=need, costs=costs)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1))
+        today = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1), costs=costs)
         paused = any(strategy_guards.is_active(p, now) for p in strategy_guards.pauses(session, account.id, strategy_guards.STRATEGY_ID, True))
         inputs = multi_trade.GradeInputs(
             atr_pct=atr_pct, atr_avg_pct=avg, flat_threshold=settings.atr_flat_threshold,
@@ -1043,12 +1060,19 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
     """Checks for a 2nd or 3rd PAPER entry: slot still free, free capital, minimum order size, total open risk. Returns
     (size, None) to go ahead, possibly with the quantity trimmed to the free capital, or (size, (reason_code, detail)) to skip.
     The first trade of an account is never touched by this."""
+    balance = account.paper_balance
+    slots = multi_trade.configured_cap(settings.max_open_positions)
+    if slots > 1:
+        # Owner decision (audit L9): with more than one slot configured a single trade may use at most 1/slots of the balance as notional (a third for
+        # three slots), the first trade included. With one slot nothing changes.
+        size = apply_exposure_ceiling(size, entry_price=current_price, effective_capital=balance, max_notional_multiplier=1.0 / slots)
+        if not size.quantity > 0:
+            return size, (multi_trade.R_CAPITAL_SHORT, {"balance": round(balance, 2), "slots": slots})
     open_ts = list_open_trades(session, account.id)
     if not open_ts:
         return size, None
     if len(open_ts) >= multi.cap:
         return size, (multi_trade.R_SLOT_FULL, {"open": len(open_ts), "cap": multi.cap, "grade": multi.grade.level})
-    balance = account.paper_balance
     open_pct = multi_trade.open_risk_pct([abs(t.entry_price - t.stop_loss_price) * t.quantity for t in open_ts], balance)
     if open_pct is None:
         return size, (multi_trade.R_TOTAL_RISK_CAP, {"reason": "open risk unreadable"})  # fail closed
@@ -1069,6 +1093,7 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
 
 
 async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now) -> None:
+    notifier = _SafeNotifier(notifier, account)  # one failed message must not stop the other trades being managed (audit L8)
     live = [t for t in open_trades if not t.is_paper]
     if live:
         await _process_multi_live(session, account, client, live, settings, notifier, now=now)
@@ -1091,29 +1116,32 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
         )
 
-    rsi_on = settings.rsi_mr_enabled
+    opted = multi_trade.account_strategies(account)
+    rsi_on = settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted
     rsi_p = _rsi_params(settings)
-    rsi_tf_ms = rsi_mr.timeframe_ms(settings.rsi_mr_timeframe)
+    rsi_tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)  # the same value is asked of the exchange and used for the closed-candle test
+    rsi_tf_ms = rsi_mr.timeframe_ms(rsi_tf)
     now_ms = int(now.timestamp() * 1000)
     rsi_cache: dict[str, list] = {}
 
     async def rsi_closed_for(pair: str):
         if pair not in rsi_cache:
             ohlcv = await client.fetch_ohlcv(
-                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.rsi_mr_timeframe, limit=settings.ohlcv_limit
+                exchange.exchange_symbol(pair, account.market_type), timeframe=rsi_tf, limit=settings.ohlcv_limit
             )
             rsi_cache[pair] = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, rsi_tf_ms)
         return rsi_cache[pair]
 
-    don_on = settings.donchian_enabled
+    don_on = settings.donchian_enabled and donchian.STRATEGY_ID in opted
     don_p = _donchian_params(settings)
-    don_tf_ms = rsi_mr.timeframe_ms(settings.donchian_timeframe)
+    don_tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    don_tf_ms = rsi_mr.timeframe_ms(don_tf)
     don_cache: dict[str, list] = {}
 
     async def don_closed_for(pair: str):
         if pair not in don_cache:
             ohlcv = await client.fetch_ohlcv(
-                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.donchian_timeframe, limit=settings.ohlcv_limit
+                exchange.exchange_symbol(pair, account.market_type), timeframe=don_tf, limit=settings.ohlcv_limit
             )
             don_cache[pair] = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, don_tf_ms)
         return don_cache[pair]
@@ -1159,16 +1187,30 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             order = ([donchian.STRATEGY_ID] if don_on else []) + [multi_trade.EMA_STRATEGY_ID] + ([rsi_mr.STRATEGY_ID] if rsi_on else [])
             allow_short = account.market_type == "futures"
 
+            window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+
+            def fresh(strategy: str, pair: str, closed: list, tf_ms: int) -> bool:
+                """Audit M5: take the entry only if the signal candle is the latest closed candle and closed within the window; otherwise skip and log."""
+                age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+                if 0 <= age_ms <= window_ms:
+                    return True
+                if protection_guard.should_alert(account.id, pair, f"stale:{strategy}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+                    logger.info("account %s: %s signal on %s skipped (signal_stale): the signal candle closed %.0f minutes ago, the window is %g",
+                                account.id, strategy, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+                    telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.SKIPPED, reason="signal_stale", is_paper=True,
+                                           now=now, pair=pair, strategy_id=strategy, detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})
+                return False
+
             async def signal_of(strategy: str, pair: str):
                 """(signal object, price, candles) for one strategy on one pair, or None if it has no actionable signal."""
                 if strategy == donchian.STRATEGY_ID:
                     closed = await don_closed_for(pair)
                     sig = donchian.signal_from_candles(closed, don_p, allow_short=allow_short)
-                    return (sig, closed[-1].close, closed) if (sig.side and closed) else None
+                    return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, don_tf_ms)) else None
                 if strategy == rsi_mr.STRATEGY_ID:
                     closed = await rsi_closed_for(pair)
                     sig = rsi_mr.generate_signal(closed, rsi_p, allow_short=allow_short)
-                    return (sig, closed[-1].close, closed) if (sig.side and closed) else None
+                    return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, rsi_tf_ms)) else None
                 candles = await candles_for(pair)
                 if not candles:
                     return None

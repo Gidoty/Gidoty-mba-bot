@@ -55,7 +55,7 @@ ARMS = (
 def plan_hash() -> str:
     blob = {"protocol": PROTOCOL, "arms": [{"name": a.name, "params": asdict(a.params)} for a in ARMS], "pairs": PAIRS, "markets": MARKETS,
             "slippage_bps": SLIPPAGE_BPS, "months": [TOTAL_MONTHS, SEALED_MONTHS, EMBARGO_DAYS], "risk_pct": RB.RISK_PCT, "cooldown_hours": COOLDOWN_HOURS,
-            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "strategy_sha256": RB._sha(Path(DN.__file__)), "runner_rules": "next-open entry, stop first, volume used"}
+            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "sources_sha256": RB.source_pins(DN.__file__), "runner_rules": "next-open entry, stop first, volume used"}
     return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -179,19 +179,17 @@ def run_confirm(root: Path, out_dir: Path, *, reason: str, confirm: bool, second
     w = windows(data)
     if list(w["sealed"]) != chosen["windows"]["sealed"]:
         raise SealedError("the sealed window changed since the tuning")
-    ledger = out_dir / "looks.json"
-    looks = json.loads(ledger.read_text()) if ledger.exists() else []
+    looks = RB.read_looks(root, "donchian_breakout_v1", dh)
     contaminated = bool(looks)
     if looks and not second_look:
         raise SealedError("the sealed months were already read once; a second look needs --second-look and is labelled contaminated")
-    looks.append({"ts": RB._stamp(), "reason": reason.strip(), "plan_hash": ph, "data_hash": dh, "second_look": contaminated})
-    ledger.write_text(json.dumps(looks, indent=1))  # recorded BEFORE anything is read
+    n_looks = RB.record_look(root, "donchian_breakout_v1", dh, {"ts": RB._stamp(), "reason": reason.strip(), "plan_hash": ph, "second_look": contaminated})  # BEFORE anything is read
     s0, s1 = w["sealed"]
     arms = {a.name: a for a in ARMS}
     names = ["SPEC"] if chosen["selected"]["arm"] == "SPEC" else ["SPEC", chosen["selected"]["arm"]]
     rows = {n: run_arm(data, arms[n], s0, s1) for n in names}
     result = {"protocol": PROTOCOL, "plan_hash": ph, "data_hash": dh, "created": RB._stamp(), "sealed_window": [s0, s1], "selected": chosen["selected"], "rows": rows,
-              "contaminated": contaminated, "looks": len(looks)}
+              "contaminated": contaminated, "looks": n_looks}
     (out_dir / "sealed_results.json").write_text(json.dumps(result, indent=1))
     (out_dir / "final_report.md").write_text(final_report(result))
     return result

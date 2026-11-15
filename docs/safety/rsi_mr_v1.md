@@ -16,13 +16,20 @@ Every number below is the specification, not a tuned or measured value. Backtest
 * Fee guard: skipped when expected profit to target is below `FEE_GUARD_MARGIN` x round-trip cost. Cost = 2 x fee (Spot 0.10 percent, Futures 0.05 percent per side) + 2 x 0.05 percent slippage.
 * Pause after `RSI_MR_PAUSE_AFTER_LOSSES` (2) consecutive net losses on the SAME pair: that pair is paused for this strategy (`STRATEGY_STREAK_PAUSE_HOURS`, default 24; the owner can release it).
 
+A paper rsi_mr_v1 trade is managed by its own rules even if the account now resolves as LIVE (audit L1): it is exited on the paper environment, no order is placed, and a live-mode account enters nothing new from this path. Refusing instead would have left the trade without an exit.
+
+## Entry freshness and the exit start (audit M5)
+
+A paper entry is taken only if the signal candle is the latest closed candle and closed no more than `NEW_STRATEGY_ENTRY_WINDOW_MINUTES` (default 10, 1 to 59) ago; otherwise it is skipped and logged as `signal_stale` (journal and decision log). So a trade is never booked at a close the market left long ago (a slot that frees late, an ended cooldown, a restart, the switch turned on). The exit check judges only candles that start at or after the entry, so the candle the entry happened in is not judged (its low/high before the entry never belonged to the trade); an exit that candle would have caused is seen one candle later.
+
 ## Switches
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `RSI_MR_ENABLED` | false | Off: the strategy-aware path is never reached for it, nothing changes. A test makes every RSI function raise with the switch off. |
 | `RSI_MR_PAPER_ONLY` | true | Informational. rsi_mr_v1 is paper only IN CODE: a live account never runs it, whatever this or any setting says (test). |
-| `STRATEGY_GUARDS_MODE` | off | rsi_mr_v1 does NOT trade while this is `off`: it needs `observe` or `enforce` (fail closed, logged once a day as `rsi_guards_off`). |
+| `NEW_STRATEGY_GUARDS_MODE` | off | rsi_mr_v1 does NOT trade unless this is `enforce` (fail closed: `rsi_guards_off` when off, `rsi_guards_not_enforced` in observe, which blocks nothing; logged once a day). `STRATEGY_GUARDS_MODE` is the EMA strategy's own mode and does not affect this strategy (audit H2/M1). |
+| `trading_accounts.extra_strategies` | NULL | Per-account opt-in, set by the owner in the database (for example `rsi_mr_v1`; comma separated for both new strategies). NULL means EMA only: the account keeps Auto Select and the EMA path. No API or screen writes it. A live account ignores it. |
 | `FEE_GUARD_MARGIN` | 0 | rsi_mr_v1 does NOT trade while this is 0 (`rsi_fee_guard_off`). |
 
 ## How the guards of PR #45 apply (not copied; `strategy_guards.evaluate` takes the strategy id)
@@ -51,7 +58,11 @@ cycle stops: **one new entry per cycle in total**. So:
 * Starvation: an RSI trade lasts at most 24 candles, an EMA trade has no time stop. With one slot an open EMA trade blocks RSI for as long as it lasts. RSI signals are also much more frequent
   than EMA crosses in a range, so a lower priority is what keeps RSI from filling the slot. The grade (PR #47) is computed from all paper trades of the account together.
 
-A paper account with `RSI_MR_ENABLED` uses this path even with one pair and one slot. A live account never does.
+A paper account that the owner opted in (`extra_strategies`) while `RSI_MR_ENABLED` is on uses this path even with one pair and one slot (and no longer scans Auto Select). A paper account that is not opted in, and every live account, never does.
+
+## Verification of the indicators
+
+RSI matches the published StockCharts/Wilder worked example to two decimals (tests). ADX matches an independent from-the-definition implementation in the tests. The independent audit of 2026-11-15 reports ADX(14) equal to the `ta` 0.11.0 library to 4.3e-14 on synthetic candles and RSI/ATR equal after the first 300 candles (the library seeds differently): AUDITOR-REPORTED, not re-run by me. Nothing here was checked against real Binance candles.
 
 ## What this does NOT do / known limits
 
@@ -64,7 +75,7 @@ A paper account with `RSI_MR_ENABLED` uses this path even with one pair and one 
 
 ## Owner steps (none done by Claude)
 
-1. Deploy with `RSI_MR_ENABLED` unset (nothing changes). No migration in this PR beyond PR #47's.
-2. For a paper test account: `STRATEGY_GUARDS_MODE=observe`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `RSI_MR_ENABLED=true`, restart in a quiet moment (`python -m mba_bot.restart_gate` first).
-3. Watch the journal for `rsi_mr_v1` lines and `strategy_slot_lost_to`. Move to `enforce` only after reading what observe would have blocked.
+1. Deploy in the safe order described in `multi_trade.md`: `python -m mba_bot.restart_gate`, then stop the service, back up, migrate with `alembic upgrade head`, deploy the code, start the service, with `RSI_MR_ENABLED` unset: nothing changes. The migrations are the ones of the stack (see `multi_trade.md`).
+2. For ONE paper test account: set its `extra_strategies` to `rsi_mr_v1` in the database, then `NEW_STRATEGY_GUARDS_MODE=enforce`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `RSI_MR_ENABLED=true`; apply it with the same order (`python -m mba_bot.restart_gate`, stop the service, back up, deploy the code, start the service).
+3. Watch the journal for `rsi_mr_v1` lines and `strategy_slot_lost_to`. These strategies trade only in `enforce` of their own guard mode, so there is no observe stage for them; read the journal and the decision log after the first days.
 4. Rollback: `RSI_MR_ENABLED=false`. An open RSI paper trade keeps being managed by its own rules until it exits.

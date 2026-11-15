@@ -41,6 +41,35 @@ def upgrade() -> None:
         op.create_index("ix_strategy_pauses_account_strategy", "strategy_pauses", ["account_id", "strategy_id"])
 
 
+def _active_pauses() -> int:
+    """Pauses with no release and no end, or an end still in the future. An expectancy pause has no end: it lasts until the owner releases it."""
+    from datetime import datetime, timezone
+
+    rows = op.get_bind().execute(sa.text("SELECT resume_at FROM strategy_pauses WHERE released_at IS NULL")).fetchall()
+    now = datetime.now(timezone.utc)
+    active = 0
+    for (resume_at,) in rows:
+        if resume_at is None:
+            active += 1
+            continue
+        if isinstance(resume_at, str):
+            resume_at = datetime.fromisoformat(resume_at.replace(" ", "T"))
+        if resume_at.tzinfo is None:
+            resume_at = resume_at.replace(tzinfo=timezone.utc)
+        if resume_at > now:
+            active += 1
+    return active
+
+
 def downgrade() -> None:
+    # Audit M6: dropping the table silently ENDS every pause, including an expectancy pause that is documented to end only when the owner releases it.
+    # Refuse (changing nothing) while one is active; release it with `python -m mba_bot.strategy_pause release` first, if that is really what is wanted.
+    if sa.inspect(op.get_bind()).has_table("strategy_pauses"):
+        n = _active_pauses()
+        if n:
+            raise RuntimeError(
+                f"{n} active strategy pause(s) exist. Downgrading would drop the table and silently end them. Release them first "
+                "(python -m mba_bot.strategy_pause release) if you really want that; refusing to guess."
+            )
     op.drop_index("ix_strategy_pauses_account_strategy", table_name="strategy_pauses")
     op.drop_table("strategy_pauses")

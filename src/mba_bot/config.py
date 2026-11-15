@@ -7,6 +7,7 @@ this module only holds defaults and operational knobs.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -117,6 +118,16 @@ def verify_mode_is_unrecognised(raw: str | None) -> bool:
 _GUARD_ENFORCE = ("1", "true", "yes", "on", "enforce")
 _GUARD_OFF = ("0", "false", "no", "off")
 GUARD_MODES = ("off", "observe", "enforce")
+
+
+def parse_strategy_timeframe(name: str, raw: str | None) -> str:
+    """RSI_MR_TIMEFRAME / DONCHIAN_TIMEFRAME: a supported candle size, otherwise 1h and a warning in the journal (audit L4)."""
+    from .rsi_mr import normalize_timeframe
+
+    value, ok = normalize_timeframe(raw)
+    if not ok and (raw or "").strip():
+        logging.getLogger(__name__).warning("%s=%r is not a supported timeframe; using 1h", name, (raw or "")[:20])
+    return value
 
 
 def parse_strategy_guards_mode(raw: str | None) -> str:
@@ -315,6 +326,10 @@ class Settings:
     # NEW entry (open positions are never touched). A threshold of 0 switches that one guard off. The operator kill switch is checked
     # first and stays authoritative: a guard can only ever add a refusal, never lift one. All numbers are provisional until tuned.
     strategy_guards_mode: str = "off"
+    # The guard mode read ONLY by rsi_mr_v1 and donchian_breakout_v1 (audit H2/M1). They trade only in `enforce`; STRATEGY_GUARDS_MODE then affects only EMA.
+    new_strategy_guards_mode: str = "off"
+    # A paper RSI or Donchian entry is taken only if its signal candle closed at most this many minutes ago (audit M5). 1 to 59.
+    new_strategy_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -521,6 +536,8 @@ def load_settings() -> Settings:
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
         strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("STRATEGY_GUARDS_MODE")),
+        new_strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("NEW_STRATEGY_GUARDS_MODE")),
+        new_strategy_entry_window_minutes=min(59.0, max(1.0, _env_float("NEW_STRATEGY_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),
@@ -540,7 +557,7 @@ def load_settings() -> Settings:
         paper_min_notional=min(100_000.0, max(0.0, _env_float("PAPER_MIN_NOTIONAL", 10.0))),
         rsi_mr_enabled=_env_bool("RSI_MR_ENABLED", False),
         rsi_mr_paper_only=_env_bool("RSI_MR_PAPER_ONLY", True),
-        rsi_mr_timeframe=(os.environ.get("RSI_MR_TIMEFRAME") or "1h").strip().lower(),
+        rsi_mr_timeframe=parse_strategy_timeframe("RSI_MR_TIMEFRAME", os.environ.get("RSI_MR_TIMEFRAME")),
         rsi_mr_risk_pct=min(2.0, max(0.0, _env_float("RSI_MR_RISK_PCT", 0.5))),
         rsi_mr_adx_max=min(100.0, max(1.0, _env_float("RSI_MR_ADX_MAX", 25.0))),
         rsi_mr_stop_atr=min(10.0, max(0.5, _env_float("RSI_MR_STOP_ATR", 1.5))),
@@ -552,7 +569,7 @@ def load_settings() -> Settings:
         rsi_mr_slippage_bps=min(250.0, max(0.0, _env_float("RSI_MR_SLIPPAGE_BPS", 5.0))),
         donchian_enabled=_env_bool("DONCHIAN_ENABLED", False),
         donchian_paper_only=_env_bool("DONCHIAN_PAPER_ONLY", True),
-        donchian_timeframe=(os.environ.get("DONCHIAN_TIMEFRAME") or "1h").strip().lower(),
+        donchian_timeframe=parse_strategy_timeframe("DONCHIAN_TIMEFRAME", os.environ.get("DONCHIAN_TIMEFRAME")),
         donchian_risk_pct=min(2.0, max(0.0, _env_float("DONCHIAN_RISK_PCT", 0.5))),
         donchian_entry_period=min(500, max(2, _env_int("DONCHIAN_ENTRY_PERIOD", 20))),
         donchian_exit_period=min(500, max(2, _env_int("DONCHIAN_EXIT_PERIOD", 10))),

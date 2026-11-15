@@ -131,7 +131,8 @@ def test_free_capital_and_open_risk_helpers_fail_closed():
 
 # ====================================================================== database rule and migration
 def _trade(account_id, status, pair, **kw):
-    return Trade(account_id=account_id, side="long", is_paper=False, entry_price=1.0, quantity=1.0, stop_loss_price=0.5, status=status, pair=pair, **kw)
+    kw.setdefault("is_paper", True)  # since the live index (audit B1) several trades on different pairs exist only as PAPER trades
+    return Trade(account_id=account_id, side="long", entry_price=1.0, quantity=1.0, stop_loss_price=0.5, status=status, pair=pair, **kw)
 
 
 def test_one_non_terminal_trade_per_account_and_pair(db):
@@ -619,6 +620,11 @@ def live_trades_on_pairs(monkeypatch, n, *, db_settings=None):
             assert opened, (pair, s.get(TradingAccount, aid).last_error, [(x.pair, x.status) for x in s.query(Trade).all()])
             assert len(opened) == 1 and opened[0].status == "open" and opened[0].protection_status == "protected", (pair, opened[0].status)
             ids.append(opened[0].id)
+    # The database (audit B1) now refuses a second non-terminal LIVE trade. These tests exercise the RECOVERY path for a database that somehow holds
+    # several (a manual change, a pre-fix database), so the live index is dropped on this scratch database before the trades are put back.
+    from sqlalchemy import text as _text
+    with session_scope() as s:
+        s.execute(_text("DROP INDEX IF EXISTS uq_trades_one_live_nonterminal_per_account"))
     with session_scope() as s:
         for t in s.query(Trade).filter(Trade.id.in_(ids)).all():
             t.status = "open"
@@ -715,6 +721,8 @@ def test_startup_recovery_picks_up_an_account_with_three_live_trades_once(db, mo
 
 @pytest.mark.parametrize("n", [2, 3])
 def test_restart_gate_counts_every_live_trade_not_every_account(db, monkeypatch, capsys, n):
+    from mba_bot import db as db_mod
+    monkeypatch.setenv("DATABASE_URL", db_mod._engine.url.render_as_string(hide_password=False))  # the gate opens its own connection from DATABASE_URL
     st, routed, fakes, aid, ids = live_trades_on_pairs(monkeypatch, n)
     assert restart_gate.main([]) == restart_gate.EXIT_LIVE_TRADES_OPEN
     out = capsys.readouterr().out
@@ -727,6 +735,8 @@ def test_restart_gate_counts_every_live_trade_not_every_account(db, monkeypatch,
 
 
 def test_restart_gate_ignores_paper_trades_and_fails_closed_when_the_database_cannot_be_read(db, monkeypatch, capsys):
+    from mba_bot import db as db_mod
+    monkeypatch.setenv("DATABASE_URL", db_mod._engine.url.render_as_string(hide_password=False))
     st = paper_settings()
     aid = paper_account(st)
     with session_scope() as s:

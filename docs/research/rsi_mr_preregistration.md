@@ -1,7 +1,9 @@
 # rsi_mr_v1 backtest: pre-registration
 
-Registered BEFORE any real-data run. Plan hash at registration: `3632d0bc0fb91552`. Nothing in this file has been measured on market data. `python -m mba_bot.rsi_backtest plan` prints the plan hash. The hash covers the arms,
-pairs, fees, slippage, windows, selection rule AND the SHA-256 of `src/mba_bot/rsi_mr.py`, so changing the strategy file after tuning makes `confirm` refuse to run.
+Registered BEFORE any real-data run. Plan hash at registration: `74bb265b700a6d21`. Nothing in this file has been measured on market data. `python -m mba_bot.rsi_backtest plan` prints the plan hash. The hash covers the arms,
+pairs, fees, slippage, windows, selection rule AND the SHA-256 of `src/mba_bot/rsi_mr.py`, `rsi_backtest.py`, `donchian_backtest.py`, `indicators.py` and `strategy.py`, so changing any of them after tuning makes `confirm` refuse to run.
+
+**RE-REGISTERED in the audit-fix PR (#50), before any real-data run.** The plan hash changed from `3632d0bc0fb91552` (now retired; do not use it) to `74bb265b700a6d21`. Why: audit M3 found the hash did not cover the simulator or the indicators, so the hash now also pins the SHA-256 of `rsi_backtest.py`, `donchian_backtest.py`, `indicators.py` and `strategy.py` besides the strategy file. The same PR changed what the hash covers for other reasons, each audited: stops that a candle opens beyond fill at the open (L6), the one-look ledger sits beside the data (M4), and the exit check judges candles from the one after the entry (M5). Nothing was run on real data under either hash. If any of the pinned files changes again before `tune`, `confirm` refuses and the plan must be re-registered again.
 
 ## Question
 
@@ -21,6 +23,10 @@ Stop first when one candle touches both. One position per pair at a time. Unfini
 ## Arms (fixed, not widened after seeing results)
 
 SPEC (ADX < 25, stop 1.5 ATR, target 1.0 ATR, time stop 24); ADX20; ADX30; TARGET1.5; STOP2.0. Each changes one thing.
+
+## The one-look ledger
+
+The record that the sealed months were read lives in `sealed_looks.rsi_mr_v1.json` beside the data (in the data folder, not the output folder), keyed on the data hash. A new output folder or deleted output files do not give a clean second look. It is an **honesty aid, not a lock**: anyone who can delete that file can still take a second look, and the report of a second look says it is not unseen evidence.
 
 ## Selection rule (fixed)
 
