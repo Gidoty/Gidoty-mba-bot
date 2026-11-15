@@ -56,15 +56,33 @@ class Result:
     net_r: float  # net divided by the money at risk (|entry - stop| x quantity)
 
 
-def trade_result(t: Trade, fee_bps: float) -> Result | None:
-    """The modelled net result of one closed trade, or None if it cannot be judged (missing or odd numbers)."""
+def cost_model(settings: Settings, strategy_id: str | None, market_type: str) -> tuple[float, float]:
+    """(fee in basis points per side, ROUND-TRIP slippage in basis points) for a strategy on a market: the numbers its fee guard uses (audit M2).
+    ema_cross_atr_v1: FEE_GUARD_FEE_BPS per side and FEE_GUARD_SLIPPAGE_BPS for the round trip. rsi_mr_v1 and donchian_breakout_v1: their per-market
+    fee per side and twice their per-side slippage. An empty strategy id is the EMA strategy's."""
+    futures = market_type == "futures"
+    if strategy_id == RSI_ID:
+        return (settings.rsi_mr_futures_fee_bps if futures else settings.rsi_mr_spot_fee_bps), 2 * settings.rsi_mr_slippage_bps
+    if strategy_id == DONCHIAN_ID:
+        return (settings.donchian_futures_fee_bps if futures else settings.donchian_spot_fee_bps), 2 * settings.donchian_slippage_bps
+    return settings.fee_guard_fee_bps, settings.fee_guard_slippage_bps
+
+
+def costs_for(settings: Settings, market_type: str):
+    """A function from a Trade row to its (fee_bps, slippage_bps) under the strategy that opened it."""
+    return lambda t: cost_model(settings, t.strategy_id or None, market_type)
+
+
+def trade_result(t: Trade, fee_bps: float, slippage_bps: float = 0.0) -> Result | None:
+    """The modelled net result of one closed trade, or None if it cannot be judged (missing or odd numbers). Costs: `fee_bps` per side on both
+    notionals plus `slippage_bps` for the round trip (half on each notional)."""
     try:
         if t.pnl is None or t.closed_at is None or t.exit_price is None:
             return None
         risk = abs(t.entry_price - t.stop_loss_price) * t.quantity
         if not (risk > 0) or risk != risk:
             return None
-        fees = fee_bps / 10_000.0 * (t.entry_price * t.quantity + t.exit_price * t.quantity)
+        fees = (fee_bps + slippage_bps / 2.0) / 10_000.0 * (t.entry_price * t.quantity + t.exit_price * t.quantity)
         net = float(t.pnl) - fees
         return Result(closed_at=_aware(t.closed_at), pair=t.pair, close_reason=t.close_reason, net=net, net_r=net / risk)
     except (TypeError, ValueError):
@@ -72,7 +90,7 @@ def trade_result(t: Trade, fee_bps: float) -> Result | None:
 
 
 def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps: float, since: datetime | None = None, limit: int = 200,
-                   strategy_id: str | None = None, pair: str | None = None) -> list[Result]:
+                   strategy_id: str | None = None, pair: str | None = None, costs=None) -> list[Result]:
     """This account's closed STRATEGY trades in this mode, newest first, incident trades excluded. With `strategy_id` only that strategy's
     trades count (an empty strategy_id on a row means ema_cross_atr_v1); with `pair` only that pair's. Without either: every trade, as before."""
     q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.closed_at.isnot(None))
@@ -88,7 +106,7 @@ def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps
     for t in rows:
         if t.close_reason in INCIDENT_REASONS:
             continue
-        r = trade_result(t, fee_bps)
+        r = trade_result(t, *(costs(t) if costs is not None else (fee_bps, 0.0)))
         if r is not None:
             out.append(r)
         if len(out) >= limit:
@@ -164,6 +182,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     now = _aware(now)
     rsi = strategy_id == RSI_ID
     don = strategy_id == DONCHIAN_ID
+    costs = costs_for(settings, account.market_type)  # each trade is charged its own strategy's fee and slippage for this market
     pair = pair or account.pair
 
     rows = pauses(session, account.id, strategy_id, is_paper)
@@ -176,7 +195,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     fee_bps = settings.fee_guard_fee_bps
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     if settings.strategy_daily_loss_pct > 0:
-        today = [r for r in closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1), strategy_id=strategy_id)]
+        today = [r for r in closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, costs=costs, since=day_start - timedelta(microseconds=1), strategy_id=strategy_id)]
         capital = account.paper_balance if is_paper else account.allocated_capital
         h = daily_loss_hit(net_pnl_today=sum(r.net for r in today), capital=capital, limit_pct=settings.strategy_daily_loss_pct)
         if h:
@@ -185,7 +204,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     # The stop cooldown: the EMA strategy's own setting, donchian_breakout_v1's own setting; rsi_mr_v1 has the two-loss pause instead.
     cooldown_hours = settings.donchian_stop_cooldown_hours if don else (0.0 if rsi else settings.ema_stop_cooldown_hours)
     if cooldown_hours > 0:
-        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=cooldown_hours), limit=50,
+        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, costs=costs, since=now - timedelta(hours=cooldown_hours), limit=50,
                                 strategy_id=strategy_id)
         stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, pair))]
         h = cooldown_hit(max(stops) if stops else None, now, cooldown_hours)
@@ -195,7 +214,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     streak_n = settings.rsi_mr_pause_after_losses if rsi else settings.strategy_pause_after_losses
     if streak_n > 0:
         start = window_start(rows, R_LOSS_STREAK, now)
-        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=max(10, streak_n + 5), strategy_id=strategy_id,
+        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, costs=costs, since=start, limit=max(10, streak_n + 5), strategy_id=strategy_id,
                              pair=pair if rsi else None)
         h = loss_streak_hit([r.net for r in res], streak_n, settings.strategy_streak_pause_hours)
         if h:
@@ -205,7 +224,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
 
     if settings.strategy_expectancy_window > 0:
         start = window_start(rows, R_EXPECTANCY, now)
-        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=settings.strategy_expectancy_window, strategy_id=strategy_id)
+        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, costs=costs, since=start, limit=settings.strategy_expectancy_window, strategy_id=strategy_id)
         h = expectancy_hit([r.net_r for r in res], settings.strategy_expectancy_window)
         if h:
             hits.append(h)

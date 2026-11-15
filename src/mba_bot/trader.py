@@ -1024,10 +1024,11 @@ def _market_grade(session, account: TradingAccount, settings: Settings, candles,
         atr_pct = (cur / closes[-1]) if cur is not None and closes[-1] else None
         avg = (sum(pcts) / len(pcts)) if pcts else None
         fee_bps = settings.fee_guard_fee_bps
+        costs = strategy_guards.costs_for(settings, account.market_type)
         need = max(settings.grade2_min_trades, settings.grade3_min_trades)
-        recent = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, limit=need)
+        recent = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, limit=need, costs=costs)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1))
+        today = strategy_guards.closed_results(session, account.id, is_paper=True, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1), costs=costs)
         paused = any(strategy_guards.is_active(p, now) for p in strategy_guards.pauses(session, account.id, strategy_guards.STRATEGY_ID, True))
         inputs = multi_trade.GradeInputs(
             atr_pct=atr_pct, atr_avg_pct=avg, flat_threshold=settings.atr_flat_threshold,

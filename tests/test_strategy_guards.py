@@ -208,7 +208,7 @@ def test_a_tiny_win_that_fees_turn_into_a_loss_counts_as_a_loss(db):
     st = make_settings(strategy_pause_after_losses=2, strategy_expectancy_window=0, max_open_positions=0, max_total_risk_pct=0.0)
     add_trades(aid, [trade_row(pnl=0.05, closed=NOW - timedelta(hours=h)) for h in (1, 2)])  # gross +0.05 but fees are about 0.1
     assert [h.code for h in evaluate(aid, st)] == [g.R_LOSS_STREAK]
-    assert evaluate(aid, make_settings(strategy_pause_after_losses=2, fee_guard_fee_bps=0.0, strategy_expectancy_window=0, max_open_positions=0, max_total_risk_pct=0.0)) == []
+    assert evaluate(aid, make_settings(strategy_pause_after_losses=2, fee_guard_fee_bps=0.0, fee_guard_slippage_bps=0.0, strategy_expectancy_window=0, max_open_positions=0, max_total_risk_pct=0.0)) == []  # zero costs (fees AND slippage, since the audit M2 change)
 
 
 def test_paper_and_live_results_are_kept_apart(db):
