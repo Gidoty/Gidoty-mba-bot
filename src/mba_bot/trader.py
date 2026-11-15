@@ -1060,12 +1060,19 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
     """Checks for a 2nd or 3rd PAPER entry: slot still free, free capital, minimum order size, total open risk. Returns
     (size, None) to go ahead, possibly with the quantity trimmed to the free capital, or (size, (reason_code, detail)) to skip.
     The first trade of an account is never touched by this."""
+    balance = account.paper_balance
+    slots = multi_trade.configured_cap(settings.max_open_positions)
+    if slots > 1:
+        # Owner decision (audit L9): with more than one slot configured a single trade may use at most 1/slots of the balance as notional (a third for
+        # three slots), the first trade included. With one slot nothing changes.
+        size = apply_exposure_ceiling(size, entry_price=current_price, effective_capital=balance, max_notional_multiplier=1.0 / slots)
+        if not size.quantity > 0:
+            return size, (multi_trade.R_CAPITAL_SHORT, {"balance": round(balance, 2), "slots": slots})
     open_ts = list_open_trades(session, account.id)
     if not open_ts:
         return size, None
     if len(open_ts) >= multi.cap:
         return size, (multi_trade.R_SLOT_FULL, {"open": len(open_ts), "cap": multi.cap, "grade": multi.grade.level})
-    balance = account.paper_balance
     open_pct = multi_trade.open_risk_pct([abs(t.entry_price - t.stop_loss_price) * t.quantity for t in open_ts], balance)
     if open_pct is None:
         return size, (multi_trade.R_TOTAL_RISK_CAP, {"reason": "open risk unreadable"})  # fail closed

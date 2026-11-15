@@ -30,10 +30,10 @@ three slots on a test account before then, lower the two `GRADE*_MIN_TRADES` set
 
 ## Checks before the 2nd and 3rd entry (paper)
 
-Slot free for the grade; total open risk (money between entry and stop, from the stored trades) plus the new trade within
+One trade may use at most 1/slots of the paper balance as notional when `MAX_OPEN_POSITIONS` is above 1 (a third for three slots, a half for two; owner decision, audit L9), the first trade included; with one slot nothing changes. Slot free for the grade; total open risk (money between entry and stop, from the stored trades) plus the new trade within
 `MAX_TOTAL_RISK_PCT`; free capital (balance minus the notional of open trades, counted at 1x) above zero, with the quantity trimmed to
 what is free; notional at least `PAPER_MIN_NOTIONAL`. A refusal is logged with a reason code (`trade_slots_full`, `total_open_risk_cap`,
-`free_capital_short`) and the decision log when telemetry is on. The first trade of an account is never touched by these checks.
+`free_capital_short`) and the decision log when telemetry is on. Apart from the notional share above, the first trade of an account is never touched by these checks.
 `PAPER_MIN_NOTIONAL` is a stand-in: paper has no exchange, so the real Binance minimum is not read. UNVERIFIED.
 
 ## Database
