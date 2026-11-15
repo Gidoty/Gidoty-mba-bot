@@ -112,3 +112,15 @@ def test_the_chain_has_one_head_on_top_of_the_multi_trade_migration():
     from alembic.script import ScriptDirectory
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     assert script.get_revision(NEW).down_revision == HEAD_BEFORE and script.get_heads() == ["f3c8a1d6e2b9"]  # (the head moved on with the audit H2 migration)
+
+
+def test_the_upgrade_does_not_fail_when_the_index_already_exists(tmp_path, monkeypatch, keep_logging):
+    """init_db() runs create_all(), which creates the new index on a database the migration has not reached yet; the migration must then be a no-op."""
+    path = tmp_path / "pre.db"
+    cfg = _cfg(monkeypatch, path)
+    command.upgrade(cfg, HEAD_BEFORE)
+    eng = create_engine(f"sqlite:///{path}")
+    with eng.begin() as c:
+        c.execute(text(f"CREATE UNIQUE INDEX {INDEX} ON trades (account_id) WHERE status NOT IN ('closed', 'void') AND NOT is_paper"))
+    command.upgrade(cfg, "head")
+    assert INDEX in {i["name"] for i in inspect(create_engine(f"sqlite:///{path}")).get_indexes("trades")}
