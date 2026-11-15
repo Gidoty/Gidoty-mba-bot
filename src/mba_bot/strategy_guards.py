@@ -12,7 +12,7 @@ Rules this module keeps (CLAUDE.md):
   * A threshold of 0 switches that single guard off.
   * Incident trades (emergency exits, dust) are infrastructure events, not strategy results: they never count towards a streak,
     an expectancy or a daily loss. Paper and live results are kept apart.
-Fees in the expectancy are MODELLED (the trading path does not record exact fees): `fee_guard_fee_bps` per side on entry and exit notional.
+Fees in the results are MODELLED (the trading path does not record exact fees): each strategy's own fee and slippage per market (cost_model), on entry and exit notional.
 """
 from __future__ import annotations
 

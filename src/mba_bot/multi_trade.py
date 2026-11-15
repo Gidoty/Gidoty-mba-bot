@@ -57,7 +57,7 @@ def configured_cap(configured) -> int:
     """MAX_OPEN_POSITIONS clamped to 1..HARD_MAX_TRADES. Zero, negative, missing or not a number is 1."""
     try:
         n = int(configured)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # int(float("inf")) raises OverflowError
         return 1
     return max(1, min(HARD_MAX_TRADES, n))
 

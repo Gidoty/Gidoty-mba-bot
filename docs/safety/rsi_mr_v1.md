@@ -60,6 +60,10 @@ cycle stops: **one new entry per cycle in total**. So:
 
 A paper account that the owner opted in (`extra_strategies`) while `RSI_MR_ENABLED` is on uses this path even with one pair and one slot (and no longer scans Auto Select). A paper account that is not opted in, and every live account, never does.
 
+## Verification of the indicators
+
+RSI matches the published StockCharts/Wilder worked example to two decimals (tests). ADX matches an independent from-the-definition implementation in the tests. The independent audit of 2026-11-15 reports ADX(14) equal to the `ta` 0.11.0 library to 4.3e-14 on synthetic candles and RSI/ATR equal after the first 300 candles (the library seeds differently): AUDITOR-REPORTED, not re-run by me. Nothing here was checked against real Binance candles.
+
 ## What this does NOT do / known limits
 
 * No `TradeTelemetry` row is written for an RSI trade (that table is shaped for the EMA signal); decision-log rows carry `strategy_id`. UNVERIFIED that this is enough for research use.

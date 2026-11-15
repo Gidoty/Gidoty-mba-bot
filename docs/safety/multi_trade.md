@@ -59,8 +59,8 @@ position API.
 
 * No frontend change. `/api/account/position` still describes the OLDEST open trade. A new `/api/account/positions` lists every open trade;
   no screen uses it yet.
-* Auto Select is ignored for an account that uses a pair list.
-* Guard statistics (loss streak, daily loss, expectancy) pool all of the account's trades. Only the stop cooldown is per pair.
+* Auto Select is ignored for an account that uses a pair list and for an account the owner opted in to a new strategy (`extra_strategies`); other paper accounts keep it.
+* Guard statistics (loss streak, daily loss, expectancy) are kept per strategy since the strategy PRs (audit L10; a row with no strategy id is the EMA strategy's) and charged each strategy's own fee and slippage per market. The stop cooldown and the RSI two-loss pause are per pair. The market grade still pools all of the account's paper trades, each at its own strategy's costs.
 * Three crypto trades at once are often one bet, because the pairs move together. `MAX_TOTAL_RISK_PCT` (default 2.0, so two trades at 1 percent
   each) is the real protection, not the trade count. With the default, a third trade at 1 percent risk is refused. Raise it deliberately.
 * If an account somehow has more than one LIVE trade, every one is reconciled and monitored and nothing new opens. If paper and live trades
