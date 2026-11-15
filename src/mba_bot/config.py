@@ -330,6 +330,10 @@ class Settings:
     new_strategy_guards_mode: str = "off"
     # A paper RSI or Donchian entry is taken only if its signal candle closed at most this many minutes ago (audit M5). 1 to 59.
     new_strategy_entry_window_minutes: float = 10.0
+    # EMA decides on CLOSED candles only (docs/safety/ema_closed_candle.md). Off = today's behaviour: the still-forming last candle feeds the signal.
+    ema_closed_candle_only: bool = False
+    # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
+    ema_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -538,6 +542,8 @@ def load_settings() -> Settings:
         strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("STRATEGY_GUARDS_MODE")),
         new_strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("NEW_STRATEGY_GUARDS_MODE")),
         new_strategy_entry_window_minutes=min(59.0, max(1.0, _env_float("NEW_STRATEGY_ENTRY_WINDOW_MINUTES", 10.0))),
+        ema_closed_candle_only=_env_bool("EMA_CLOSED_CANDLE_ONLY", False),
+        ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),
