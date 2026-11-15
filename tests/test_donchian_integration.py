@@ -49,7 +49,7 @@ def raw(candles, *, forming=False):
 
 
 def settings(**over):
-    base_ = dict(KEYS, donchian_enabled=True, strategy_guards_mode="enforce", fee_guard_margin=0.5, strategy_expectancy_window=0, max_total_risk_pct=5.0,
+    base_ = dict(KEYS, donchian_enabled=True, strategy_guards_mode="enforce", new_strategy_guards_mode="enforce", fee_guard_margin=0.5, strategy_expectancy_window=0, max_total_risk_pct=5.0,
                  max_notional_multiplier=100.0, trade_telemetry=True)
     base_.update(over)
     return make_settings(**base_)
@@ -61,6 +61,7 @@ def paper_account(st, email="don@example.com", pair_list=None, market="spot", ri
         a = s.get(TradingAccount, aid)
         a.bot_started_at = None  # PAPER
         a.pair_list = pair_list
+        a.extra_strategies = "rsi_mr_v1,donchian_breakout_v1"  # opted in by the owner (audit H2)
         a.risk_pct = risk
     return aid
 
@@ -243,7 +244,7 @@ def test_the_forming_candle_is_ignored_in_the_cycle(db, monkeypatch):
 
 
 def test_it_does_not_trade_without_the_guards_or_the_fee_guard(db, monkeypatch, caplog):
-    st, client, aid = setup(db, monkeypatch, with_last(LONG_ROW), strategy_guards_mode="off")
+    st, client, aid = setup(db, monkeypatch, with_last(LONG_ROW), new_strategy_guards_mode="off")
     with caplog.at_level(logging.WARNING, logger="mba_bot.trader"):
         run_cycle(aid, st)
     assert all_trades(aid) == [] and any("donchian_guards_off" in r.getMessage() and "@" not in r.getMessage() for r in caplog.records)
@@ -270,11 +271,11 @@ def test_the_fee_guard_blocks_and_uses_the_market_fees_and_slippage(db, monkeypa
     assert [h.code for h in a if h.code == g.R_FEE_GUARD] and not [h for h in b if h.code == g.R_FEE_GUARD]
 
 
-def test_observe_mode_logs_but_does_not_block(db, monkeypatch):
-    st, client, aid = setup(db, monkeypatch, with_last(LONG_ROW), strategy_guards_mode="observe", fee_guard_margin=50.0)
+def test_observe_mode_does_not_let_the_strategy_trade(db, monkeypatch):
+    """Audit M1: observe blocks nothing, so it must not satisfy "needs the guards". The strategy trades only in enforce mode of NEW_STRATEGY_GUARDS_MODE."""
+    st, client, aid = setup(db, monkeypatch, with_last(LONG_ROW), new_strategy_guards_mode="observe", fee_guard_margin=50.0)
     run_cycle(aid, st)
-    assert [t.strategy_id for t in all_trades(aid)] == ["donchian_breakout_v1"]
-    assert ("donchian_breakout_v1", "BTC/USDT", "observed", g.R_FEE_GUARD) in decisions()
+    assert all_trades(aid) == [] and ("donchian_breakout_v1", "BTC/USDT", "rejected", "donchian_guards_not_enforced") in decisions()
 
 
 def test_an_invalid_stop_is_refused(db, monkeypatch):

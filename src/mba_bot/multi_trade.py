@@ -28,6 +28,16 @@ def strategy_of(trade) -> str:
     return value if value else EMA_STRATEGY_ID
 
 
+NEW_STRATEGY_IDS = ("rsi_mr_v1", "donchian_breakout_v1")
+
+
+def account_strategies(account) -> frozenset:
+    """The new strategies this account is opted in to: the owner-set `extra_strategies` column, comma separated. NULL, empty, anything that is not a
+    known strategy id (and the EMA id, which needs no opt-in) is ignored. A paper account that is not opted in keeps the EMA path and Auto Select."""
+    raw = getattr(account, "extra_strategies", None) or ""
+    return frozenset(p for p in (part.strip().lower() for part in raw.split(",")) if p in NEW_STRATEGY_IDS)
+
+
 def trading_pairs(account) -> list[str]:
     """The pairs a multi-trade paper account may trade: its own `pair` first, then the owner-set `pair_list`, no duplicates, at most
     HARD_MAX_TRADES. An account with no pair_list trades exactly its one pair."""

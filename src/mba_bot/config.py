@@ -315,6 +315,8 @@ class Settings:
     # NEW entry (open positions are never touched). A threshold of 0 switches that one guard off. The operator kill switch is checked
     # first and stays authoritative: a guard can only ever add a refusal, never lift one. All numbers are provisional until tuned.
     strategy_guards_mode: str = "off"
+    # The guard mode read ONLY by rsi_mr_v1 and donchian_breakout_v1 (audit H2/M1). They trade only in `enforce`; STRATEGY_GUARDS_MODE then affects only EMA.
+    new_strategy_guards_mode: str = "off"
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -521,6 +523,7 @@ def load_settings() -> Settings:
         protection_fail_window_hours=max(0.1, _env_float("PROTECTION_FAIL_WINDOW_HOURS", 24.0)),
         protection_alert_repeat_hours=max(0.1, _env_float("PROTECTION_ALERT_REPEAT_HOURS", 6.0)),
         strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("STRATEGY_GUARDS_MODE")),
+        new_strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("NEW_STRATEGY_GUARDS_MODE")),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),

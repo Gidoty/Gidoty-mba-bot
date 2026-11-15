@@ -75,5 +75,5 @@ position API.
 1. Back up the database. Run migration `a1d7c4e9b2f6`. Then deploy the code (switches default to the old behaviour).
 2. Before any restart, run `python -m mba_bot.restart_gate` from the app directory: exit 0 means no live trade is open, 3 means do NOT restart,
    2 means the database could not be read. It only reads. It prints counts, no ids.
-3. For a paper test account: set `pair_list` in the database, set `MAX_OPEN_POSITIONS=2` or `3`, restart in a quiet moment, watch the journal.
+3. For a paper test account: set `pair_list` in the database (and, for the new strategies, `extra_strategies`; see rsi_mr_v1.md and donchian_breakout_v1.md), set `MAX_OPEN_POSITIONS=2` or `3`, restart in a quiet moment, watch the journal.
 4. Rollback: set `MAX_OPEN_POSITIONS=1` (existing trades are still managed). Downgrading the migration needs every account at one non-terminal trade.

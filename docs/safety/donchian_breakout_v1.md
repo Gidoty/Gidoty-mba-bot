@@ -32,7 +32,8 @@ turtle exit). The 20-candle volume average and the "rolling average" of ATR% bot
 |---|---|---|
 | `DONCHIAN_ENABLED` | false | Off: the strategy-aware path is never reached for it, nothing changes. A test makes every Donchian function raise with the switch off. |
 | `DONCHIAN_PAPER_ONLY` | true | Informational. donchian_breakout_v1 is paper only IN CODE: a live account never runs it, whatever this or any setting says (test, both values). |
-| `STRATEGY_GUARDS_MODE` | off | It does NOT trade while this is `off`: it needs `observe` or `enforce` (fail closed, logged once a day as `donchian_guards_off`). |
+| `NEW_STRATEGY_GUARDS_MODE` | off | donchian_breakout_v1 does NOT trade unless this is `enforce` (fail closed: `donchian_guards_off` when off, `donchian_guards_not_enforced` in observe, which blocks nothing; logged once a day). `STRATEGY_GUARDS_MODE` is the EMA strategy's own mode and does not affect this strategy (audit H2/M1). |
+| `trading_accounts.extra_strategies` | NULL | Per-account opt-in, set by the owner in the database (for example `donchian_breakout_v1`; comma separated for both new strategies). NULL means EMA only: the account keeps Auto Select and the EMA path. No API or screen writes it. A live account ignores it. |
 | `FEE_GUARD_MARGIN` | 0 | It does NOT trade while this is 0 (`donchian_fee_guard_off`). |
 
 ## How the guards of PR #45 apply (not copied; `strategy_guards.evaluate` takes the strategy id)
@@ -52,7 +53,7 @@ that the guards and caps do not refuse opens the trade and the cycle stops: one 
 * Starvation: a Donchian trade has no time stop and can stay open as long as the trend lasts; with one slot it blocks EMA and RSI meanwhile. Breakouts are rarer than RSI crosses, so priority first
   rarely starves the others; the grade and `MAX_OPEN_POSITIONS` of PR #47 set how many trades may be open.
 
-A paper account with `DONCHIAN_ENABLED` uses this path even with one pair and one slot. A live account never does.
+A paper account that the owner opted in (`extra_strategies`) while `DONCHIAN_ENABLED` is on uses this path even with one pair and one slot (and no longer scans Auto Select). A paper account that is not opted in, and every live account, never does.
 
 ## Known limits
 
@@ -67,6 +68,6 @@ A paper account with `DONCHIAN_ENABLED` uses this path even with one pair and on
 ## Owner steps (none done by Claude)
 
 1. Deploy with `DONCHIAN_ENABLED` unset (nothing changes). No migration in this PR beyond PR #47's.
-2. For a paper test account: `STRATEGY_GUARDS_MODE=observe`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `DONCHIAN_ENABLED=true`; `python -m mba_bot.restart_gate` before any restart.
+2. For ONE paper test account: set its `extra_strategies` to `donchian_breakout_v1` in the database, then `NEW_STRATEGY_GUARDS_MODE=enforce`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `DONCHIAN_ENABLED=true`; `python -m mba_bot.restart_gate` before any restart.
 3. Watch the journal for `donchian_breakout_v1` and `strategy_slot_lost_to` lines. Move to `enforce` only after reading what observe would have blocked.
 4. Rollback: `DONCHIAN_ENABLED=false`. An open Donchian paper trade keeps being managed by its own rules until it exits.
