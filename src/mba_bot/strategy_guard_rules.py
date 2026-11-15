@@ -54,12 +54,17 @@ def _aware(dt: datetime) -> datetime:
 
 # ======================================================================== pure decisions
 
+def _finite(x) -> bool:
+    """True for a real, finite number. NaN, infinity, None and non-numbers are not: every rule below treats them as a HIT when the rule is switched on (fail closed)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and abs(x) != float("inf")  # x == x is False only for NaN
+
+
 def ema_gap_hit(gap_atr: float | None, min_gap_atr: float) -> GuardHit | None:
     """EMA crossover, false crosses in choppy markets: the fast and slow EMA must be at least `min_gap_atr` ATRs apart when the entry is
     taken. An unreadable gap refuses (fail closed). Costs: the entry is later and some good crosses are skipped; see the weakness table."""
     if min_gap_atr <= 0:
         return None
-    if gap_atr is None or gap_atr != gap_atr:  # None or NaN
+    if not _finite(gap_atr):  # None, NaN or infinite
         return GuardHit(R_EMA_GAP, {"gap_atr": None, "min_gap_atr": min_gap_atr})
     if gap_atr < min_gap_atr:
         return GuardHit(R_EMA_GAP, {"gap_atr": round(gap_atr, 4), "min_gap_atr": min_gap_atr})
@@ -69,9 +74,13 @@ def ema_gap_hit(gap_atr: float | None, min_gap_atr: float) -> GuardHit | None:
 def fee_guard_hit(*, atr_pct: float | None, margin: float, fee_bps: float, slippage_bps: float, expected_move_atr: float) -> GuardHit | None:
     """Fee drag: the expected gross move (`expected_move_atr` ATRs, a proxy because the strategy has no profit target) must be at least
     `margin` times the round-trip cost (two taker fees plus the assumed slippage). Unreadable input refuses."""
+    if not _finite(margin):
+        return GuardHit(R_FEE_GUARD, {"margin": None})
     if margin <= 0:
         return None
-    if atr_pct is None or atr_pct != atr_pct or atr_pct <= 0:
+    if not (_finite(fee_bps) and _finite(slippage_bps) and _finite(expected_move_atr)):
+        return GuardHit(R_FEE_GUARD, {"inputs": "not finite"})
+    if not _finite(atr_pct) or atr_pct <= 0:
         return GuardHit(R_FEE_GUARD, {"atr_pct": None})
     cost = (2 * fee_bps + slippage_bps) / 10_000.0
     expected = expected_move_atr * atr_pct
@@ -85,6 +94,8 @@ def portfolio_hit(*, open_positions: int, open_risk_pct: float, new_risk_pct: fl
     than one strategy or position can exist: a cap on open positions and on the total risk across them."""
     if max_positions > 0 and open_positions + 1 > max_positions:
         return GuardHit(R_PORTFOLIO_CAP, {"open": open_positions, "max_positions": max_positions})
+    if max_total_risk_pct > 0 and not (_finite(open_risk_pct) and _finite(new_risk_pct)):
+        return GuardHit(R_PORTFOLIO_CAP, {"open_risk_pct": None, "new_risk_pct": None, "max_total_risk_pct": max_total_risk_pct})
     if max_total_risk_pct > 0 and open_risk_pct + new_risk_pct > max_total_risk_pct + 1e-9:
         return GuardHit(R_PORTFOLIO_CAP, {"open_risk_pct": round(open_risk_pct, 3), "new_risk_pct": new_risk_pct, "max_total_risk_pct": max_total_risk_pct})
     return None
@@ -92,6 +103,8 @@ def portfolio_hit(*, open_positions: int, open_risk_pct: float, new_risk_pct: fl
 
 def cooldown_hit(last_stop_closed_at: datetime | None, now: datetime, hours: float) -> GuardHit | None:
     """After a stop loss on this pair, wait `hours` before a new entry on it (false crosses tend to cluster)."""
+    if not _finite(hours):
+        return GuardHit(R_STOP_COOLDOWN, {"cooldown_hours": None})
     if hours <= 0 or last_stop_closed_at is None:
         return None
     ends = _aware(last_stop_closed_at) + timedelta(hours=hours)
@@ -103,7 +116,7 @@ def cooldown_hit(last_stop_closed_at: datetime | None, now: datetime, hours: flo
 def daily_loss_hit(*, net_pnl_today: float, capital: float | None, limit_pct: float) -> GuardHit | None:
     if limit_pct <= 0:
         return None
-    if capital is None or capital != capital or capital <= 0:
+    if not _finite(capital) or capital <= 0 or not _finite(net_pnl_today):
         return GuardHit(R_DAILY_LOSS, {"capital": None})
     loss_pct = -net_pnl_today / capital * 100.0
     if loss_pct >= limit_pct - 1e-12:
@@ -112,10 +125,11 @@ def daily_loss_hit(*, net_pnl_today: float, capital: float | None, limit_pct: fl
 
 
 def consecutive_losses(nets_newest_first: list[float]) -> int:
-    """How many of the most recent trades in a row ended in a net loss (a break-even or a win ends the streak)."""
+    """How many of the most recent trades in a row ended in a net loss (a break-even or a win ends the streak). A result that is not a finite number
+    counts as a loss: an unreadable result must never END a streak (audit L2)."""
     n = 0
     for v in nets_newest_first:
-        if v < 0:
+        if not _finite(v) or v < 0:
             n += 1
         else:
             break
@@ -126,7 +140,8 @@ def loss_streak_hit(nets_newest_first: list[float], n_limit: int, pause_hours: f
     if n_limit <= 0:
         return None
     streak = consecutive_losses(nets_newest_first)
-    if streak >= n_limit:
+    if streak >= n_limit or not all(_finite(v) for v in nets_newest_first):
+        streak = max(streak, n_limit)  # a non-finite result in the list is a hit too (fail closed)
         return GuardHit(R_LOSS_STREAK, {"consecutive_losses": streak, "limit": n_limit, "pause_hours": pause_hours},
                         creates_pause=True, pause_hours=pause_hours if pause_hours > 0 else None, owner_alert=True)
     return None
@@ -138,6 +153,8 @@ def expectancy_hit(net_rs_newest_first: list[float], window: int) -> GuardHit | 
     if window <= 0 or len(net_rs_newest_first) < window:
         return None
     sample = net_rs_newest_first[:window]
+    if not all(_finite(v) for v in sample):
+        return GuardHit(R_EXPECTANCY, {"trades": window, "mean_net_r": None}, creates_pause=True, pause_hours=None, owner_alert=True)
     mean_r = sum(sample) / len(sample)
     if mean_r < 0:
         return GuardHit(R_EXPECTANCY, {"trades": window, "mean_net_r": round(mean_r, 4)}, creates_pause=True, pause_hours=None, owner_alert=True)

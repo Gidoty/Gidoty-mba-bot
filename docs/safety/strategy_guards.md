@@ -40,7 +40,8 @@ Rolling back the DATABASE (downgrading migration `c9f6a3b1d5e7`) drops the `stra
 * Customer wording is fixed text with no numbers from the customer's own results.
 
 ## One rules file, shared with the backtester
-The pure decisions (every boundary above) live in `src/mba_bot/strategy_guard_rules.py`: plain numbers in, a verdict out, no database, configuration, network or clock (a test pins its imports). The live path and the research backtester use this same file; the research branch carries a byte-identical copy and its pre-registration pins the hash. Current SHA-256: `2c3ecc0cba222925281cf305c1b7615aafc9e17d8d8c5728abd2f2777fce3fcc`. A test fails if this line is stale.
+The pure decisions (every boundary above) live in `src/mba_bot/strategy_guard_rules.py`: plain numbers in, a verdict out, no database, configuration, network or clock (a test pins its imports). The live path and the research backtester use this same file; the research branch carries a byte-identical copy and its pre-registration pins the hash. Current SHA-256: `fb0b5e4e5dffa5ce0d11373bb8746a771ae769faacd539c3ae54bc1484b77196`. A test fails if this line is stale.
+The SHA-256 CHANGED in the audit-fix PR (#50), twice, and the earlier value `3338f7d35d429705dd25ab4d4f701e47dd4dfddc69f102bdfca82aebf29bec3d` is retired: first the `portfolio_hit` docstring (audit B1: a live account holds one trade through a partial unique index, a paper account one per pair), then audit L2 (every non-finite input to a rule is a hit: NaN no longer fails open). A research-branch copy must be refreshed to this file before any backtest is registered against it.
 
 ## Weaknesses, mitigations, effect and what remains
 Backtest effect: NOT MEASURED for every row. A runner that tunes on the first 4 months only and reports the last 2 months untouched, under a
