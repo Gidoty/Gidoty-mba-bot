@@ -81,7 +81,7 @@ def fee_guard_hit(*, atr_pct: float | None, margin: float, fee_bps: float, slipp
 
 
 def portfolio_hit(*, open_positions: int, open_risk_pct: float, new_risk_pct: float, max_positions: int, max_total_risk_pct: float) -> GuardHit | None:
-    """One position per pair is structural (a unique index allows one non-terminal trade per account); this is the ceiling for when more
+    """A live account holds one non-terminal trade (a partial unique index), a paper account may hold one per pair; this is the ceiling for when more
     than one strategy or position can exist: a cap on open positions and on the total risk across them."""
     if max_positions > 0 and open_positions + 1 > max_positions:
         return GuardHit(R_PORTFOLIO_CAP, {"open": open_positions, "max_positions": max_positions})

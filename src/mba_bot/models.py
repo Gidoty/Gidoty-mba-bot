@@ -293,6 +293,16 @@ class Trade(Base):
             sqlite_where=text("status NOT IN ('closed', 'void')"),
             postgresql_where=text("status NOT IN ('closed', 'void')"),
         ),
+        # The LIVE rule, back in the database (audit B1): at most one non-terminal LIVE trade per account whatever its pair. Without it two
+        # scheduler processes could each pass the SELECT in lifecycle.open_live_trade and insert a live trade on a different pair. Paper rows
+        # (is_paper true) are outside it, so paper multi-trade is unaffected.
+        Index(
+            "uq_trades_one_live_nonterminal_per_account",
+            "account_id",
+            unique=True,
+            sqlite_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
+            postgresql_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
+        ),
         Index(
             "uq_trades_one_nonterminal_no_pair",
             "account_id",

@@ -41,6 +41,8 @@ what is free; notional at least `PAPER_MIN_NOTIONAL`. A refusal is logged with a
 * `trades`: the unique index `uq_trades_one_nonterminal_per_account` is replaced by `uq_trades_one_nonterminal_per_pair` (account, pair) plus
   `uq_trades_one_nonterminal_no_pair` (account, only for rows with no pair, the old rule for legacy rows).
 * New nullable columns: `trades.strategy_id`, `trading_accounts.pair_list`.
+* Migration `e7a2c9d4b1f8` (parent `a1d7c4e9b2f6`): `uq_trades_one_live_nonterminal_per_account` on `trades (account_id)` where the status is non-terminal AND the row is a live trade.
+  Paper rows are outside it. The upgrade REFUSES (changing nothing) if an account already has two non-terminal live trades. Reversible: the downgrade drops the index. Not run by Claude.
 * Migration `a1d7c4e9b2f6`, parent `c9f6a3b1d5e7`. Additive, idempotent, reversible. The downgrade REFUSES if any account has more than one
   non-terminal trade (close or void the extras first). Claude has not run it.
 * `init_db()` runs `create_all()`, which does not add columns to an existing table. The new code reads `trades.strategy_id` and
@@ -63,9 +65,10 @@ position API.
   each) is the real protection, not the trade count. With the default, a third trade at 1 percent risk is refused. Raise it deliberately.
 * If an account somehow has more than one LIVE trade, every one is reconciled and monitored and nothing new opens. If paper and live trades
   are open together, only the live ones are managed until they close.
-* The single-position guarantee for live accounts is now enforced in code (the account lock inside one process plus the check in
-  `open_live_trade`) rather than by the database alone. A second process on the same database could race the check; `instance_lock` is what
-  prevents a second process. UNVERIFIED on the production VPS.
+* The one-live-trade rule is enforced by the DATABASE again (migration `e7a2c9d4b1f8`, partial unique index `uq_trades_one_live_nonterminal_per_account` on
+  non-terminal LIVE rows, whatever the pair; independent audit finding B1), and also in code (the account lock inside one process plus the check in
+  `open_live_trade`). Two scheduler processes can therefore no longer both open a live trade. **The owner should still set `API_SINGLE_INSTANCE_LOCK=true`**
+  (the default stays off; this stack does not change it) so that a second scheduler process refuses to start at all. UNVERIFIED on the production VPS: whether it is set, and how many workers run.
 
 ## Owner steps (none done by Claude)
 

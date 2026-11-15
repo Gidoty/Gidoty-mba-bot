@@ -131,7 +131,8 @@ def test_free_capital_and_open_risk_helpers_fail_closed():
 
 # ====================================================================== database rule and migration
 def _trade(account_id, status, pair, **kw):
-    return Trade(account_id=account_id, side="long", is_paper=False, entry_price=1.0, quantity=1.0, stop_loss_price=0.5, status=status, pair=pair, **kw)
+    kw.setdefault("is_paper", True)  # since the live index (audit B1) several trades on different pairs exist only as PAPER trades
+    return Trade(account_id=account_id, side="long", entry_price=1.0, quantity=1.0, stop_loss_price=0.5, status=status, pair=pair, **kw)
 
 
 def test_one_non_terminal_trade_per_account_and_pair(db):
@@ -619,6 +620,11 @@ def live_trades_on_pairs(monkeypatch, n, *, db_settings=None):
             assert opened, (pair, s.get(TradingAccount, aid).last_error, [(x.pair, x.status) for x in s.query(Trade).all()])
             assert len(opened) == 1 and opened[0].status == "open" and opened[0].protection_status == "protected", (pair, opened[0].status)
             ids.append(opened[0].id)
+    # The database (audit B1) now refuses a second non-terminal LIVE trade. These tests exercise the RECOVERY path for a database that somehow holds
+    # several (a manual change, a pre-fix database), so the live index is dropped on this scratch database before the trades are put back.
+    from sqlalchemy import text as _text
+    with session_scope() as s:
+        s.execute(_text("DROP INDEX IF EXISTS uq_trades_one_live_nonterminal_per_account"))
     with session_scope() as s:
         for t in s.query(Trade).filter(Trade.id.in_(ids)).all():
             t.status = "open"
