@@ -38,12 +38,63 @@ from .venue import ProtectionUnavailable, build_venue
 logger = logging.getLogger(__name__)
 
 
+def _ema_signal_candles(candles: list, settings: Settings, now_ms: int) -> list:
+    """The candles the EMA strategy decides on (docs/safety/ema_closed_candle.md). Switch off: the very list it was given, so behaviour is
+    exactly what it always was. Switch on: only candles that have closed at `now_ms`; Binance returns the still-forming candle as the last row.
+    An unsupported timeframe returns no candles (fail closed: no signal, no entry, no crossover exit)."""
+    if not settings.ema_closed_candle_only:
+        return candles
+    tf, supported = rsi_mr.normalize_timeframe(settings.timeframe)
+    if not supported:
+        if protection_guard.should_alert("-", "-", f"ema_timeframe:{settings.timeframe}", now=datetime.now(timezone.utc), repeat_hours=24.0):
+            logger.warning("EMA_CLOSED_CANDLE_ONLY is on but TIMEFRAME %r is not a supported size; EMA takes no new signal until it is fixed", settings.timeframe)
+        return []
+    return rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(tf))
+
+
+def _ema_generate(candles: list, settings: Settings) -> StrategySignal:
+    return generate_signal(
+        candles,
+        ema_fast_period=settings.ema_fast_period,
+        ema_slow_period=settings.ema_slow_period,
+        atr_period=settings.atr_period,
+        atr_flat_threshold=settings.atr_flat_threshold,
+        atr_rolling_window=settings.atr_rolling_window,
+    )
+
+
+def _ema_entry_stale(session, settings: Settings, account, signal, signal_candles: list, pair: str, *, now: datetime, now_ms: int, is_paper: bool) -> bool:
+    """True if an EMA entry must be skipped as late: the signal candle closed more than EMA_ENTRY_WINDOW_MINUTES ago (a crossover on the last
+    closed candle stays visible for the whole next candle). Always False with the switch off, and for a signal that would not be entered anyway
+    (no crossover, or a bearish one on Spot). Logged once per signal candle."""
+    if not settings.ema_closed_candle_only:
+        return False
+    if signal.signal != SignalType.BULLISH_CROSSOVER and not (signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type == "futures"):
+        return False
+    tf, _ = rsi_mr.normalize_timeframe(settings.timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    if not signal_candles:
+        return True
+    last_ts = signal_candles[-1].timestamp
+    age_ms = now_ms - (last_ts + tf_ms)
+    if 0 <= age_ms <= int(settings.ema_entry_window_minutes * 60_000):
+        return False
+    if protection_guard.should_alert(account.id, pair, f"stale:ema:{last_ts}", now=now, repeat_hours=24.0):
+        logger.info("account %s: EMA signal on %s skipped (signal_stale): the signal candle closed %.0f minutes ago, the window is %g",
+                    account.id, pair, age_ms / 60_000, settings.ema_entry_window_minutes)
+        telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.SKIPPED, reason="signal_stale",
+                               is_paper=is_paper, now=now, pair=pair, strategy_id=multi_trade.EMA_STRATEGY_ID, candle_ts=last_ts,
+                               detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.ema_entry_window_minutes})
+    return True
+
+
 async def process_account(session: Session, account: TradingAccount, settings: Settings, notifier: Notifier) -> None:
     if account.notification_target is None:
         logger.info("account %s: notification channel not linked yet, skipping until it is", account.id)
         return
 
     now = datetime.now(timezone.utc)
+    now_ms = int(now.timestamp() * 1000)  # one clock reading per cycle: every EMA call site below drops the forming candle against it
     # We attempted a real cycle for this account - record that regardless
     # of how the rest of this function goes, so "last checked" on the
     # dashboard reflects reality even during a run of errors.
@@ -160,14 +211,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
                 await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
                 return
-            signal = generate_signal(
-                candles,
-                ema_fast_period=settings.ema_fast_period,
-                ema_slow_period=settings.ema_slow_period,
-                atr_period=settings.atr_period,
-                atr_flat_threshold=settings.atr_flat_threshold,
-                atr_rolling_window=settings.atr_rolling_window,
-            )
+            sig_candles = _ema_signal_candles(candles, settings, now_ms)  # price below stays from the raw last row; only the signal waits for a close
+            signal = _ema_generate(sig_candles, settings)
             account.last_signal = signal.signal.value
             account.last_signal_at = now
             opposite_cross = (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
@@ -200,7 +245,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 else None
             )
             scan_out: dict | None = {} if telemetry.enabled(settings) else None
-            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out)
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms)
             if scan_out is not None:
                 scan_info = _scan_info(scan_out, auto_result)
                 telemetry.log_auto_scan(
@@ -217,6 +262,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 account.last_error_at = None
                 return
             scan_pair, candles, signal = auto_result
+            sig_candles = _ema_signal_candles(candles, settings, now_ms)
         else:
             scan_pair = account.pair
             ohlcv = await client.fetch_ohlcv(
@@ -229,14 +275,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 logger.warning("account %s: no OHLCV data returned for %s", account.id, account.pair)
                 await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
                 return
-            signal = generate_signal(
-                candles,
-                ema_fast_period=settings.ema_fast_period,
-                ema_slow_period=settings.ema_slow_period,
-                atr_period=settings.atr_period,
-                atr_flat_threshold=settings.atr_flat_threshold,
-                atr_rolling_window=settings.atr_rolling_window,
-            )
+            sig_candles = _ema_signal_candles(candles, settings, now_ms)
+            signal = _ema_generate(sig_candles, settings)
 
         current_price = candles[-1].close
         # A successful evaluation, whatever it concluded, is a healthy
@@ -253,7 +293,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         ):
             # Research telemetry only (never read by the trading path): what the
             # strategy concluded, and the market features at that moment.
-            tctx = telemetry.build_entry_context(candles, signal, settings, now=now, scan=scan_info)
+            tctx = telemetry.build_entry_context(sig_candles, signal, settings, now=now, scan=scan_info)
             telemetry.signal_stage(session, settings, account, tctx, signal, is_paper=is_paper, now=now)
 
         if open_trade is None:
@@ -265,9 +305,12 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # reflects the pair actually just traded, never an
                 # intermediate scan result that didn't lead to a trade.
                 account.pair = scan_pair
-            await _maybe_enter(
-                session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx
-            )
+            if _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
+                pass  # a closed-candle crossover that is too old to enter at a fair price; logged once per candle
+            else:
+                await _maybe_enter(
+                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx
+                )
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
@@ -510,7 +553,7 @@ def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_pape
 
 
 async def _scan_auto_pair(
-    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None
+    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None
 ) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
@@ -536,6 +579,9 @@ async def _scan_auto_pair(
     Returns None if nothing in the universe had an actionable signal
     this cycle - never a forced/fallback pick."""
     scanned: list[PairCandidate] = []
+    raw: dict[str, list] = {}
+    if now_ms is None:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     if capital is not None:
         try:
             await client.load_markets()  # cached on the client; the candle fetches below reuse it
@@ -558,7 +604,8 @@ async def _scan_auto_pair(
             continue
         candles = candles_from_ohlcv(ohlcv)
         if candles:
-            scanned.append(PairCandidate(pair=pair, candles=candles))
+            raw[pair] = candles  # the caller prices the entry from the raw last row
+            scanned.append(PairCandidate(pair=pair, candles=_ema_signal_candles(candles, settings, now_ms)))  # ranking and signal use closed candles when the switch is on
 
     ranked = rank_candidates(
         scanned,
@@ -575,16 +622,8 @@ async def _scan_auto_pair(
         return None
 
     best_pair = ranked[0].pair
-    best_candles = next(c.candles for c in scanned if c.pair == best_pair)
-    signal = generate_signal(
-        best_candles,
-        ema_fast_period=settings.ema_fast_period,
-        ema_slow_period=settings.ema_slow_period,
-        atr_period=settings.atr_period,
-        atr_flat_threshold=settings.atr_flat_threshold,
-        atr_rolling_window=settings.atr_rolling_window,
-    )
-    return best_pair, best_candles, signal
+    signal = _ema_generate(next(c.candles for c in scanned if c.pair == best_pair), settings)
+    return best_pair, raw[best_pair], signal
 
 
 def _scan_info(scan_out: dict, result) -> telemetry.ScanInfo | None:
@@ -1110,18 +1149,17 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             cache[pair] = candles_from_ohlcv(ohlcv)
         return cache[pair]
 
+    now_ms = int(now.timestamp() * 1000)
+
     def signal_for(candles):
-        return generate_signal(
-            candles, ema_fast_period=settings.ema_fast_period, ema_slow_period=settings.ema_slow_period, atr_period=settings.atr_period,
-            atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
-        )
+        """The EMA signal for a pair's raw candles; with EMA_CLOSED_CANDLE_ONLY on, from the closed ones only. Prices stay from the raw list."""
+        return _ema_generate(_ema_signal_candles(candles, settings, now_ms), settings)
 
     opted = multi_trade.account_strategies(account)
     rsi_on = settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted
     rsi_p = _rsi_params(settings)
     rsi_tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)  # the same value is asked of the exchange and used for the closed-candle test
     rsi_tf_ms = rsi_mr.timeframe_ms(rsi_tf)
-    now_ms = int(now.timestamp() * 1000)
     rsi_cache: dict[str, list] = {}
 
     async def rsi_closed_for(pair: str):
@@ -1215,7 +1253,12 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
                 if not candles:
                     return None
                 sig = signal_for(candles)
-                return (sig, candles[-1].close, candles) if sig.signal != SignalType.NONE else None
+                if sig.signal == SignalType.NONE:
+                    return None
+                ema_closed = _ema_signal_candles(candles, settings, now_ms)  # the list the signal was made from (the raw one with the switch off)
+                if _ema_entry_stale(session, settings, account, sig, ema_closed, pair, now=now, now_ms=now_ms, is_paper=True):
+                    return None
+                return sig, candles[-1].close, ema_closed
 
             for position, strategy in enumerate(order):
                 for pair in free_pairs:
@@ -1332,10 +1375,7 @@ async def _process_multi_live(session, account, client, live_trades: list[Trade]
         if not candles:
             logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
             continue
-        signal = generate_signal(
-            candles, ema_fast_period=settings.ema_fast_period, ema_slow_period=settings.ema_slow_period, atr_period=settings.atr_period,
-            atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
-        )
+        signal = _ema_generate(_ema_signal_candles(candles, settings, int(now.timestamp() * 1000)), settings)
         opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
         await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=candles[-1].close)
     account.last_error = None
