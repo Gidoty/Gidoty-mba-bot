@@ -30,3 +30,10 @@ def test_changing_any_pinned_file_changes_the_plan_hash(monkeypatch, module, own
 @pytest.mark.parametrize("module", [RB, DB], ids=["rsi", "donchian"])
 def test_an_unchanged_tree_gives_a_stable_hash(module):
     assert module.plan_hash() == module.plan_hash()
+
+
+@pytest.mark.parametrize("module,doc", [(RB, "rsi_mr_preregistration.md"), (DB, "donchian_preregistration.md")], ids=["rsi", "donchian"])
+def test_each_pre_registration_names_the_current_plan_hash_and_says_it_changed(module, doc):
+    text = (Path(__file__).resolve().parent.parent / "docs" / "research" / doc).read_text()
+    assert f"`{module.plan_hash()}`" in text, "re-register: the plan hash in the document is stale"
+    assert "RE-REGISTERED" in text and "retired" in text

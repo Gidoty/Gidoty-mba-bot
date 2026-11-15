@@ -1,7 +1,9 @@
 # donchian_breakout_v1 backtest: pre-registration
 
-Registered BEFORE any real-data run. Plan hash at registration: `86ba3b8a928c6112`. Nothing in this file has been measured on market data. `python -m mba_bot.donchian_backtest plan` prints the plan hash. The hash covers the arms, pairs, fees,
-slippage, cooldown, windows, selection rule AND the SHA-256 of `src/mba_bot/donchian.py`, so changing the strategy file after tuning makes `confirm` refuse to run.
+Registered BEFORE any real-data run. Plan hash at registration: `d84720c3f4780653`. Nothing in this file has been measured on market data. `python -m mba_bot.donchian_backtest plan` prints the plan hash. The hash covers the arms, pairs, fees,
+slippage, cooldown, windows, selection rule AND the SHA-256 of `src/mba_bot/donchian.py`, `rsi_backtest.py`, `donchian_backtest.py`, `indicators.py` and `strategy.py`, so changing any of them after tuning makes `confirm` refuse to run.
+
+**RE-REGISTERED in the audit-fix PR (#50), before any real-data run.** The plan hash changed from `86ba3b8a928c6112` (now retired; do not use it) to `d84720c3f4780653`. Why: audit M3 found the hash did not cover the simulator or the indicators, so the hash now also pins the SHA-256 of `rsi_backtest.py`, `donchian_backtest.py`, `indicators.py` and `strategy.py` besides the strategy file. The same PR changed what the hash covers for other reasons, each audited: stops that a candle opens beyond fill at the open (L6), the one-look ledger sits beside the data (M4), and the exit check judges candles from the one after the entry (M5). Nothing was run on real data under either hash. If any of the pinned files changes again before `tune`, `confirm` refuses and the plan must be re-registered again.
 
 ## Question
 
