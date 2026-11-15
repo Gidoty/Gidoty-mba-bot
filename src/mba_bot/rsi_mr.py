@@ -157,13 +157,13 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
         n += 1
         if side == "long":
             if c.low <= stop:
-                return Exit(EXIT_STOP, stop, c.timestamp)
+                return Exit(EXIT_STOP, min(stop, c.open), c.timestamp)  # a candle that OPENS below the stop fills at the open, the worse price (audit L6)
             if c.high >= target:
                 return Exit(EXIT_TARGET, target, c.timestamp)
             line_hit = r[i] is not None and r[i] >= p.exit_rsi
         else:
             if c.high >= stop:
-                return Exit(EXIT_STOP, stop, c.timestamp)
+                return Exit(EXIT_STOP, max(stop, c.open), c.timestamp)
             if c.low <= target:
                 return Exit(EXIT_TARGET, target, c.timestamp)
             line_hit = r[i] is not None and r[i] <= p.exit_rsi

@@ -143,7 +143,7 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
         if side == "long":
             level = stop if (trail is None or not trail > stop) else trail
             if c.low <= level:
-                return Exit(EXIT_STOP if level == stop else EXIT_TRAIL, level, c.timestamp)
+                return Exit(EXIT_STOP if level == stop else EXIT_TRAIL, min(level, c.open), c.timestamp)  # a gap through the level fills at the open, the worse price (audit L6)
             extreme = max(extreme, c.high)
             if atr_values[i] is not None:
                 cand = extreme - p.trail_atr * atr_values[i]
@@ -153,7 +153,7 @@ def exit_check(*, side: str, entry: float, stop: float, opened_ms: int, closed: 
         else:
             level = stop if (trail is None or not trail < stop) else trail
             if c.high >= level:
-                return Exit(EXIT_STOP if level == stop else EXIT_TRAIL, level, c.timestamp)
+                return Exit(EXIT_STOP if level == stop else EXIT_TRAIL, max(level, c.open), c.timestamp)
             extreme = min(extreme, c.low)
             if atr_values[i] is not None:
                 cand = extreme + p.trail_atr * atr_values[i]

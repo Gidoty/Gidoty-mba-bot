@@ -94,7 +94,7 @@ def test_defaults_are_off_and_paper_only():
 
 
 def test_environment_overrides_are_clamped(monkeypatch):
-    for k, v in {"RSI_MR_ENABLED": "true", "RSI_MR_RISK_PCT": "99", "RSI_MR_ADX_MAX": "-5", "RSI_MR_TIME_STOP_CANDLES": "0", "RSI_MR_TIMEFRAME": " 15M "}.items():
+    for k, v in {"RSI_MR_ENABLED": "true", "RSI_MR_RISK_PCT": "99", "RSI_MR_ADX_MAX": "-5", "RSI_MR_TIME_STOP_CANDLES": "0", "RSI_MR_TIMEFRAME": " 15m "}.items():
         monkeypatch.setenv(k, v)
     s = load_settings()
     assert s.rsi_mr_enabled and s.rsi_mr_risk_pct == 2.0 and s.rsi_mr_adx_max == 1.0 and s.rsi_mr_time_stop_candles == 1 and s.rsi_mr_timeframe == "15m"
