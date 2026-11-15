@@ -297,6 +297,17 @@ async def _notify_safe(notifier: Notifier, account: TradingAccount, message: str
         logger.exception("account %s: failed to send a status notification", account.id)
 
 
+class _SafeNotifier:
+    """Wraps a notifier so that a failed message is logged (through _notify_safe) and swallowed. The multi-trade cycle uses it so that one failed
+    message cannot stop the other open trades from being managed (audit L8). It only ever sends to the account's own notification target."""
+
+    def __init__(self, inner: Notifier, account: TradingAccount):
+        self._inner, self._account = inner, account
+
+    async def send(self, target, message) -> None:
+        await _notify_safe(self._inner, self._account, message)
+
+
 async def _record_error(notifier: Notifier, account: TradingAccount, message: str, *, now: datetime) -> None:
     """Persists a short, already-sanitized message (see
     exchange.safe_error_message - never raw exception text) and notifies
@@ -1075,6 +1086,7 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
 
 
 async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now) -> None:
+    notifier = _SafeNotifier(notifier, account)  # one failed message must not stop the other trades being managed (audit L8)
     live = [t for t in open_trades if not t.is_paper]
     if live:
         await _process_multi_live(session, account, client, live, settings, notifier, now=now)
