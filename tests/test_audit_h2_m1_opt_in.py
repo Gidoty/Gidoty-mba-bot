@@ -213,3 +213,35 @@ def test_the_migration_adds_a_nullable_column_and_is_reversible(tmp_path, monkey
     command.upgrade(cfg, "head")  # idempotent
     command.downgrade(cfg, "e7a2c9d4b1f8")
     assert "extra_strategies" not in cols()
+
+
+def test_an_account_opted_in_to_one_strategy_never_even_evaluates_the_other(db, monkeypatch):
+    """Beyond refusing the entry: the other strategy is not asked for a signal and leaves no decision-log row for this account."""
+    from mba_bot import donchian as D
+    from mba_bot.models import DecisionLog
+    st = settings(trade_telemetry=True)
+    rig(monkeypatch, DON)
+    asked = []
+    real = D.signal_from_candles
+    monkeypatch.setattr(D, "signal_from_candles", lambda *a, **k: asked.append(1) or real(*a, **k))
+    aid = paper(st, "r@example.com", extra="rsi_mr_v1")
+    run_cycle(aid, st)
+    assert asked == []
+    with session_scope() as s:
+        assert not [d for d in s.query(DecisionLog).filter(DecisionLog.account_id == aid).all() if d.strategy_id == "donchian_breakout_v1"]
+
+
+def test_the_rsi_entry_itself_refuses_an_account_that_is_not_opted_in(db, monkeypatch):
+    st = settings()
+    client = rig(monkeypatch, RSI)
+    aid = paper(st, extra="donchian_breakout_v1")  # opted in to the OTHER strategy only
+    from mba_bot import rsi_mr as R
+    sig = R.generate_signal(RSI)
+    assert sig.side == "long"
+
+    async def go():
+        with session_scope(autoflush=False) as s:
+            await trader._maybe_enter(s, s.get(TradingAccount, aid), client, sig, 90.0, st, FakeNotifier(), is_paper=True, now=datetime.now(U))
+
+    asyncio.run(go())
+    assert all_trades(aid) == []
