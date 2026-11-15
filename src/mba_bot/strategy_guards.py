@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from . import protection_guard as pg
 from .config import Settings
 from .multi_trade import EMA_STRATEGY_ID
+from .donchian import STRATEGY_ID as DONCHIAN_ID
 from .rsi_mr import STRATEGY_ID as RSI_ID
 from .models import NON_TERMINAL_TRADE_STATUSES, TRADE_CLOSED, StrategyPause, Trade
 from .notifications.telegram import TelegramNotifier
@@ -162,6 +163,7 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     hits: list[GuardHit] = []
     now = _aware(now)
     rsi = strategy_id == RSI_ID
+    don = strategy_id == DONCHIAN_ID
     pair = pair or account.pair
 
     rows = pauses(session, account.id, strategy_id, is_paper)
@@ -180,11 +182,13 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
         if h:
             hits.append(h)
 
-    if settings.ema_stop_cooldown_hours > 0 and not rsi:  # the EMA strategy's own rule; rsi_mr_v1 has the two-loss pause instead
-        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=settings.ema_stop_cooldown_hours), limit=50,
+    # The stop cooldown: the EMA strategy's own setting, donchian_breakout_v1's own setting; rsi_mr_v1 has the two-loss pause instead.
+    cooldown_hours = settings.donchian_stop_cooldown_hours if don else (0.0 if rsi else settings.ema_stop_cooldown_hours)
+    if cooldown_hours > 0:
+        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=cooldown_hours), limit=50,
                                 strategy_id=strategy_id)
         stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, pair))]
-        h = cooldown_hit(max(stops) if stops else None, now, settings.ema_stop_cooldown_hours)
+        h = cooldown_hit(max(stops) if stops else None, now, cooldown_hours)
         if h:
             hits.append(h)
 
@@ -212,6 +216,11 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
         rsi_fee = settings.rsi_mr_futures_fee_bps if account.market_type == "futures" else settings.rsi_mr_spot_fee_bps
         h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=rsi_fee,
                           slippage_bps=2 * settings.rsi_mr_slippage_bps, expected_move_atr=getattr(signal, "target_atr", None) or settings.rsi_mr_target_atr)
+    elif don:
+        # Market fees plus slippage on both sides. The strategy has no profit target, so the expected move is the same proxy the EMA strategy uses.
+        don_fee = settings.donchian_futures_fee_bps if account.market_type == "futures" else settings.donchian_spot_fee_bps
+        h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=don_fee,
+                          slippage_bps=2 * settings.donchian_slippage_bps, expected_move_atr=settings.fee_guard_expected_move_atr)
     else:
         h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=fee_bps,
                           slippage_bps=settings.fee_guard_slippage_bps, expected_move_atr=settings.fee_guard_expected_move_atr)
@@ -220,13 +229,14 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
 
     if settings.max_open_positions > 0 or settings.max_total_risk_pct > 0:
         n_open, open_risk = open_position_numbers(session, account.id, account.risk_pct)
-        new_risk = min(account.risk_pct, settings.rsi_mr_risk_pct) if rsi else account.risk_pct
+        new_risk = (min(account.risk_pct, settings.rsi_mr_risk_pct) if rsi else
+                    min(account.risk_pct, settings.donchian_risk_pct) if don else account.risk_pct)
         h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=new_risk,
                           max_positions=settings.max_open_positions, max_total_risk_pct=settings.max_total_risk_pct)
         if h:
             hits.append(h)
 
-    if not rsi:
+    if not rsi and not don:  # the EMA gap rule is the EMA strategy's own
         h = ema_gap_hit(getattr(signal, "gap_atr", None), settings.ema_min_gap_atr)
         if h:
             hits.append(h)

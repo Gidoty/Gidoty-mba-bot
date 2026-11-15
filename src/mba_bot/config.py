@@ -347,6 +347,22 @@ class Settings:
     rsi_mr_spot_fee_bps: float = 10.0  # taker fee per side on Spot, basis points
     rsi_mr_futures_fee_bps: float = 5.0  # taker fee per side on Futures, basis points
     rsi_mr_slippage_bps: float = 5.0  # slippage per side, basis points
+    # donchian_breakout_v1 (donchian.py). OFF by default and PAPER ONLY IN CODE, exactly like rsi_mr_v1: a live account never runs it, whatever
+    # DONCHIAN_PAPER_ONLY says (that setting only makes the intent visible in the environment file).
+    donchian_enabled: bool = False
+    donchian_paper_only: bool = True
+    donchian_timeframe: str = "1h"
+    donchian_risk_pct: float = 0.5  # risk per Donchian trade, % of balance; the smaller of this and the account's own risk % is used
+    donchian_entry_period: int = 20
+    donchian_exit_period: int = 10
+    donchian_volume_mult: float = 1.5
+    donchian_atr_extreme_mult: float = 3.0
+    donchian_stop_atr: float = 1.5
+    donchian_trail_atr: float = 2.0
+    donchian_stop_cooldown_hours: float = 4.0  # no new Donchian entry on a pair for this long after its stop loss was hit (0 = off)
+    donchian_spot_fee_bps: float = 10.0
+    donchian_futures_fee_bps: float = 5.0
+    donchian_slippage_bps: float = 5.0  # per side
     owner_alert_chat_id: str | None = None  # Telegram chat for owner alerts from the strategy guards (falls back to BILLING_ALERT_CHAT_ID)
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
@@ -534,6 +550,20 @@ def load_settings() -> Settings:
         rsi_mr_spot_fee_bps=min(100.0, max(0.0, _env_float("RSI_MR_SPOT_FEE_BPS", 10.0))),
         rsi_mr_futures_fee_bps=min(100.0, max(0.0, _env_float("RSI_MR_FUTURES_FEE_BPS", 5.0))),
         rsi_mr_slippage_bps=min(250.0, max(0.0, _env_float("RSI_MR_SLIPPAGE_BPS", 5.0))),
+        donchian_enabled=_env_bool("DONCHIAN_ENABLED", False),
+        donchian_paper_only=_env_bool("DONCHIAN_PAPER_ONLY", True),
+        donchian_timeframe=(os.environ.get("DONCHIAN_TIMEFRAME") or "1h").strip().lower(),
+        donchian_risk_pct=min(2.0, max(0.0, _env_float("DONCHIAN_RISK_PCT", 0.5))),
+        donchian_entry_period=min(500, max(2, _env_int("DONCHIAN_ENTRY_PERIOD", 20))),
+        donchian_exit_period=min(500, max(2, _env_int("DONCHIAN_EXIT_PERIOD", 10))),
+        donchian_volume_mult=min(20.0, max(0.0, _env_float("DONCHIAN_VOLUME_MULT", 1.5))),
+        donchian_atr_extreme_mult=min(50.0, max(1.0, _env_float("DONCHIAN_ATR_EXTREME_MULT", 3.0))),
+        donchian_stop_atr=min(10.0, max(0.5, _env_float("DONCHIAN_STOP_ATR", 1.5))),
+        donchian_trail_atr=min(20.0, max(0.5, _env_float("DONCHIAN_TRAIL_ATR", 2.0))),
+        donchian_stop_cooldown_hours=min(720.0, max(0.0, _env_float("DONCHIAN_STOP_COOLDOWN_HOURS", 4.0))),
+        donchian_spot_fee_bps=min(100.0, max(0.0, _env_float("DONCHIAN_SPOT_FEE_BPS", 10.0))),
+        donchian_futures_fee_bps=min(100.0, max(0.0, _env_float("DONCHIAN_FUTURES_FEE_BPS", 5.0))),
+        donchian_slippage_bps=min(250.0, max(0.0, _env_float("DONCHIAN_SLIPPAGE_BPS", 5.0))),
         owner_alert_chat_id=(os.environ.get("OWNER_ALERT_CHAT_ID") or os.environ.get("BILLING_ALERT_CHAT_ID") or None),
         pnl_labels=_env_bool("PNL_LABELS", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
