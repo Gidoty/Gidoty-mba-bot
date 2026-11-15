@@ -68,10 +68,22 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Files whose bytes are part of EVERY backtest registration (audit M3): both runners, the indicator math and the candle type. A change to any of them
+# between tuning and the sealed read makes `confirm` refuse. The strategy's own file is added by each runner.
+_PINNED = ("rsi_backtest.py", "donchian_backtest.py", "indicators.py", "strategy.py")
+
+
+def source_pins(strategy_file: str | Path) -> dict:
+    here = Path(__file__).parent
+    pins = {name: _sha(here / name) for name in _PINNED}
+    pins[Path(strategy_file).name] = _sha(Path(strategy_file))
+    return pins
+
+
 def plan_hash() -> str:
     blob = {"protocol": PROTOCOL, "arms": [{"name": a.name, "params": asdict(a.params)} for a in ARMS], "pairs": PAIRS, "markets": MARKETS,
             "slippage_bps": SLIPPAGE_BPS, "months": [TOTAL_MONTHS, SEALED_MONTHS, EMBARGO_DAYS], "risk_pct": RISK_PCT,
-            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "strategy_sha256": _sha(Path(R.__file__)), "runner_rules": "next-open entry, stop first"}
+            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "sources_sha256": source_pins(R.__file__), "runner_rules": "next-open entry, stop first"}
     return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:16]
 
 

@@ -55,7 +55,7 @@ ARMS = (
 def plan_hash() -> str:
     blob = {"protocol": PROTOCOL, "arms": [{"name": a.name, "params": asdict(a.params)} for a in ARMS], "pairs": PAIRS, "markets": MARKETS,
             "slippage_bps": SLIPPAGE_BPS, "months": [TOTAL_MONTHS, SEALED_MONTHS, EMBARGO_DAYS], "risk_pct": RB.RISK_PCT, "cooldown_hours": COOLDOWN_HOURS,
-            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "strategy_sha256": RB._sha(Path(DN.__file__)), "runner_rules": "next-open entry, stop first, volume used"}
+            "rule": [MIN_TRADES, CHALLENGER_MARGIN_R, CHALLENGER_DD_FACTOR], "sources_sha256": RB.source_pins(DN.__file__), "runner_rules": "next-open entry, stop first, volume used"}
     return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:16]
 
 
