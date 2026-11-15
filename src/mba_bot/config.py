@@ -333,6 +333,20 @@ class Settings:
     grade_extreme_atr: float = 3.0  # ATR% above this many times its rolling average = extreme volatility = grade 1
     grade_daily_loss_fraction: float = 0.5  # grade 3 needs today's loss under this fraction of STRATEGY_DAILY_LOSS_PCT
     paper_min_notional: float = 10.0  # paper multi-trade: skip a 2nd or 3rd entry whose notional is below this (stand-in for the exchange minimum)
+    # rsi_mr_v1 (rsi_mr.py). OFF by default and PAPER ONLY IN CODE: a live account never runs it, whatever RSI_MR_PAPER_ONLY says (that
+    # setting exists so the intent is visible in the environment file; setting it false changes nothing).
+    rsi_mr_enabled: bool = False
+    rsi_mr_paper_only: bool = True
+    rsi_mr_timeframe: str = "1h"
+    rsi_mr_risk_pct: float = 0.5  # risk per RSI trade, % of balance; the smaller of this and the account's own risk % is used (EMA default is 1.0)
+    rsi_mr_adx_max: float = 25.0
+    rsi_mr_stop_atr: float = 1.5
+    rsi_mr_target_atr: float = 1.0
+    rsi_mr_time_stop_candles: int = 24
+    rsi_mr_pause_after_losses: int = 2  # consecutive net losses on the SAME pair that pause rsi_mr_v1 on that pair (0 = off)
+    rsi_mr_spot_fee_bps: float = 10.0  # taker fee per side on Spot, basis points
+    rsi_mr_futures_fee_bps: float = 5.0  # taker fee per side on Futures, basis points
+    rsi_mr_slippage_bps: float = 5.0  # slippage per side, basis points
     owner_alert_chat_id: str | None = None  # Telegram chat for owner alerts from the strategy guards (falls back to BILLING_ALERT_CHAT_ID)
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
@@ -508,6 +522,18 @@ def load_settings() -> Settings:
         grade_extreme_atr=min(20.0, max(1.0, _env_float("GRADE_EXTREME_ATR", 3.0))),
         grade_daily_loss_fraction=min(1.0, max(0.0, _env_float("GRADE_DAILY_LOSS_FRACTION", 0.5))),
         paper_min_notional=min(100_000.0, max(0.0, _env_float("PAPER_MIN_NOTIONAL", 10.0))),
+        rsi_mr_enabled=_env_bool("RSI_MR_ENABLED", False),
+        rsi_mr_paper_only=_env_bool("RSI_MR_PAPER_ONLY", True),
+        rsi_mr_timeframe=(os.environ.get("RSI_MR_TIMEFRAME") or "1h").strip().lower(),
+        rsi_mr_risk_pct=min(2.0, max(0.0, _env_float("RSI_MR_RISK_PCT", 0.5))),
+        rsi_mr_adx_max=min(100.0, max(1.0, _env_float("RSI_MR_ADX_MAX", 25.0))),
+        rsi_mr_stop_atr=min(10.0, max(0.5, _env_float("RSI_MR_STOP_ATR", 1.5))),
+        rsi_mr_target_atr=min(10.0, max(0.1, _env_float("RSI_MR_TARGET_ATR", 1.0))),
+        rsi_mr_time_stop_candles=min(500, max(1, _env_int("RSI_MR_TIME_STOP_CANDLES", 24))),
+        rsi_mr_pause_after_losses=min(100, max(0, _env_int("RSI_MR_PAUSE_AFTER_LOSSES", 2))),
+        rsi_mr_spot_fee_bps=min(100.0, max(0.0, _env_float("RSI_MR_SPOT_FEE_BPS", 10.0))),
+        rsi_mr_futures_fee_bps=min(100.0, max(0.0, _env_float("RSI_MR_FUTURES_FEE_BPS", 5.0))),
+        rsi_mr_slippage_bps=min(250.0, max(0.0, _env_float("RSI_MR_SLIPPAGE_BPS", 5.0))),
         owner_alert_chat_id=(os.environ.get("OWNER_ALERT_CHAT_ID") or os.environ.get("BILLING_ALERT_CHAT_ID") or None),
         pnl_labels=_env_bool("PNL_LABELS", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),

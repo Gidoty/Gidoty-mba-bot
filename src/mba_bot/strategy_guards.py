@@ -16,15 +16,18 @@ Fees in the expectancy are MODELLED (the trading path does not record exact fees
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from . import protection_guard as pg
 from .config import Settings
+from .multi_trade import EMA_STRATEGY_ID
+from .rsi_mr import STRATEGY_ID as RSI_ID
 from .models import NON_TERMINAL_TRADE_STATUSES, TRADE_CLOSED, StrategyPause, Trade
 from .notifications.telegram import TelegramNotifier
 from .telemetry import STRATEGY_ID
@@ -67,9 +70,16 @@ def trade_result(t: Trade, fee_bps: float) -> Result | None:
         return None
 
 
-def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps: float, since: datetime | None = None, limit: int = 200) -> list[Result]:
-    """This account's closed STRATEGY trades in this mode, newest first, incident trades excluded."""
+def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps: float, since: datetime | None = None, limit: int = 200,
+                   strategy_id: str | None = None, pair: str | None = None) -> list[Result]:
+    """This account's closed STRATEGY trades in this mode, newest first, incident trades excluded. With `strategy_id` only that strategy's
+    trades count (an empty strategy_id on a row means ema_cross_atr_v1); with `pair` only that pair's. Without either: every trade, as before."""
     q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.closed_at.isnot(None))
+    if strategy_id is not None:
+        q = q.where(or_(Trade.strategy_id.is_(None), Trade.strategy_id == "", Trade.strategy_id == EMA_STRATEGY_ID) if strategy_id == EMA_STRATEGY_ID
+                    else Trade.strategy_id == strategy_id)
+    if pair is not None:
+        q = q.where(Trade.pair == pair)
     if since is not None:
         q = q.where(Trade.closed_at > since)
     rows = session.scalars(q.order_by(Trade.closed_at.desc()).limit(limit * 4 + 20)).all()  # headroom: incident trades are skipped below
@@ -90,6 +100,12 @@ def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps
 def pauses(session: Session, account_id: str, strategy_id: str, is_paper: bool) -> list[StrategyPause]:
     return list(session.scalars(select(StrategyPause).where(StrategyPause.account_id == account_id, StrategyPause.strategy_id == strategy_id,
                                                             StrategyPause.is_paper.is_(is_paper)).order_by(StrategyPause.paused_at)))
+
+
+def pause_applies(p: StrategyPause, pair: str | None) -> bool:
+    """A pause whose detail names a pair ("pair=BTC/USDT") applies to that pair only; one that names none applies to the whole strategy."""
+    named = [part[5:] for part in (p.detail or "").split(", ") if part.startswith("pair=")]
+    return not named or pair is None or pair in named
 
 
 def is_active(p: StrategyPause, now: datetime) -> bool:
@@ -145,8 +161,12 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     a refusal in enforce mode."""
     hits: list[GuardHit] = []
     now = _aware(now)
+    rsi = strategy_id == RSI_ID
+    pair = pair or account.pair
 
     rows = pauses(session, account.id, strategy_id, is_paper)
+    if rsi:
+        rows = [p for p in rows if pause_applies(p, pair)]  # a loss-streak pause names its pair; an expectancy pause covers the strategy
     active = [p for p in rows if is_active(p, now)]
     if active:
         hits.append(GuardHit(R_PAUSED, {"since": _aware(active[0].paused_at).isoformat(timespec="minutes"), "pause_code": active[0].code}))
@@ -154,48 +174,62 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
     fee_bps = settings.fee_guard_fee_bps
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     if settings.strategy_daily_loss_pct > 0:
-        today = [r for r in closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1))]
+        today = [r for r in closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=day_start - timedelta(microseconds=1), strategy_id=strategy_id)]
         capital = account.paper_balance if is_paper else account.allocated_capital
         h = daily_loss_hit(net_pnl_today=sum(r.net for r in today), capital=capital, limit_pct=settings.strategy_daily_loss_pct)
         if h:
             hits.append(h)
 
-    if settings.ema_stop_cooldown_hours > 0:
-        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=settings.ema_stop_cooldown_hours), limit=50)
-        stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, pair or account.pair))]
+    if settings.ema_stop_cooldown_hours > 0 and not rsi:  # the EMA strategy's own rule; rsi_mr_v1 has the two-loss pause instead
+        recent = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=now - timedelta(hours=settings.ema_stop_cooldown_hours), limit=50,
+                                strategy_id=strategy_id)
+        stops = [r.closed_at for r in recent if r.close_reason == STOP_REASON and (r.pair in (None, pair))]
         h = cooldown_hit(max(stops) if stops else None, now, settings.ema_stop_cooldown_hours)
         if h:
             hits.append(h)
 
-    if settings.strategy_pause_after_losses > 0:
+    streak_n = settings.rsi_mr_pause_after_losses if rsi else settings.strategy_pause_after_losses
+    if streak_n > 0:
         start = window_start(rows, R_LOSS_STREAK, now)
-        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=max(10, settings.strategy_pause_after_losses + 5))
-        h = loss_streak_hit([r.net for r in res], settings.strategy_pause_after_losses, settings.strategy_streak_pause_hours)
+        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=max(10, streak_n + 5), strategy_id=strategy_id,
+                             pair=pair if rsi else None)
+        h = loss_streak_hit([r.net for r in res], streak_n, settings.strategy_streak_pause_hours)
         if h:
+            if rsi:
+                h = dataclasses.replace(h, detail={**h.detail, "pair": pair})
             hits.append(h)
 
     if settings.strategy_expectancy_window > 0:
         start = window_start(rows, R_EXPECTANCY, now)
-        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=settings.strategy_expectancy_window)
+        res = closed_results(session, account.id, is_paper=is_paper, fee_bps=fee_bps, since=start, limit=settings.strategy_expectancy_window, strategy_id=strategy_id)
         h = expectancy_hit([r.net_r for r in res], settings.strategy_expectancy_window)
         if h:
             hits.append(h)
 
-    h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=fee_bps,
-                      slippage_bps=settings.fee_guard_slippage_bps, expected_move_atr=settings.fee_guard_expected_move_atr)
+    if rsi:
+        # Fees by market (Spot 0.10 percent, Futures 0.05 percent per side) and the slippage the strategy is specified with; the
+        # expected move is its profit target. A margin of 0 would switch the guard off, which the caller refuses for this strategy.
+        rsi_fee = settings.rsi_mr_futures_fee_bps if account.market_type == "futures" else settings.rsi_mr_spot_fee_bps
+        h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=rsi_fee,
+                          slippage_bps=2 * settings.rsi_mr_slippage_bps, expected_move_atr=getattr(signal, "target_atr", None) or settings.rsi_mr_target_atr)
+    else:
+        h = fee_guard_hit(atr_pct=getattr(signal, "atr_pct", None), margin=settings.fee_guard_margin, fee_bps=fee_bps,
+                          slippage_bps=settings.fee_guard_slippage_bps, expected_move_atr=settings.fee_guard_expected_move_atr)
     if h:
         hits.append(h)
 
     if settings.max_open_positions > 0 or settings.max_total_risk_pct > 0:
         n_open, open_risk = open_position_numbers(session, account.id, account.risk_pct)
-        h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=account.risk_pct,
+        new_risk = min(account.risk_pct, settings.rsi_mr_risk_pct) if rsi else account.risk_pct
+        h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=new_risk,
                           max_positions=settings.max_open_positions, max_total_risk_pct=settings.max_total_risk_pct)
         if h:
             hits.append(h)
 
-    h = ema_gap_hit(getattr(signal, "gap_atr", None), settings.ema_min_gap_atr)
-    if h:
-        hits.append(h)
+    if not rsi:
+        h = ema_gap_hit(getattr(signal, "gap_atr", None), settings.ema_min_gap_atr)
+        if h:
+            hits.append(h)
     return hits
 
 

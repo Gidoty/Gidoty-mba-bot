@@ -293,6 +293,7 @@ def log_decision(
     detail: dict | None = None,
     trade_id: str | None = None,
     now: datetime | None = None,
+    strategy_id: str | None = None,
 ) -> None:
     """Queue one decision row. Never raises, never flushes."""
     if not enabled(settings):
@@ -315,7 +316,7 @@ def log_decision(
                 mode="paper" if is_paper else "live",
                 market_type=account.market_type,
                 pair=pair_value,
-                strategy_id=STRATEGY_ID,
+                strategy_id=strategy_id or STRATEGY_ID,
                 stage=stage,
                 outcome=outcome,
                 reason_code=reason[:48],
