@@ -306,7 +306,7 @@ def log_decision(
             candle_ts = candle_ts if candle_ts is not None else ctx.candle_ts
         stamp = now or datetime.now().astimezone()
         day = stamp.strftime("%Y-%m-%d")
-        key = (account.id, pair_value, stage, outcome, reason, candle_ts)
+        key = (account.id, strategy_id or STRATEGY_ID, pair_value, stage, outcome, reason, candle_ts)
         if not _allow(account.id, key, time.monotonic(), day):
             return
         session.add(
