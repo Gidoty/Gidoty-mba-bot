@@ -42,6 +42,9 @@ class StrategySignal:
     slow_ema: float | None
     atr: float | None
     atr_pct: float | None
+    # |fast - slow| in ATRs at the moment a crossover is seen (None when there is no crossover or no ATR). Read by the strategy guards
+    # (docs/safety/strategy_guards.md); the signal itself is unchanged by it.
+    gap_atr: float | None = None
 
 
 def generate_signal(
@@ -98,6 +101,7 @@ def generate_signal(
             atr_pct,
         )
 
+    gap_atr = abs(curr_fast - curr_slow) / curr_atr if curr_atr else None
     if crossed_up:
-        return StrategySignal(SignalType.BULLISH_CROSSOVER, "EMA fast crossed above slow", curr_fast, curr_slow, curr_atr, atr_pct)
-    return StrategySignal(SignalType.BEARISH_CROSSOVER, "EMA fast crossed below slow", curr_fast, curr_slow, curr_atr, atr_pct)
+        return StrategySignal(SignalType.BULLISH_CROSSOVER, "EMA fast crossed above slow", curr_fast, curr_slow, curr_atr, atr_pct, gap_atr)
+    return StrategySignal(SignalType.BEARISH_CROSSOVER, "EMA fast crossed below slow", curr_fast, curr_slow, curr_atr, atr_pct, gap_atr)

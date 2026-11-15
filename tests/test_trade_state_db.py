@@ -26,7 +26,8 @@ NEW_HEAD = "d4a8f1c3e6b2"  # the research telemetry tables (still the revision t
 KILL_SWITCH_REVISION = "e5b9c2d7f1a4"  # the kill switch tables
 SUBSCRIPTION_REVISION = "f6c3a9d1b8e2"  # subscription billing tables (Stage 0), on top of the kill switch
 TOKENS_REVISION = "a7d4e1c9b3f5"  # subscription_tokens (Stage 1)
-LATEST_HEAD = "b8e5f2a0c4d6"  # head now also includes billing_notices (customer reminders), on top of subscription_tokens
+NOTICES_REVISION = "b8e5f2a0c4d6"  # billing_notices (customer reminders)
+LATEST_HEAD = "c9f6a3b1d5e7"  # head now also includes strategy_pauses (strategy guards), on top of billing_notices
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -225,7 +226,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     assert script.get_revision(KILL_SWITCH_REVISION).down_revision == NEW_HEAD
     assert script.get_revision(SUBSCRIPTION_REVISION).down_revision == KILL_SWITCH_REVISION
     assert script.get_revision(TOKENS_REVISION).down_revision == SUBSCRIPTION_REVISION
-    assert script.get_revision(LATEST_HEAD).down_revision == TOKENS_REVISION
+    assert script.get_revision(NOTICES_REVISION).down_revision == TOKENS_REVISION
+    assert script.get_revision(LATEST_HEAD).down_revision == NOTICES_REVISION
 
 
 # =========================== single-instance lock ===========================
