@@ -83,3 +83,17 @@ def test_the_gate_never_writes_the_database(migrated):
 def test_the_gate_does_not_depend_on_init_db_or_create_all():
     src = (ROOT / "src/mba_bot/restart_gate.py").read_text()
     assert "init_db" not in src.replace("no init_db", "") and "create_all" not in src.replace("no create_all", "") and "session_scope" not in src
+
+
+def test_the_count_is_the_number_of_live_trades_across_accounts(migrated):
+    now = datetime.now(timezone.utc).isoformat()
+    con = sqlite3.connect(migrated)
+    for i in (1, 2, 3):
+        con.execute("insert into customers (id,email,password_hash,created_at,is_active,has_paid) values (?,?,'x',?,1,1)", (f"c{i}", f"m{i}@example.com", now))
+        con.execute("insert into trading_accounts (id,customer_id,pair,market_type,pair_selection_mode,notification_channel,risk_pct,trial_ends_at,paper_balance,is_active,created_at,updated_at) "
+                    "values (?,?,'BTC/USDT','spot','manual','telegram',1.0,?,10000,1,?,?)", (f"a{i}", f"c{i}", now, now, now))
+        con.execute("insert into trades (id,account_id,side,is_paper,entry_price,quantity,stop_loss_price,status,opened_at,pair) values (?,?,'long',0,100,1,90,'open',?,'BTC/USDT')", (f"t{i}", f"a{i}", now))
+    con.commit()
+    con.close()
+    r = gate(migrated)
+    assert r.returncode == 3 and "3 live trade(s) open (open=3)" in r.stdout, r.stdout
