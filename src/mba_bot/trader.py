@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import exchange, kill_switch, lifecycle, multi_trade, pair_catalog, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import exchange, kill_switch, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -353,14 +353,15 @@ def _limit_message(account: TradingAccount, hit) -> str:
     )
 
 
-async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog, pair: str | None = None) -> bool:
+async def _strategy_guards_block(session, account, settings: Settings, notifier: Notifier, signal, *, is_paper: bool, now: datetime, tlog, pair: str | None = None,
+                                 strategy_id: str = strategy_guards.STRATEGY_ID) -> bool:
     """The strategy guards (strategy_guards.py), reached only when STRATEGY_GUARDS_MODE is observe or enforce. True if a NEW entry is
     refused here (and the refusal has been recorded). The operator kill switch was checked before this and stays authoritative: this
     can only add a refusal. In observe mode nothing is blocked and nothing is written; in enforce mode the first guard that fires blocks
     the entry, a pause guard also writes its pause, and the owner is told once. An unreadable guard input refuses in enforce mode."""
     mode = settings.strategy_guards_mode
     try:
-        hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now, pair=pair)
+        hits = strategy_guards.evaluate(session, account, settings, signal=signal, is_paper=is_paper, now=now, pair=pair, strategy_id=strategy_id)
     except Exception as exc:  # noqa: BLE001 - fail closed in enforce, silent in observe; never raise into the cycle
         logger.warning("account %s: strategy guards could not be evaluated (%s)", account.id, type(exc).__name__)
         if mode != "enforce":
@@ -379,10 +380,10 @@ async def _strategy_guards_block(session, account, settings: Settings, notifier:
     hit = hits[0]
     tlog(telemetry.REJECTED, hit.code, mode="enforce", **hit.detail)
     if hit.creates_pause:
-        strategy_guards.create_pause(session, account.id, strategy_guards.STRATEGY_ID, hit, is_paper=is_paper, now=now)
+        strategy_guards.create_pause(session, account.id, strategy_id, hit, is_paper=is_paper, now=now)
     if hit.owner_alert and (hit.creates_pause or protection_guard.should_alert(
             account.id, "-", hit.code + ":" + now.strftime("%Y-%m-%d"), now=now, repeat_hours=24.0)):
-        await strategy_guards.alert_owner(settings, strategy_guards.owner_text(account.id, strategy_guards.STRATEGY_ID, hit))
+        await strategy_guards.alert_owner(settings, strategy_guards.owner_text(account.id, strategy_id, hit))
     message = hit.message
     if message is None:  # a signal filter: logged like the flat-market filter, no customer message
         logger.info("account %s: new %s entry skipped (%s)", account.id, account.pair, hit.code)
@@ -632,7 +633,16 @@ def _note_scan(scan_out: dict, scanned: list, ranked: list, settings: Settings) 
 
 async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None):
     pair = pair or account.pair  # a multi-trade paper account enters on the pair it scanned; every other caller passes none
-    if signal.signal == SignalType.BULLISH_CROSSOVER:
+    is_rsi = isinstance(signal, rsi_mr.RsiSignal)
+    strategy_id = rsi_mr.STRATEGY_ID if is_rsi else multi_trade.EMA_STRATEGY_ID
+    if is_rsi:
+        # rsi_mr_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever RSI_MR_PAPER_ONLY or any other setting says.
+        if not is_paper or not settings.rsi_mr_enabled or signal.side not in ("long", "short"):
+            return
+        if signal.side == "short" and account.market_type != "futures":
+            return
+        side = signal.side
+    elif signal.signal == SignalType.BULLISH_CROSSOVER:
         side = "long"
     elif signal.signal == SignalType.BEARISH_CROSSOVER and account.market_type == "futures":
         side = "short"
@@ -643,7 +653,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         # Research telemetry only; no-op unless TRADE_TELEMETRY is on. Never raises.
         telemetry.log_decision(
             session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=outcome, reason=reason,
-            is_paper=is_paper, ctx=tctx, now=now, detail=detail or None, pair=pair,
+            is_paper=is_paper, ctx=tctx, now=now, detail=detail or None, pair=pair, strategy_id=strategy_id,
         )
 
     if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
@@ -659,14 +669,24 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         )
         return
 
+    if is_rsi and (settings.strategy_guards_mode == "off" or settings.fee_guard_margin <= 0):
+        # Fail closed: this strategy does not trade without the guards of PR #45 and the fee guard. Logged once per day, not every cycle.
+        code = "rsi_guards_off" if settings.strategy_guards_mode == "off" else "rsi_fee_guard_off"
+        _tlog(telemetry.REJECTED, code)
+        if protection_guard.should_alert(account.id, "-", f"{code}:{now.strftime('%Y-%m-%d')}", now=now, repeat_hours=24.0):
+            logger.warning("account %s: rsi_mr_v1 skipped (%s): set STRATEGY_GUARDS_MODE to observe or enforce and FEE_GUARD_MARGIN above 0", account.id, code)
+        return
+
     if settings.strategy_guards_mode != "off" and await _strategy_guards_block(
-        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog, pair=pair
+        session, account, settings, notifier, signal, is_paper=is_paper, now=now, tlog=_tlog, pair=pair, strategy_id=strategy_id
     ):
         return
 
     stop_price = compute_stop_loss(
-        entry_price=current_price, atr=signal.atr, side=side, atr_multiplier=settings.atr_stop_multiplier
+        entry_price=current_price, atr=signal.atr, side=side,
+        atr_multiplier=settings.rsi_mr_stop_atr if is_rsi else settings.atr_stop_multiplier,
     )
+    risk_pct_used = min(account.risk_pct, settings.rsi_mr_risk_pct) if is_rsi else account.risk_pct
 
     if is_paper:
         # Paper mode keeps its own pre-existing sizing base unchanged -
@@ -737,7 +757,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
 
     size = compute_position_size(
         account_balance=effective_capital,
-        risk_pct=account.risk_pct,
+        risk_pct=risk_pct_used,
         entry_price=current_price,
         stop_price=stop_price,
         max_risk_pct=settings.risk_pct_max,
@@ -917,7 +937,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         status=TRADE_OPEN,
         opened_at=now,
         pair=pair,
-        strategy_id=multi_trade.EMA_STRATEGY_ID,
+        strategy_id=strategy_id,
     )
     session.add(trade)
     if tctx is not None:
@@ -938,8 +958,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         account.notification_target,
         f"[{mode_label}] Entered {side.upper()} {pair}\n"
         f"Entry: {current_price:.4f}  Qty: {size.quantity:.6f}  Stop: {stop_price:.4f}\n"
-        f"Risk: {size.risk_amount:.2f} ({account.risk_pct:.2f}% of balance)"
-        + (f"\nStrategy: {multi_trade.EMA_STRATEGY_ID}  Open trades: {multi.n_open + 1} of {multi.cap}" if multi is not None else ""),
+        f"Risk: {size.risk_amount:.2f} ({risk_pct_used:.2f}% of balance)"
+        + (f"\nStrategy: {strategy_id}  Open trades: {multi.n_open + 1} of {multi.cap}" if multi is not None else ""),
     )
 
 
@@ -962,6 +982,10 @@ def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open
         return True
     if not is_paper or any(not t.is_paper for t in open_trades):
         return False
+    if any(multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID for t in open_trades):
+        return True  # a trade rsi_mr_v1 opened is managed by its own rules even if the switch was turned off since
+    if settings.rsi_mr_enabled:
+        return True  # rsi_mr_v1 runs only on this path, and only for PAPER accounts (the line above sends every live account away)
     return multi_trade.configured_cap(settings.max_open_positions) > 1 and len(multi_trade.trading_pairs(account)) > 1
 
 
@@ -1046,9 +1070,26 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             atr_flat_threshold=settings.atr_flat_threshold, atr_rolling_window=settings.atr_rolling_window,
         )
 
-    # 1. Manage every open trade on its own pair, whatever the grade is.
+    rsi_on = settings.rsi_mr_enabled
+    rsi_p = _rsi_params(settings)
+    rsi_tf_ms = rsi_mr.timeframe_ms(settings.rsi_mr_timeframe)
+    now_ms = int(now.timestamp() * 1000)
+    rsi_cache: dict[str, list] = {}
+
+    async def rsi_closed_for(pair: str):
+        if pair not in rsi_cache:
+            ohlcv = await client.fetch_ohlcv(
+                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.rsi_mr_timeframe, limit=settings.ohlcv_limit
+            )
+            rsi_cache[pair] = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, rsi_tf_ms)
+        return rsi_cache[pair]
+
+    # 1. Manage every open trade on its own pair, whatever the grade is, with the rules of the strategy that opened it.
     for t in open_trades:
         pair = t.pair or account.pair
+        if multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID:
+            await _manage_rsi_trade(session, account, t, await rsi_closed_for(pair), settings, notifier, p=rsi_p, tf_ms=rsi_tf_ms, now=now)
+            continue
         candles = await candles_for(pair)
         if not candles:
             logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
@@ -1075,23 +1116,85 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             if protection_guard.should_alert(account.id, "-", f"multi:slots_full:{len(open_now)}:{cap}", now=now, repeat_hours=6.0):
                 logger.info("account %s: %d of %d trade slots used, %s; no new entry", account.id, len(open_now), cap, grade.text())
         else:
-            for pair in free_pairs:
+            # Strategy priority when two signal at once (docs/safety/rsi_mr_v1.md): Donchian (not built), then EMA, then RSI. The first
+            # strategy that has a signal AND is not refused (kill switch, guards, caps) takes the slot; a strategy that is refused
+            # falls through to the next one. One new entry per cycle in total.
+            order = [multi_trade.EMA_STRATEGY_ID] + ([rsi_mr.STRATEGY_ID] if rsi_on else [])
+            allow_short = account.market_type == "futures"
+
+            async def signal_of(strategy: str, pair: str):
+                """(signal object, price, candles) for one strategy on one pair, or None if it has no actionable signal."""
+                if strategy == rsi_mr.STRATEGY_ID:
+                    closed = await rsi_closed_for(pair)
+                    sig = rsi_mr.generate_signal(closed, rsi_p, allow_short=allow_short)
+                    return (sig, closed[-1].close, closed) if (sig.side and closed) else None
                 candles = await candles_for(pair)
                 if not candles:
-                    continue
-                signal = signal_for(candles)
-                if signal.signal == SignalType.NONE:
-                    continue
-                tctx = None
-                if telemetry.enabled(settings):
-                    tctx = telemetry.build_entry_context(candles, signal, settings, now=now, scan=None)
-                    telemetry.signal_stage(session, settings, account, tctx, signal, is_paper=True, now=now, pair=pair)
-                await _maybe_enter(session, account, client, signal, candles[-1].close, settings, notifier, is_paper=True, now=now,
-                                   tctx=tctx, pair=pair, multi=MultiInfo(cap=cap, n_open=len(open_now), grade=grade))
-                if len(list_open_trades(session, account.id)) > len(open_now):
-                    break  # one new entry per cycle; a refused pair (a guard, the cooldown) does not stop the next pair being tried
+                    return None
+                sig = signal_for(candles)
+                return (sig, candles[-1].close, candles) if sig.signal != SignalType.NONE else None
+
+            for position, strategy in enumerate(order):
+                for pair in free_pairs:
+                    found = await signal_of(strategy, pair)
+                    if found is None:
+                        continue
+                    signal, price, candles = found
+                    tctx = None
+                    if strategy == rsi_mr.STRATEGY_ID:
+                        telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_SIGNAL, outcome=telemetry.ACCEPTED,
+                                               reason=telemetry.R_SIGNAL_ACTIONABLE, is_paper=True, now=now, pair=pair, strategy_id=strategy,
+                                               detail={"rsi": signal.rsi, "adx": signal.adx, "atr_pct": signal.atr_pct})
+                    elif telemetry.enabled(settings):
+                        tctx = telemetry.build_entry_context(candles, signal, settings, now=now, scan=None)
+                        telemetry.signal_stage(session, settings, account, tctx, signal, is_paper=True, now=now, pair=pair)
+                    await _maybe_enter(session, account, client, signal, price, settings, notifier, is_paper=True, now=now,
+                                       tctx=tctx, pair=pair, multi=MultiInfo(cap=cap, n_open=len(open_now), grade=grade))
+                    if len(list_open_trades(session, account.id)) > len(open_now):
+                        for later in order[position + 1:]:  # a lower-priority strategy that also had a signal on this pair loses the slot
+                            if await signal_of(later, pair) is not None:
+                                logger.info("account %s: strategy_slot_lost_to: %s signal on %s not taken, %s took the slot", account.id, later, pair, strategy)
+                                telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.SKIPPED,
+                                                       reason="strategy_slot_lost_to", is_paper=True, now=now, pair=pair, strategy_id=later,
+                                                       detail={"winner": strategy})
+                        break
+                else:
+                    continue  # no entry by this strategy: the next one gets its turn
+                break  # one new entry per cycle
     session.commit()
     await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+
+
+def _rsi_params(settings: Settings) -> rsi_mr.RsiParams:
+    return rsi_mr.RsiParams(adx_max=settings.rsi_mr_adx_max, stop_atr=settings.rsi_mr_stop_atr, target_atr=settings.rsi_mr_target_atr,
+                            time_stop_candles=settings.rsi_mr_time_stop_candles)
+
+
+async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settings: Settings, notifier, *, p: rsi_mr.RsiParams, tf_ms: int, now) -> None:
+    """Exit a PAPER rsi_mr_v1 trade by its own rules (stop, profit target, RSI back to 50, time stop) from the closed candles that ended
+    after it was opened. The result depends only on the candles, not on when this cycle ran."""
+    if not trade.is_paper:
+        return  # paper only: a live trade is never managed here
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    ex = rsi_mr.exit_check(side=trade.side, entry=trade.entry_price, stop=trade.stop_loss_price, opened_ms=int(opened.timestamp() * 1000),
+                           closed=closed, tf_ms=tf_ms, p=p)
+    if ex is None:
+        return
+    pnl = (ex.price - trade.entry_price) * trade.quantity if trade.side == "long" else (trade.entry_price - ex.price) * trade.quantity
+    trade.exit_price = ex.price
+    trade.pnl = pnl
+    trade.status = "closed"
+    trade.closed_at = now
+    trade.close_reason = ex.reason
+    account.paper_balance += pnl
+    session.commit()  # durable before the (network) notification
+    pair = trade.pair or account.pair
+    await notifier.send(
+        account.notification_target,
+        f"[PAPER] Exited {trade.side.upper()} {pair} ({ex.reason})\n"
+        + pnl_labels.exit_line(trade.entry_price, ex.price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
+        + f"\nStrategy: {rsi_mr.STRATEGY_ID}",
+    )
 
 
 async def _process_multi_live(session, account, client, live_trades: list[Trade], settings, notifier, *, now) -> None:
