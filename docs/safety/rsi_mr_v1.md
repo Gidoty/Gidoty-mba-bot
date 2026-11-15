@@ -69,7 +69,7 @@ A paper account that the owner opted in (`extra_strategies`) while `RSI_MR_ENABL
 
 ## Owner steps (none done by Claude)
 
-1. Deploy with `RSI_MR_ENABLED` unset (nothing changes). No migration in this PR beyond PR #47's.
-2. For ONE paper test account: set its `extra_strategies` to `rsi_mr_v1` in the database, then `NEW_STRATEGY_GUARDS_MODE=enforce`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `RSI_MR_ENABLED=true`, restart in a quiet moment (`python -m mba_bot.restart_gate` first).
-3. Watch the journal for `rsi_mr_v1` lines and `strategy_slot_lost_to`. Move to `enforce` only after reading what observe would have blocked.
+1. Deploy in the safe order described in `multi_trade.md`: `python -m mba_bot.restart_gate`, then stop the service, back up, migrate with `alembic upgrade head`, deploy the code, start the service, with `RSI_MR_ENABLED` unset: nothing changes. The migrations are the ones of the stack (see `multi_trade.md`).
+2. For ONE paper test account: set its `extra_strategies` to `rsi_mr_v1` in the database, then `NEW_STRATEGY_GUARDS_MODE=enforce`, `FEE_GUARD_MARGIN` above 0 (for example 1.5), `RSI_MR_ENABLED=true`; apply it with the same order (`python -m mba_bot.restart_gate`, stop the service, back up, deploy the code, start the service).
+3. Watch the journal for `rsi_mr_v1` lines and `strategy_slot_lost_to`. These strategies trade only in `enforce` of their own guard mode, so there is no observe stage for them; read the journal and the decision log after the first days.
 4. Rollback: `RSI_MR_ENABLED=false`. An open RSI paper trade keeps being managed by its own rules until it exits.

@@ -72,11 +72,19 @@ position API.
 
 ## Owner steps (none done by Claude)
 
-1. Back up the database. Run migration `a1d7c4e9b2f6`. Then deploy the code (switches default to the old behaviour).
-2. Before any restart, run `python -m mba_bot.restart_gate` from the app directory: exit 0 means no live trade is open, 3 means do NOT restart,
-   2 means the database could not be read. It only reads. It prints counts, no ids.
-3. For a paper test account: set `pair_list` in the database (and, for the new strategies, `extra_strategies`; see rsi_mr_v1.md and donchian_breakout_v1.md), set `MAX_OPEN_POSITIONS=2` or `3`, restart in a quiet moment, watch the journal.
-4. Rollback: set `MAX_OPEN_POSITIONS=1` (existing trades are still managed). Downgrading the migrations needs every account at one non-terminal trade (the `a1d7c4e9b2f6` downgrade refuses otherwise).
+Deploy order (audit M7). Either shortcut leaves a window: migrating while the OLD code runs puts the new schema under old code (the old live-trade check is not in the new schema's index set until the chain is complete,
+and the old code does not know the new columns' meaning); deploying the new code on the OLD schema breaks every trade query. So, with the service STOPPED for the few minutes it takes:
+
+1. Check that no live trade is open: `python -m mba_bot.restart_gate` from the app directory with the service's `DATABASE_URL`. Exit 0 means none, 3 means do NOT stop the service, 2 means the database could not be read (a missing file or table counts).
+   It only reads, opens its own connection, creates nothing, and prints counts, no ids.
+2. Stop the service.
+3. Back up the database (and check the backup).
+4. Migrate: `alembic upgrade head` from the app directory with the service's `DATABASE_URL`. This applies, in order, `a1d7c4e9b2f6` (columns, per-pair index), `e7a2c9d4b1f8` (the one-live-trade-per-account index; it refuses if an account already has
+   two non-terminal live trades) and `f3c8a1d6e2b9` (the per-account opt-in column). On the way it also applies any earlier pending revision.
+5. Deploy the code (switches default to the old behaviour; nothing else changes until you set a switch).
+6. Start the service and check the health endpoint and the journal. Set `API_SINGLE_INSTANCE_LOCK=true` in the same environment change if it is not set yet (this stack does not change the default).
+7. For a paper test account: set `pair_list` in the database (and, for the new strategies, `extra_strategies`; see rsi_mr_v1.md and donchian_breakout_v1.md), set `MAX_OPEN_POSITIONS=2` or `3`, restart in a quiet moment, watch the journal.
+8. Rollback: set `MAX_OPEN_POSITIONS=1` (existing trades are still managed). Downgrading the migrations needs every account at one non-terminal trade (the `a1d7c4e9b2f6` downgrade refuses otherwise).
    **What a database downgrade loses** (audit M6): `trades.strategy_id` (an open rsi_mr_v1 or donchian_breakout_v1 paper trade is then relabelled as ema_cross_atr_v1 after a later re-upgrade and is exited by the EMA rules; close such trades first),
    `trading_accounts.pair_list` and `trading_accounts.extra_strategies` (every account is EMA only with one pair), and the live-trade and per-pair indexes (back to one trade per account). The `c9f6a3b1d5e7` downgrade, which would also drop all strategy pauses,
    refuses while an active pause exists (see strategy_guards.md). Prefer switching the features off (`MAX_OPEN_POSITIONS=1`, the strategy switches off) over downgrading.
