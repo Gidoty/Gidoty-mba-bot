@@ -1002,12 +1002,13 @@ def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open
     never ignored)."""
     if len(open_trades) > 1:
         return True
+    if open_trades and all(t.is_paper for t in open_trades) and any(multi_trade.strategy_of(t) in multi_trade.NEW_STRATEGY_IDS for t in open_trades):
+        # A paper trade that rsi_mr_v1 or donchian_breakout_v1 opened is managed by ITS OWN rules, even if its switch was turned off since and even if the account
+        # now resolves as LIVE (audit L1; refusing would leave the trade with no exit). It runs on the paper environment, places no order and enters nothing new
+        # (a live-mode account never enters from this path).
+        return True
     if not is_paper or any(not t.is_paper for t in open_trades):
         return False
-    if any(multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID for t in open_trades):
-        return True  # a trade rsi_mr_v1 opened is managed by its own rules even if the switch was turned off since
-    if any(multi_trade.strategy_of(t) == donchian.STRATEGY_ID for t in open_trades):
-        return True  # same for donchian_breakout_v1
     opted = multi_trade.account_strategies(account)
     if (settings.donchian_enabled and donchian.STRATEGY_ID in opted) or (settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted):
         return True  # the new strategies run only on this path, only for PAPER accounts the owner opted in (audit H2); others keep the EMA path and Auto Select

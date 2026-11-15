@@ -16,6 +16,8 @@ Every number below is the specification, not a tuned or measured value. Backtest
 * Fee guard: skipped when expected profit to target is below `FEE_GUARD_MARGIN` x round-trip cost. Cost = 2 x fee (Spot 0.10 percent, Futures 0.05 percent per side) + 2 x 0.05 percent slippage.
 * Pause after `RSI_MR_PAUSE_AFTER_LOSSES` (2) consecutive net losses on the SAME pair: that pair is paused for this strategy (`STRATEGY_STREAK_PAUSE_HOURS`, default 24; the owner can release it).
 
+A paper rsi_mr_v1 trade is managed by its own rules even if the account now resolves as LIVE (audit L1): it is exited on the paper environment, no order is placed, and a live-mode account enters nothing new from this path. Refusing instead would have left the trade without an exit.
+
 ## Entry freshness and the exit start (audit M5)
 
 A paper entry is taken only if the signal candle is the latest closed candle and closed no more than `NEW_STRATEGY_ENTRY_WINDOW_MINUTES` (default 10, 1 to 59) ago; otherwise it is skipped and logged as `signal_stale` (journal and decision log). So a trade is never booked at a close the market left long ago (a slot that frees late, an ended cooldown, a restart, the switch turned on). The exit check judges only candles that start at or after the entry, so the candle the entry happened in is not judged (its low/high before the entry never belonged to the trade); an exit that candle would have caused is seen one candle later.
