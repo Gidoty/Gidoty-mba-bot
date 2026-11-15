@@ -22,6 +22,10 @@ Stop first when one candle touches both. One position per pair at a time. Unfini
 
 SPEC (ADX < 25, stop 1.5 ATR, target 1.0 ATR, time stop 24); ADX20; ADX30; TARGET1.5; STOP2.0. Each changes one thing.
 
+## The one-look ledger
+
+The record that the sealed months were read lives in `sealed_looks.rsi_mr_v1.json` beside the data (in the data folder, not the output folder), keyed on the data hash. A new output folder or deleted output files do not give a clean second look. It is an **honesty aid, not a lock**: anyone who can delete that file can still take a second look, and the report of a second look says it is not unseen evidence.
+
 ## Selection rule (fixed)
 
 On the tuning window, Spot costs, all pairs pooled: SPEC stays unless a variant has at least 30 trades, beats SPEC's expectancy by at least 0.05 R and has a max drawdown no more than 10 percent worse.

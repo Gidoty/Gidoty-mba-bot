@@ -6,7 +6,8 @@ key, places no order and touches no database. docs/research/rsi_mr_preregistrati
     python -m mba_bot.rsi_backtest confirm --root research_data --out research_out/rsi_mr --confirm --reason "..."
 
 The last 6 months of the data are split: the first 4 months are TUNED on (a 3-day embargo follows); the last 2 months are SEALED and are read
-exactly once by `confirm`. A second look needs --second-look and the report says it is no longer unseen evidence.
+exactly once by `confirm`. A second look needs --second-look and the report says it is no longer unseen evidence. The ledger of looks is a file BESIDE THE DATA keyed on the data hash
+(an honesty aid, not a lock).
 The candle files use the layout the research downloader writes: <root>/klines/1h/<SYMBOL>.csv with the header
 ts,open,high,low,close,volume,... (ts in milliseconds). Nothing in this file says the strategy makes money; the numbers come from the owner's run.
 
@@ -296,6 +297,30 @@ class SealedError(Exception):
     pass
 
 
+def ledger_path(root: Path, runner: str) -> Path:
+    """The one-look ledger sits BESIDE THE DATA (audit M4), one file per runner, keyed on the data hash inside. It is an honesty aid, not a lock: anyone
+    who can delete this file can still take a second look; what it prevents is doing so by accident or by choosing a new output folder."""
+    return Path(root) / f"sealed_looks.{runner}.json"
+
+
+def read_looks(root: Path, runner: str, data_hash_: str) -> list:
+    p = ledger_path(root, runner)
+    if not p.exists():
+        return []
+    try:
+        return list(json.loads(p.read_text()).get(data_hash_, []))
+    except (ValueError, AttributeError):
+        raise SealedError("the one-look ledger beside the data is unreadable; refusing to open the sealed months")
+
+
+def record_look(root: Path, runner: str, data_hash_: str, entry: dict) -> int:
+    p = ledger_path(root, runner)
+    content = json.loads(p.read_text()) if p.exists() else {}
+    content.setdefault(data_hash_, []).append(entry)
+    p.write_text(json.dumps(content, indent=1))
+    return len(content[data_hash_])
+
+
 def run_confirm(root: Path, out_dir: Path, *, reason: str, confirm: bool, second_look: bool = False) -> dict:
     out_dir = Path(out_dir)
     sel = out_dir / "selected.json"
@@ -315,19 +340,17 @@ def run_confirm(root: Path, out_dir: Path, *, reason: str, confirm: bool, second
     w = windows(data)
     if list(w["sealed"]) != chosen["windows"]["sealed"]:
         raise SealedError("the sealed window changed since the tuning")
-    ledger = out_dir / "looks.json"
-    looks = json.loads(ledger.read_text()) if ledger.exists() else []
+    looks = read_looks(root, "rsi_mr_v1", dh)
     contaminated = bool(looks)
     if looks and not second_look:
         raise SealedError("the sealed months were already read once; a second look needs --second-look and is labelled contaminated")
-    looks.append({"ts": _stamp(), "reason": reason.strip(), "plan_hash": ph, "data_hash": dh, "second_look": contaminated})
-    ledger.write_text(json.dumps(looks, indent=1))  # recorded BEFORE anything is read
+    n_looks = record_look(root, "rsi_mr_v1", dh, {"ts": _stamp(), "reason": reason.strip(), "plan_hash": ph, "second_look": contaminated})  # BEFORE anything is read
     s0, s1 = w["sealed"]
     arms = {a.name: a for a in ARMS}
     names = ["SPEC"] if chosen["selected"]["arm"] == "SPEC" else ["SPEC", chosen["selected"]["arm"]]
     rows = {n: run_arm(data, arms[n], s0, s1) for n in names}
     result = {"protocol": PROTOCOL, "plan_hash": ph, "data_hash": dh, "created": _stamp(), "sealed_window": [s0, s1], "selected": chosen["selected"], "rows": rows,
-              "contaminated": contaminated, "looks": len(looks)}
+              "contaminated": contaminated, "looks": n_looks}
     (out_dir / "sealed_results.json").write_text(json.dumps(result, indent=1))
     (out_dir / "final_report.md").write_text(final_report(result))
     return result

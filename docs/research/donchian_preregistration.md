@@ -24,6 +24,10 @@ One position per pair at a time. After an initial-stop exit on a pair, no new si
 
 SPEC (20-candle entry channel, 10-candle exit channel, volume 1.5x, ATR% limit 3x, trail 2 ATR); VOL1.2; VOL2.0; ENTRY30 (30-candle entry channel and volume window); TRAIL3.0. Each changes one thing.
 
+## The one-look ledger
+
+The record that the sealed months were read lives in `sealed_looks.donchian_breakout_v1.json` beside the data (in the data folder, not the output folder), keyed on the data hash. A new output folder or deleted output files do not give a clean second look. It is an **honesty aid, not a lock**: anyone who can delete that file can still take a second look, and the report of a second look says it is not unseen evidence.
+
 ## Selection rule (fixed)
 
 On the tuning window, Spot costs, all pairs pooled: SPEC stays unless a variant has at least 30 trades, beats SPEC's expectancy by at least 0.05 R and has a max drawdown no more than 10 percent worse.

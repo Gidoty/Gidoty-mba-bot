@@ -178,9 +178,18 @@ def write_store(root: Path, *, days=330, seed=1, pairs=B.PAIRS):
 
 
 @pytest.fixture(scope="module")
-def store(tmp_path_factory):
+def master_store(tmp_path_factory):
     root = tmp_path_factory.mktemp("store")
     write_store(root)
+    return root
+
+
+@pytest.fixture
+def store(master_store, tmp_path):
+    """A private copy per test: the one-look ledger now lives beside the data (audit M4), so tests that open the sealed months must not share a folder."""
+    import shutil
+    root = tmp_path / "data"
+    shutil.copytree(master_store, root)
     return root
 
 
@@ -228,7 +237,7 @@ def test_tuning_never_asks_for_the_sealed_months_and_writes_its_outputs(store, t
     assert res["sealed_months_read"] is False and set(res["rows"]) == {a.name for a in B.ARMS}
     text = (tmp_path / "out" / "tune_report.md").read_text()
     assert "sealed months NOT read" in text and "NOT evidence that the strategy works" in text
-    assert not (tmp_path / "out" / "looks.json").exists()
+    assert not list(store.glob("*sealed*"))
 
 
 def test_the_tuning_window_cuts_trades_at_its_end(store):
@@ -256,7 +265,7 @@ def test_the_sealed_months_open_once_and_only_with_the_same_plan_and_data(store,
     with pytest.raises(B.SealedError, match="plan_hash differs"):
         B.run_confirm(store, out, reason="try", confirm=True)
     monkeypatch.undo()
-    assert not (out / "looks.json").exists()  # every refusal happened before the sealed months were read
+    assert not list(store.glob("*sealed*"))  # every refusal happened before the sealed months were read (no ledger beside the data)
     res = B.run_confirm(store, out, reason="registered one-shot", confirm=True)
     assert res["contaminated"] is False and res["looks"] == 1 and (out / "final_report.md").exists()
     with pytest.raises(B.SealedError, match="already read once"):
