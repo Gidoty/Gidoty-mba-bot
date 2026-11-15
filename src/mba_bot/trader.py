@@ -1100,27 +1100,29 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
     opted = multi_trade.account_strategies(account)
     rsi_on = settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted
     rsi_p = _rsi_params(settings)
-    rsi_tf_ms = rsi_mr.timeframe_ms(settings.rsi_mr_timeframe)
+    rsi_tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)  # the same value is asked of the exchange and used for the closed-candle test
+    rsi_tf_ms = rsi_mr.timeframe_ms(rsi_tf)
     now_ms = int(now.timestamp() * 1000)
     rsi_cache: dict[str, list] = {}
 
     async def rsi_closed_for(pair: str):
         if pair not in rsi_cache:
             ohlcv = await client.fetch_ohlcv(
-                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.rsi_mr_timeframe, limit=settings.ohlcv_limit
+                exchange.exchange_symbol(pair, account.market_type), timeframe=rsi_tf, limit=settings.ohlcv_limit
             )
             rsi_cache[pair] = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, rsi_tf_ms)
         return rsi_cache[pair]
 
     don_on = settings.donchian_enabled and donchian.STRATEGY_ID in opted
     don_p = _donchian_params(settings)
-    don_tf_ms = rsi_mr.timeframe_ms(settings.donchian_timeframe)
+    don_tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    don_tf_ms = rsi_mr.timeframe_ms(don_tf)
     don_cache: dict[str, list] = {}
 
     async def don_closed_for(pair: str):
         if pair not in don_cache:
             ohlcv = await client.fetch_ohlcv(
-                exchange.exchange_symbol(pair, account.market_type), timeframe=settings.donchian_timeframe, limit=settings.ohlcv_limit
+                exchange.exchange_symbol(pair, account.market_type), timeframe=don_tf, limit=settings.ohlcv_limit
             )
             don_cache[pair] = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, don_tf_ms)
         return don_cache[pair]

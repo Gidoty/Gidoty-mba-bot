@@ -53,6 +53,16 @@ class RsiSignal:
     gap_atr: float | None = None  # not used by this strategy; the guards read it for the EMA gap rule only
 
 
+SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d")  # the candle sizes Binance offers that this bot can size (audit L4)
+
+
+def normalize_timeframe(timeframe) -> tuple[str, bool]:
+    """(timeframe to use, was it supported). Anything not in SUPPORTED_TIMEFRAMES (a week, a month, a typo, nothing) is 1h and the caller logs it."""
+    raw = timeframe.strip() if isinstance(timeframe, str) else ""
+    value = "" if raw.endswith("M") else raw.lower()  # a capital M is Binance's MONTH ("1M"); it is not "1m" (one minute)
+    return (value, True) if value in SUPPORTED_TIMEFRAMES else ("1h", False)
+
+
 _TF = re.compile(r"^(\d{1,3})([mhd])$")
 _UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
 
