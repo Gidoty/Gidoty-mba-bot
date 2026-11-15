@@ -94,6 +94,8 @@ R_ENTRY_PAPER = "entry_paper"
 R_AUTO_PICK = "auto_pick"
 R_AUTO_SKIP_CAPITAL = "auto_skip_insufficient_capital"
 R_AUTO_FLAT = "auto_candidate_flat_filter"
+R_FUTURES_LEVERAGE_CEILING = "futures_leverage_above_ceiling"
+R_FUTURES_NOT_ISOLATED = "futures_margin_not_isolated"
 
 _DETAIL_MAX = 1500
 _DEDUPE_MAX = 4000

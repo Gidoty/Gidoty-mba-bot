@@ -515,3 +515,48 @@ async def fetch_available_quote_balance(client: ccxt_async.Exchange, pair: str) 
     if isinstance(free_map, dict):
         return float(free_map.get(quote, 0.0) or 0.0)
     return 0.0
+
+
+def _finite_number(x) -> float | None:
+    """A finite float, or None. Booleans, strings and non-finite values are not numbers here."""
+    if isinstance(x, bool) or not isinstance(x, (int, float, str)):
+        return None
+    try:
+        value = float(x)
+    except ValueError:
+        return None
+    return value if value == value and value not in (float("inf"), float("-inf")) else None
+
+
+async def fetch_account_equity(client: ccxt_async.Exchange, pair: str, market_type: str, open_positions: list[tuple[float, float]] | None = None) -> float | None:
+    """Read-only. The account's equity in the quote currency, or None when it cannot be established (the caller then fails closed).
+
+      Spot:     total quote balance (free plus locked) plus, for each open bot position, quantity x mark price. Other coins on the account are ignored.
+      Futures:  Binance's `totalMarginBalance` (wallet balance plus unrealised profit) from the same balance read. If that field is missing or not a finite
+                number the answer is None; it is never rebuilt from other fields, because which ccxt field carries unrealised profit has not been checked.
+
+    `open_positions` is [(quantity, mark_price), ...] for Spot positions the bot holds; any non-finite entry makes the answer None."""
+    try:
+        balance = await client.fetch_balance()
+    except Exception:
+        return None
+    if not isinstance(balance, dict):
+        return None
+    if market_type == "futures":
+        info = balance.get("info")
+        value = _finite_number(info.get("totalMarginBalance")) if isinstance(info, dict) else None
+        return value if value is not None and value >= 0 else None
+    quote = quote_currency(pair)
+    entry = balance.get(quote)
+    if not isinstance(entry, dict):
+        return None
+    free, used = _finite_number(entry.get("free")), _finite_number(entry.get("used") if entry.get("used") is not None else 0.0)
+    if free is None or used is None or free < 0 or used < 0:
+        return None
+    total = free + used
+    for qty, mark in open_positions or []:
+        q, m = _finite_number(qty), _finite_number(mark)
+        if q is None or m is None or q < 0 or m <= 0:
+            return None
+        total += q * m
+    return total
