@@ -290,6 +290,10 @@ class TradeOut(BaseModel):
     # Live trades: "protected" once the stop-loss is resting at Binance and
     # verified. Display-only; nothing in the API can alter it.
     protection_status: str | None = None
+    # Additive (multi-trade foundation). Both can be null on old rows: a null pair means the account's pair, a null
+    # strategy_id means ema_cross_atr_v1.
+    pair: str | None = None
+    strategy_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -349,6 +353,27 @@ class PositionOut(BaseModel):
     # verified. None for paper trades. Display-only - nothing in the API
     # lets a customer touch the protective order.
     protected: bool | None = None
+
+
+class OpenTradeOut(BaseModel):
+    """One non-terminal trade, from the database only (no price lookup). For GET /api/account/positions."""
+
+    id: str
+    pair: str | None = None
+    side: str
+    status: str
+    is_paper: bool
+    strategy_id: str  # a null column is shown as ema_cross_atr_v1
+    entry_price: float
+    quantity: float
+    stop_loss_price: float
+    opened_at: datetime
+    protected: bool | None = None
+
+
+class OpenTradesOut(BaseModel):
+    open_count: int
+    trades: list[OpenTradeOut]
 
 
 class CredentialTestOut(BaseModel):

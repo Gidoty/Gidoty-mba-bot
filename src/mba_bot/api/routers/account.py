@@ -13,7 +13,8 @@ from ...billing.entitlement import is_entitled
 from ...botcode import assign_unique_bot_code
 from ...config import Settings, manual_pairs
 from ...crypto_utils import decrypt, encrypt
-from ...db import get_open_trade
+from ...db import get_open_trade, list_open_trades
+from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, record_acceptance
 from ...models import ApiCredential, Customer, TradingAccount
@@ -38,6 +39,8 @@ from ..schemas import (
     CredentialUpdateRequest,
     EnableLiveTradingRequest,
     LiveBypassRequest,
+    OpenTradesOut,
+    OpenTradeOut,
     PositionOut,
     StartBotRequest,
 )
@@ -85,18 +88,18 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         runtime_status = "paused"
     elif has_paid and account.has_mainnet_credential and account.live_trading_enabled_at is not None and account.bot_started_at is None:
         runtime_status = "not_started"
-    elif (active_trade := get_open_trade(db, account.id)) is not None and active_trade.status == TRADE_ATTENTION:
+    elif (open_trades := list_open_trades(db, account.id)) and any(t.status == TRADE_ATTENTION for t in open_trades):
         # A live position the bot cannot currently vouch for (unprotected,
         # unresolved entry, residual exposure, ...). Takes precedence over
         # "error": it is the more specific, more urgent condition.
         runtime_status = "attention"
-    elif account.withdrawal_blocked_at is not None and active_trade is None:
+    elif account.withdrawal_blocked_at is not None and not open_trades:
         # No position, and the stored key can withdraw: trading is blocked
         # until the credential is replaced.
         runtime_status = "error"
     elif account.last_error is not None:
         runtime_status = "error"
-    elif active_trade is not None:
+    elif open_trades:
         runtime_status = "trade_open"
     else:
         runtime_status = "active"
@@ -568,6 +571,25 @@ async def get_position(
         unrealized_pnl=unrealized_pnl,
         opened_at=open_trade.opened_at,
         protected=None if open_trade.is_paper else open_trade.protection_status == PROTECTION_PROTECTED,
+    )
+
+
+@router.get("/positions", response_model=OpenTradesOut)
+def get_positions(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db)) -> OpenTradesOut:
+    """Every non-terminal trade of the account (database only; no exchange call). `/position` keeps describing the oldest one, as
+    before. A normal account has zero or one; a paper multi-trade test account up to three."""
+    account = _require_account(customer)
+    rows = list_open_trades(db, account.id)
+    return OpenTradesOut(
+        open_count=len(rows),
+        trades=[
+            OpenTradeOut(
+                id=t.id, pair=t.pair or account.pair, side=t.side, status=t.status, is_paper=t.is_paper, strategy_id=strategy_of(t),
+                entry_price=t.entry_price, quantity=t.quantity, stop_loss_price=t.stop_loss_price, opened_at=t.opened_at,
+                protected=None if t.is_paper else t.protection_status == PROTECTION_PROTECTED,
+            )
+            for t in rows
+        ],
     )
 
 

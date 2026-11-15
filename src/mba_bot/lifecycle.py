@@ -38,14 +38,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import ccxt.async_support as ccxt_async
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import kill_switch, pnl_labels
 from . import venue as venue_mod
 from .config import Settings
+from .multi_trade import EMA_STRATEGY_ID
 from .models import (
+    NON_TERMINAL_TRADE_STATUSES,
     PROTECTION_CANCELLED,
     PROTECTION_MISSING,
     PROTECTION_PENDING,
@@ -252,10 +254,18 @@ async def open_live_trade(
     if paused.engaged:
         raise kill_switch.EntryPaused(paused)
     stop = venue.round_stop(stop_price, side=side)
+    # A LIVE account holds at most ONE non-terminal trade, whatever any setting says (multi_trade.slot_cap). The database now only
+    # allows one per account AND pair, so this is the check that keeps the live rule: before any write and before any order.
+    if session.scalars(
+        select(Trade.id).where(Trade.account_id == account.id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
+    ).first() is not None:
+        logger.warning("account %s: a non-terminal trade already exists, a live account holds one at a time; not entering", account.id)
+        return None
     trade = Trade(
         account_id=account.id,
         side=side,
         is_paper=False,
+        strategy_id=EMA_STRATEGY_ID,
         entry_price=signal_price,
         quantity=quantity,
         stop_loss_price=stop,

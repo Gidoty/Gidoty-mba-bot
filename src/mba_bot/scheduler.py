@@ -215,10 +215,11 @@ async def run_once(settings: Settings) -> None:
 
 
 async def _recover_one(
-    account_id: str, settings: Settings, *, current_price: float | None = None, slots: asyncio.Semaphore | None = None
+    account_id: str, settings: Settings, *, current_price: float | None = None, pair: str | None = None,
+    slots: asyncio.Semaphore | None = None,
 ) -> str:
     async def work(session, account, notifier):
-        await reconcile_account(session, account, settings, notifier, current_price=current_price)
+        await reconcile_account(session, account, settings, notifier, current_price=current_price, pair=pair)
 
     async with _lock_for(account_id):
         if slots is None:
@@ -286,11 +287,11 @@ async def monitor_stop_limits_once(settings: Settings) -> None:
     for account_id, pair, trigger in watched:
         price = prices.get(exchange.exchange_symbol(pair, "spot"))
         if price is not None and price <= trigger:  # Spot is long-only: the stop is below the market
-            due.append((account_id, price))
+            due.append((account_id, price, pair))
     if due:
         logger.info("stop-limit watch: %d position(s) at or through their trigger", len(due))
         slots = asyncio.Semaphore(max(1, settings.max_concurrent_cycles))
-        tasks = {asyncio.ensure_future(_recover_one(a, settings, current_price=p, slots=slots)): a for a, p in due}
+        tasks = {asyncio.ensure_future(_recover_one(a, settings, current_price=p, pair=pr, slots=slots)): a for a, p, pr in due}
         await _wait_round(tasks, timeout=settings.cycle_watchdog_seconds, label="stop-limit reconciliation")
 
 

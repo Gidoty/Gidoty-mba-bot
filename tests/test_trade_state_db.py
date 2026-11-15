@@ -27,7 +27,7 @@ KILL_SWITCH_REVISION = "e5b9c2d7f1a4"  # the kill switch tables
 SUBSCRIPTION_REVISION = "f6c3a9d1b8e2"  # subscription billing tables (Stage 0), on top of the kill switch
 TOKENS_REVISION = "a7d4e1c9b3f5"  # subscription_tokens (Stage 1)
 NOTICES_REVISION = "b8e5f2a0c4d6"  # billing_notices (customer reminders)
-LATEST_HEAD = "c9f6a3b1d5e7"  # head now also includes strategy_pauses (strategy guards), on top of billing_notices
+LATEST_HEAD = "a1d7c4e9b2f6"  # head now also includes multi_trade_foundation, on top of strategy_pauses (c9f6a3b1d5e7)
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -116,7 +116,8 @@ def test_fresh_database_migrates_to_the_model_schema(tmp_path, monkeypatch):
     assert account_cols == {c.name for c in TradingAccount.__table__.columns}
     assert "withdrawal_blocked_at" in account_cols
     indexes = {i["name"] for i in inspect(engine).get_indexes("trades")}
-    assert "uq_trades_one_nonterminal_per_account" in indexes
+    assert {"uq_trades_one_nonterminal_per_pair", "uq_trades_one_nonterminal_no_pair"} <= indexes
+    assert "uq_trades_one_nonterminal_per_account" not in indexes  # replaced by the multi-trade foundation migration
     for model in (TradeTelemetry, DecisionLog, KillSwitch, KillSwitchEvent):
         table_cols = {c["name"] for c in inspect(engine).get_columns(model.__tablename__)}
         assert table_cols == {c.name for c in model.__table__.columns}, f"{model.__tablename__}: migration and model must agree"
@@ -227,7 +228,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     assert script.get_revision(SUBSCRIPTION_REVISION).down_revision == KILL_SWITCH_REVISION
     assert script.get_revision(TOKENS_REVISION).down_revision == SUBSCRIPTION_REVISION
     assert script.get_revision(NOTICES_REVISION).down_revision == TOKENS_REVISION
-    assert script.get_revision(LATEST_HEAD).down_revision == NOTICES_REVISION
+    assert script.get_revision("c9f6a3b1d5e7").down_revision == NOTICES_REVISION
+    assert script.get_revision(LATEST_HEAD).down_revision == "c9f6a3b1d5e7"
 
 
 # =========================== single-instance lock ===========================

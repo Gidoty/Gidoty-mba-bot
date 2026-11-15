@@ -123,17 +123,30 @@ def list_active_accounts(session: Session) -> list[TradingAccount]:
     )
 
 
+def list_open_trades(session: Session, account_id: str) -> list[Trade]:
+    """Every non-terminal trade of the account, oldest first (ties by id), so every caller sees the same order. Usually zero or one;
+    a PAPER account with MAX_OPEN_POSITIONS above 1 can have up to three (multi_trade.py)."""
+    return list(
+        session.scalars(
+            select(Trade)
+            .where(Trade.account_id == account_id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
+            .order_by(Trade.opened_at, Trade.id)
+        )
+    )
+
+
 def get_open_trade(session: Session, account_id: str) -> Trade | None:
-    """The account's one non-terminal trade, if any: ANY status other than
+    """The account's OLDEST non-terminal trade, if any: ANY status other than
     closed/void (pending entry, protecting, open, closing, attention). The
     name is historical - every "is there a position I must not orphan, and
     must not enter on top of" check in the codebase goes through this, so
     it deliberately covers states where exposure may exist but is not yet
-    (or no longer) a healthy open trade. The partial unique index on
-    trades guarantees there is never more than one."""
-    return session.scalars(
-        select(Trade).where(Trade.account_id == account_id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
-    ).first()
+    (or no longer) a healthy open trade. A LIVE account has at most one
+    (multi_trade.slot_cap and lifecycle.open_live_trade enforce that in code;
+    the database only allows one per account and pair). Code that must see
+    every trade of a paper multi-trade account uses list_open_trades."""
+    rows = list_open_trades(session, account_id)
+    return rows[0] if rows else None
 
 
 def list_live_unsettled_trades(session: Session) -> list[Trade]:
