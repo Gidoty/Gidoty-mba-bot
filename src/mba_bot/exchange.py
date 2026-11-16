@@ -528,35 +528,59 @@ def _finite_number(x) -> float | None:
     return value if value == value and value not in (float("inf"), float("-inf")) else None
 
 
-async def fetch_account_equity(client: ccxt_async.Exchange, pair: str, market_type: str, open_positions: list[tuple[float, float]] | None = None) -> float | None:
-    """Read-only. The account's equity in the quote currency, or None when it cannot be established (the caller then fails closed).
+# Why an equity read can fail. Fixed strings only: nothing from the exchange's reply (which can carry URLs or account detail) ever reaches a log or the CLI.
+EQUITY_OK = "ok"
+EQUITY_CALL_FAILED = "balance_call_failed"
+EQUITY_MALFORMED = "balance_malformed"
+EQUITY_FIELD_MISSING = "margin_balance_missing"
+EQUITY_NOT_POSITIVE = "equity_not_positive"
+EQUITY_QUOTE_MISSING = "quote_balance_missing"
+EQUITY_MARK_INVALID = "position_mark_invalid"
+
+
+async def fetch_account_equity_ex(
+    client: ccxt_async.Exchange, pair: str, market_type: str, open_positions: list[tuple[float, float]] | None = None
+) -> tuple[float | None, str]:
+    """Read-only. (equity in the quote currency, reason). The reason is EQUITY_OK with a value, otherwise one fixed failure class and None.
 
       Spot:     total quote balance (free plus locked) plus, for each open bot position, quantity x mark price. Other coins on the account are ignored.
-      Futures:  Binance's `totalMarginBalance` (wallet balance plus unrealised profit) from the same balance read. If that field is missing or not a finite
-                number the answer is None; it is never rebuilt from other fields, because which ccxt field carries unrealised profit has not been checked.
+      Futures:  `info["totalMarginBalance"]` (wallet balance plus unrealised profit) from the same balance read. In ccxt 4.5.88 `info` is the raw reply of
+                Binance's account endpoint (`fapiPrivateV3GetAccount`, whose documented reply carries `totalMarginBalance` as a decimal string).
+                If the field is missing or not a finite number the answer is unreadable; it is never rebuilt from other fields.
 
-    `open_positions` is [(quantity, mark_price), ...] for Spot positions the bot holds; any non-finite entry makes the answer None."""
+    A value that is zero or negative is also unreadable: a zero reading cannot be a day start (the loss rule divides by it), and an account at zero cannot trade
+    anyway. `open_positions` is [(quantity, mark_price), ...] for Spot positions the bot holds; any invalid entry makes the answer unreadable.
+    One balance call, no other request."""
     try:
         balance = await client.fetch_balance()
     except Exception:
-        return None
+        return None, EQUITY_CALL_FAILED
     if not isinstance(balance, dict):
-        return None
+        return None, EQUITY_MALFORMED
     if market_type == "futures":
         info = balance.get("info")
-        value = _finite_number(info.get("totalMarginBalance")) if isinstance(info, dict) else None
-        return value if value is not None and value >= 0 else None
+        if not isinstance(info, dict) or info.get("totalMarginBalance") is None:
+            return None, EQUITY_FIELD_MISSING
+        value = _finite_number(info.get("totalMarginBalance"))
+        if value is None:
+            return None, EQUITY_MALFORMED
+        return (value, EQUITY_OK) if value > 0 else (None, EQUITY_NOT_POSITIVE)
     quote = quote_currency(pair)
     entry = balance.get(quote)
     if not isinstance(entry, dict):
-        return None
+        return None, EQUITY_QUOTE_MISSING
     free, used = _finite_number(entry.get("free")), _finite_number(entry.get("used") if entry.get("used") is not None else 0.0)
     if free is None or used is None or free < 0 or used < 0:
-        return None
+        return None, EQUITY_MALFORMED
     total = free + used
     for qty, mark in open_positions or []:
         q, m = _finite_number(qty), _finite_number(mark)
         if q is None or m is None or q < 0 or m <= 0:
-            return None
+            return None, EQUITY_MARK_INVALID
         total += q * m
-    return total
+    return (total, EQUITY_OK) if total > 0 else (None, EQUITY_NOT_POSITIVE)
+
+
+async def fetch_account_equity(client: ccxt_async.Exchange, pair: str, market_type: str, open_positions: list[tuple[float, float]] | None = None) -> float | None:
+    """The equity from `fetch_account_equity_ex`, or None when it cannot be established (the caller then fails closed)."""
+    return (await fetch_account_equity_ex(client, pair, market_type, open_positions))[0]
