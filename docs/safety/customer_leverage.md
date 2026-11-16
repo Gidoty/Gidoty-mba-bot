@@ -4,7 +4,7 @@ Status: ships OFF. `FUTURES_LEVERAGE_MODE` defaults to `strict`, which behaves e
 
 ## What it does
 
-* New per-account number `trading_accounts.max_leverage`: a whole number 1 to 5, read as 3 when empty, never above `FUTURES_MAX_LEVERAGE` (the global hard limit, when set). The customer edits it in the dashboard (Futures only) and in Telegram (`/leverage`, `/leverage 2`). It applies to NEW entries only: it is read when the bot sizes an entry, so a trade already open is never touched. Spot accepts and ignores it.
+* New per-account number `trading_accounts.max_leverage`: a whole number 1 to 5, read as 3 when empty, never above `FUTURES_MAX_LEVERAGE` (the global hard limit, when set). The customer edits it on the dashboard only (Futures accounts only; there is no Telegram command for it). It applies to NEW entries only: it is read when the bot sizes an entry, so a trade already open is never touched. Spot accepts and ignores it.
 * `FUTURES_LEVERAGE_MODE`:
   * `strict` (default): unchanged. A new Futures entry is refused when the pair's Binance leverage is above `FUTURES_MAX_LEVERAGE` or the margin mode is not isolated. The customer's number is not used.
   * `size_cap`: a high Binance number does not refuse the entry. The position value is capped at `effective x capital`, `effective = min(Binance leverage for the pair, the account's number)`, using the existing `apply_margin_ceiling`. Binance below the customer's number: sized to Binance (margin-bound), as today. Binance above: sized to the customer's number.
@@ -33,5 +33,5 @@ Rollback: set `FUTURES_LEVERAGE_MODE=strict` (or remove the line), restart gate,
 
 * A live Binance reply for leverage and margin mode (above). Whether Binance's symbol-config endpoint is per symbol exactly as ccxt's parser assumes; whether margin mode and leverage can be changed while a position is open (not needed by the bot).
 * Any exact click path on Binance's screens: `docs/customer/leverage_help.md` is generic and marks the rest UNVERIFIED.
-* The dashboard info icons and Telegram `/help` are not built; the wording is waiting for review.
+* The dashboard info icons and the margin-mode status are not built; the wording is waiting for review. The help for this setting lives behind the dashboard info icon only.
 * The fake exchange proves control flow only.

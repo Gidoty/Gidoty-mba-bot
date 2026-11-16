@@ -1,8 +1,8 @@
 # Leverage help and refusal messages (draft for review)
 
-Status: DRAFT. These texts are NOT yet wired into the dashboard info icons or Telegram `/help`. The owner and the reviewer approve the wording first; the screens then show exactly this text. Plain language for a first-time crypto user, no financial advice. Anything about Binance's own screens is generic on purpose; any exact click path is marked UNVERIFIED.
+Status: DRAFT. These texts are NOT yet wired into the dashboard info icons. The owner and the reviewer approve the wording first; the screens then show exactly this text. The leverage setting is changed on the dashboard only (there is no Telegram command for it), and its help lives behind the dashboard info icon only. Plain language for a first-time crypto user, no financial advice. Anything about Binance's own screens is generic on purpose; any exact click path is marked UNVERIFIED.
 
-## 1. Leverage setting: help text (dashboard info icon and Telegram `/help leverage`)
+## 1. Leverage setting: help text (dashboard info icon)
 
 **What the number means.** Your leverage setting is the most a trade can be worth compared with the trading capital you gave the bot. At 3x, a trade is never worth more than 3 times your trading capital.
 
@@ -11,14 +11,14 @@ Status: DRAFT. These texts are NOT yet wired into the dashboard info icons or Te
 **Binance has its own number.** Binance keeps its own leverage number and its own margin mode (isolated or cross) for each pair, separately. The bot reads those two settings for the pair it is about to trade. The bot never changes anything on Binance. Only you can change them there.
 
 **What the bot does when the two numbers differ.** The bot uses the smaller one.
-- If Binance's number for the pair is lower than yours, the trade is sized to Binance's number, as the exchange would limit it anyway.
+- If Binance's number for the pair is lower than yours, the trade is sized to Binance's number, so the trade does not need more money set aside than your trading capital can cover at that number.
 - If Binance's number is higher than yours, the bot does not refuse. It sizes the trade to your number, so the trade is never worth more than your setting allows.
 
-**Isolated margin is required.** In isolated margin, a trade can only lose the money set aside for that one trade. In cross margin, a trade can draw on your whole Futures balance. This service trades isolated margin only. If the pair is on cross, or the bot cannot read the mode, it does not open a new trade on that pair, and it tells you how to fix it. Trades that are already open are not touched.
+**Isolated margin is required.** In isolated margin, the loss on a position is limited to the money set aside for that one position, and Binance closes the position when that money is used up. In cross margin, a position can draw on your whole Futures balance. This service trades isolated margin only. If the pair is on cross, or the bot cannot read the mode, it does not open a new trade on that pair, and it tells you how to fix it. Trades that are already open are not touched.
 
-**Example.** You give the bot 21.60 USDT of trading capital and your setting is 3x. A trade is never worth more than 21.60 x 3 = 64.80 USDT. If Binance's number for the pair is 2x, the trade is limited to 21.60 x 2 = 43.20 USDT. If Binance's number is 10x, the trade is still limited to 64.80 USDT, your number.
+**Example.** You give the bot 21.60 USDT of trading capital and your setting is 3x. A trade is never worth more than 21.60 x 3 = 64.80 USDT. If Binance's number for the pair is 2x, the trade is limited to 21.60 x 2 = 43.20 USDT. If Binance's number is 10x, the trade is still limited to 64.80 USDT, your number. These are upper limits. A trade can be smaller, because the bot also limits each trade by your risk-per-trade setting.
 
-**Please read this warning.** A higher number on Binance brings the liquidation price closer to the entry price. If the price reaches the liquidation price, Binance closes the position and you can lose the whole margin set aside for it. The bot checks, before every trade, that its protective stop sits inside the liquidation price that Binance reports for the pair, and it does not open the trade if it does not. That check reduces the risk. It does not remove it. A stop order can fill at a worse price than planned, especially in fast markets. Only use money you can afford to lose.
+**Please read this warning.** A higher number on Binance brings the liquidation price closer to the entry price. If the price reaches the liquidation price, Binance closes the position and you can lose all the money set aside for it. Before every trade, the bot makes an estimate of where Binance would liquidate the position. It builds the estimate from the leverage Binance has for the pair and the maintenance-margin tiers Binance publishes. If the bot's protective stop would sit too close to that estimated level, or beyond it, the bot does not open the trade. This is an estimate, not a price Binance gives the bot. Binance's real liquidation price can differ, for example because of fees, funding charges, or the price moving between the check and the fill. So the check lowers the risk. It does not remove it. A stop order can also fill at a worse price than planned, especially in fast markets. Only use money you can afford to lose.
 
 ## 2. Margin mode: help text (dashboard info icon next to the margin-mode status)
 
@@ -41,18 +41,12 @@ These are the exact strings the code sends. A test keeps this file and the code 
 > Could not verify this account's Binance Futures leverage/margin just now, so no new live trade was opened. This will retry automatically on the next check.
 
 **Stop too close to liquidation (existing pre-entry check, unchanged):**
-> on {pair} your Binance leverage ({leverage}x) puts liquidation too close for a protective stop to work (the stop would sit about {stop}% from entry, at most about {safe}% is safe). Lowering the leverage for this pair on Binance (for example to 10x) allows trading it again.
+> on {pair} your Binance leverage ({leverage}x) puts liquidation too close for a protective stop to work (the stop would sit about {stop}% from entry, at most about {safe}% is safe). Changing the leverage for this pair on Binance to a lower number allows trading it again.
 
-Reviewer note: this existing text suggests "for example to 10x", which is above most customers' own setting. Consider wording it as "to a lower number". Not changed in this build.
-
-## 4. Telegram replies for `/leverage`
-
-- Status: "Your leverage setting is {n}x. It is the most a position can be worth compared with your trading capital, and you can choose a whole number from 1 to {top}. To change it, send /leverage followed by the number, for example /leverage 2. A change applies to new trades only; a trade that is already open is not touched. MBA Bot never changes your leverage or margin mode on Binance."
-- Changed: "Done. Your leverage setting is now {n}x for new trades. A trade that is already open is not touched."
-- Not a valid number: "Send a whole number from 1 to {top}, for example /leverage 2. Nothing was changed."
-- Spot account: "The leverage setting applies to Futures only. Your account trades Spot, so it has no effect on your trades."
-- Chat not linked: "This chat is not linked to an MBA Bot account. Open your dashboard and link Telegram first."
-
-## 5. For the reviewer
-- The refusal in section 3 for the stop check is the existing text; confirm it still reads well beside the new ones.
-- Telegram `/help` and the dashboard info icons are the next step after this wording is approved. This build only adds the leverage control itself.
+## 4. For the reviewer
+Statements about how Binance behaves, which the bot's code does not prove and which need confirming on Binance before this text goes live (UNVERIFIED):
+- Binance stores one leverage number and one margin mode for each pair (the bot reads them per pair from Binance's symbol-config data through ccxt, which is not the same as seeing it on Binance's screens).
+- The wording of the isolated-margin sentence (the loss is limited to the money set aside for that position, and Binance closes the position when it is used up).
+- The exact names of the Leverage and Margin Mode controls on the Futures page, and whether margin mode can be changed while a position is open.
+- The liquidation paragraph describes the bot's own estimate (`assess_stop_viability`, built from `maintenance_tiers`); the tiers come from Binance and the formula has not been checked against an official Binance page.
+The leverage setting is changed on the dashboard only. The info icon and the margin-mode status are built after this wording is approved.
