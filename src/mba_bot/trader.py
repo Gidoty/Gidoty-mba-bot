@@ -647,8 +647,8 @@ def _precheck_message(account: TradingAccount, check: StopViability, leverage: f
         return (
             f"on {pair} your Binance leverage ({leverage:g}x) puts liquidation too close for a protective stop to "
             f"work (the stop would sit about {check.stop_distance_frac * 100:.2f}% from entry, at most about "
-            f"{check.max_allowed_stop_frac * 100:.2f}% is safe). Lowering the leverage for this pair on Binance "
-            "(for example to 10x) allows trading it again."
+            f"{check.max_allowed_stop_frac * 100:.2f}% is safe). Changing the leverage for this pair on Binance "
+            "to a lower number allows trading it again."
         )
     if check.reason == risk_module.TIERS_UNAVAILABLE:
         return (

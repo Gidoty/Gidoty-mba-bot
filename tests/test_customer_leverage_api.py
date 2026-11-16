@@ -1,7 +1,7 @@
 """B6a: the customer leverage setting through the real HTTP API and the Telegram webhook (same isolated-app pattern as test_api_account_update.py).
 
-PROVES: empty reads as 3; whole numbers 1 to 5 only (API and Telegram); never above the global limit; editable with a trade open (new entries only); Spot accepts and ignores it;
-only the chat linked to an account can read or change it; replies are the fixed strings in docs/customer/leverage_help.md.
+PROVES: empty reads as 3; whole numbers 1 to 5 only (API); never above the global limit; editable with a trade open (new entries only); Spot accepts and ignores it;
+Telegram has no leverage command: a "/leverage 5" from a linked chat changes nothing and replies nothing.
 DOES NOT PROVE: anything about Binance."""
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _signup(client: TestClient, market: str = "futures") -> tuple[str, str]:
     return email, str(900_000 + n)
 
 
-def _link_chat(client: TestClient, chat_id: str, replies: list) -> None:
+def _link_chat(client: TestClient, chat_id: str, replies: list) -> None:  # the normal /start link flow, the only thing the webhook understands
     token = client.get("/api/telegram/link-url").json()["link_url"].rsplit("start=", 1)[1]
     assert client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat_id)}, "text": f"/start {token}"}}).status_code == 200
 
@@ -133,74 +133,23 @@ def test_spot_accepts_the_setting_and_it_has_no_effect_there():
         assert r.status_code == 200 and r.json()["market_type"] == "spot"
 
 
-# ------------------------------------------------------------------ Telegram
-def test_telegram_shows_and_changes_the_setting(replies):
+# ------------------------------------------------------------------ Telegram: there is no leverage command
+def test_a_leverage_message_from_a_linked_chat_changes_nothing_and_replies_nothing(replies):
+    """The setting is changed on the dashboard only. The webhook understands /start with a link token and nothing else."""
     with TestClient(app, base_url="https://testserver") as client:
         _, chat = _signup(client)
         _link_chat(client, chat, replies)
+        assert client.patch("/api/account", json={"max_leverage": 4}).status_code == 200
         replies.clear()
-        post = lambda text: client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": text}})
-        post("/leverage")
-        assert "Your leverage setting is 3x" in replies[-1][1] and "from 1 to 5" in replies[-1][1] and "never changes your leverage or margin mode" in replies[-1][1]
-        post("/leverage 2")
-        assert replies[-1][1].startswith("Done. Your leverage setting is now 2x") and client.get("/api/account").json()["max_leverage"] == 2
-        post("/leverage@mba_test_bot 4")
-        assert client.get("/api/account").json()["max_leverage"] == 4
-        post("/LEVERAGE 5")
-        assert client.get("/api/account").json()["max_leverage"] == 5
+        for text in ("/leverage 5", "/leverage", "/leverage@mba_test_bot 1", "/LEVERAGE 2", "/help", "/help leverage", "leverage 5"):
+            r = client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": text}})
+            assert r.status_code == 200 and r.json() == {"ok": True}
+        assert replies == []  # nothing was sent back
+        assert client.get("/api/account").json()["max_leverage"] == 4  # and nothing changed
 
 
-@pytest.mark.parametrize("bad", ["0", "6", "-1", "2.5", "abc", "3x", "٣", "99999999999999999999", "1 2"])
-def test_telegram_rejects_anything_but_a_whole_number_in_range(replies, bad):
-    with TestClient(app, base_url="https://testserver") as client:
-        _, chat = _signup(client)
-        _link_chat(client, chat, replies)
-        client.patch("/api/account", json={"max_leverage": 4})
-        replies.clear()
-        client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": f"/leverage {bad}"}})
-        assert "Nothing was changed" in replies[-1][1] and client.get("/api/account").json()["max_leverage"] == 4
+def test_the_telegram_router_has_no_leverage_code():
+    import inspect
 
-
-def test_telegram_cannot_exceed_the_global_limit(replies, global_limit):
-    global_limit(2)
-    with TestClient(app, base_url="https://testserver") as client:
-        _, chat = _signup(client)
-        _link_chat(client, chat, replies)
-        replies.clear()
-        client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": "/leverage 3"}})
-        assert "from 1 to 2" in replies[-1][1] and "Nothing was changed" in replies[-1][1] and client.get("/api/account").json()["max_leverage"] == 2
-
-
-def test_telegram_spot_account_and_unlinked_chat_get_fixed_replies_and_nothing_changes(replies):
-    with TestClient(app, base_url="https://testserver") as client:
-        _, chat = _signup(client, market="spot")
-        _link_chat(client, chat, replies)
-        replies.clear()
-        client.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": "/leverage 1"}})
-        assert replies[-1][1].startswith("The leverage setting applies to Futures only")
-        client.post("/api/telegram/webhook", json={"message": {"chat": {"id": 424242424}, "text": "/leverage 1"}})
-        assert replies[-1] == ("424242424", telegram_router._NOT_LINKED_MESSAGE)
-        assert client.get("/api/account").json()["max_leverage"] == 3
-
-
-def test_a_chat_can_only_change_its_own_account(replies):
-    with TestClient(app, base_url="https://testserver") as a, TestClient(app, base_url="https://testserver") as b:
-        _, chat_a = _signup(a)
-        _link_chat(a, chat_a, replies)
-        _, chat_b = _signup(b)
-        _link_chat(b, chat_b, replies)
-        b.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat_b)}, "text": "/leverage 1"}})
-        assert b.get("/api/account").json()["max_leverage"] == 1 and a.get("/api/account").json()["max_leverage"] == 3
-
-
-def test_a_chat_shared_by_two_accounts_is_refused_and_changes_nothing(replies):
-    with TestClient(app, base_url="https://testserver") as a, TestClient(app, base_url="https://testserver") as b:
-        _, chat = _signup(a)
-        _link_chat(a, chat, replies)
-        email_b, _ = _signup(b)
-        with session_scope() as s:
-            s.query(Customer).filter(Customer.email == email_b).one().account.notification_target = chat  # the same chat on a second account
-        replies.clear()
-        a.post("/api/telegram/webhook", json={"message": {"chat": {"id": int(chat)}, "text": "/leverage 1"}})
-        assert replies[-1][1] == telegram_router._NOT_LINKED_MESSAGE
-        assert a.get("/api/account").json()["max_leverage"] == 3 and b.get("/api/account").json()["max_leverage"] == 3
+    source = inspect.getsource(telegram_router)
+    assert "leverage" not in source.lower() and "/help" not in source

@@ -136,6 +136,7 @@ def test_liquidation_check_judges_the_real_binance_leverage_not_the_customers_nu
     init_db(f"sqlite:///{db}/second.db")
     notional2, refused2, *_ = entry(monkeypatch, binance=20, cap=3, mult=0.3)
     assert notional2 == [] and "stop_beyond_safe_liquidation_distance" in reasons() and "20x" in refused2[0]
+    assert "to a lower number allows trading it again" in refused2[0] and "10x" not in refused2[0]
 
 
 @pytest.mark.parametrize("margin", ["cross", None])
@@ -254,17 +255,42 @@ def test_the_head_is_the_new_revision():
 
 
 def test_the_help_file_and_the_code_agree_on_every_message():
-    from mba_bot.api.routers import telegram as tg
-
     text = (ROOT / "docs" / "customer" / "leverage_help.md").read_text()
     assert lv.MSG_NOT_ISOLATED in text
-    for needle in ("21.60 x 3 = 64.80 USDT", "21.60 x 2 = 43.20 USDT", "UNVERIFIED", "never changes", "lose the whole margin", "not yet wired", "NOT yet wired"):
-        if needle in ("not yet wired",):
-            continue
+    for needle in ("21.60 x 3 = 64.80 USDT", "21.60 x 2 = 43.20 USDT", "UNVERIFIED", "never changes", "lose all the money set aside"):
         assert needle in text, needle
-    assert tg._NOT_LINKED_MESSAGE in text and tg._SPOT_LEVERAGE_MESSAGE in text
-    assert "Done. Your leverage setting is now {n}x for new trades. A trade that is already open is not touched." in text
-    assert "Send a whole number from 1 to {top}, for example /leverage 2. Nothing was changed." in text
+
+
+def test_the_stop_refusal_says_a_lower_number_and_gives_no_example_number():
+    from mba_bot import risk, trader
+
+    check = risk.StopViability(False, risk.STOP_UNVIABLE, stop_distance_frac=0.078, max_allowed_stop_frac=0.034)
+    account = TradingAccount(pair="BTC/USDT")
+    message = trader._precheck_message(account, check, 20.0)
+    assert "Changing the leverage for this pair on Binance to a lower number allows trading it again." in message
+    assert "10x" not in message and "for example" not in message
+    assert "your Binance leverage (20x) puts liquidation too close" in message and "about 7.80% from entry" in message and "about 3.40% is safe" in message
+    help_text = (ROOT / "docs" / "customer" / "leverage_help.md").read_text()
+    assert "Changing the leverage for this pair on Binance to a lower number allows trading it again." in help_text
+    assert "for example to 10x" not in help_text and "(for example to" not in help_text
+
+
+def test_the_liquidation_paragraph_says_estimate_not_a_price_binance_reports():
+    text = (ROOT / "docs" / "customer" / "leverage_help.md").read_text()
+    paragraph = text[text.index("**Please read this warning.**"):text.index("## 2. Margin mode")]
+    assert "estimate" in paragraph and "maintenance-margin tiers" in paragraph and "not a price Binance gives the bot" in paragraph
+    assert "Binance reports" not in text and "liquidation price that Binance" not in text
+
+
+def test_the_leverage_setting_is_dashboard_only_in_every_doc():
+    import re
+
+    for name in ("customer/leverage_help.md", "safety/customer_leverage.md"):
+        text = (ROOT / "docs" / name).read_text()
+        assert not re.search(r"(?<![\w.])/(leverage|help)(?!\w)", text), name  # no command (the path docs/customer/leverage_help.md is not one)
+    assert "no Telegram command" in (ROOT / "docs" / "safety" / "customer_leverage.md").read_text()
+    assert "leverage" not in (ROOT / "src" / "mba_bot" / "api" / "routers" / "telegram.py").read_text().lower()
+    assert "/leverage" not in (ROOT / ".env.example").read_text()
 
 
 def test_no_special_cases_for_any_account_in_the_new_code():

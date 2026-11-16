@@ -416,3 +416,42 @@ def test_probe_never_prints_exception_text_from_inside_the_valuation(db, monkeyp
     url = _probe_env(monkeypatch, db, st)
     lines, code = asyncio.run(equity_probe.run(url))
     assert lines == [f"{aid} spot FAILED unexpected_error"] and code == 2
+
+
+# ------------------------------------------------------------------ paper accounts take no tick (B1b review gap)
+def _no_equity_reads(monkeypatch):
+    """Any equity read or tick on a paper path fails the test, so the tick condition (`not effective_is_paper`) cannot be dropped unnoticed."""
+    async def boom(*a, **k):
+        raise AssertionError("a paper account must not read equity or run the tick")
+
+    monkeypatch.setattr(exchange, "fetch_account_equity_ex", boom)
+    monkeypatch.setattr(trader, "_account_equity_tick", boom)
+
+
+def test_a_paper_account_takes_no_tick_and_writes_no_pause(db, monkeypatch):
+    st = live_settings(testnet_spot_api_key="paper-key-1234567890", testnet_spot_api_secret="paper-secret-1234567890")
+    client, clock, aid = rig(monkeypatch, st, balance=1.0)  # a balance that would be a "loss" against any day start
+    with session_scope() as s:
+        s.get(TradingAccount, aid).bot_started_at = None  # PAPER
+    _no_equity_reads(monkeypatch)
+    for minutes, ohlcv in ((0, FLAT_OHLCV), (5, BULLISH_OHLCV), (10, BEARISH_OHLCV)):  # idle, an entry, an exit: every kind of paper cycle
+        client._ohlcv = ohlcv
+        clock.instant = NOON + timedelta(minutes=minutes)
+        run_cycle(aid, st)
+    assert samples() == [] and rows(AccountLossPause) == []
+
+
+def test_a_live_mode_account_whose_open_trades_are_all_paper_takes_no_tick(db, monkeypatch):
+    from mba_bot.models import Trade
+
+    st = live_settings(testnet_spot_api_key="paper-key-1234567890", testnet_spot_api_secret="paper-secret-1234567890")
+    client, clock, aid = rig(monkeypatch, st, balance=1.0)  # the account itself is in live mode ...
+    with session_scope() as s:
+        s.add(Trade(account_id=aid, side="long", is_paper=True, entry_price=100.0, quantity=0.01, stop_loss_price=95.0, status="open", pair="BTC/USDT"))  # ... but holds only a paper trade
+    _no_equity_reads(monkeypatch)
+    for minutes in (0, 5):
+        clock.instant = NOON + timedelta(minutes=minutes)
+        run_cycle(aid, st)
+    assert samples() == [] and rows(AccountLossPause) == []
+    with session_scope() as s:
+        assert s.get(TradingAccount, aid).last_scanned_at is not None  # the cycle did run
