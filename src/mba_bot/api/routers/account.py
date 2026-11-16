@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ... import exchange, pair_catalog, pnl_labels
+from ... import leverage as leverage_module
 from ...billing.entitlement import is_entitled
 from ...botcode import assign_unique_bot_code
 from ...config import Settings, manual_pairs
@@ -60,7 +61,7 @@ def _paid(customer: Customer, settings: Settings) -> bool:
     return is_entitled(customer, settings=settings)
 
 
-def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> AccountOut:
+def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, settings: Settings | None = None) -> AccountOut:
     state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at,
         live_bypass_accepted_at=account.live_bypass_accepted_at,
@@ -124,6 +125,8 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session) -> 
         bot_started_at=account.bot_started_at,
         allocated_capital=account.allocated_capital,
         pair_selection_mode=account.pair_selection_mode,
+        max_leverage=leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage if settings else None),
+        max_leverage_limit=leverage_module.limit(settings.futures_max_leverage if settings else None),
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -233,12 +236,12 @@ def create_account(
                 encrypted_api_secret=encrypt(body.api_secret, key=settings.encryption_key),
             )
         )
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.get("", response_model=AccountOut)
 def get_account(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> AccountOut:
-    return _to_account_out(_require_account(customer), has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(_require_account(customer), has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.patch("", response_model=AccountOut)
@@ -294,13 +297,19 @@ def update_account(
             account.risk_pct = clamp_risk_pct(body.risk_pct, max_risk_pct=settings.risk_pct_max)
         except InvalidRiskParameters as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if body.max_leverage is not None:
+        # Applies to NEW entries only (the bot reads it when it sizes an entry), so it is safe to change with a trade open: that trade is not touched.
+        try:
+            account.max_leverage = leverage_module.validate(body.max_leverage, settings.futures_max_leverage)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     if body.allocated_capital is not None:
         # Safe to change freely, even mid-trade - unlike pair/market/
         # credential, it only affects sizing at the *next* entry, never
         # how an already-open position is managed (same reasoning
         # risk_pct above has always been editable under).
         account.allocated_capital = body.allocated_capital
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.post("/live-bypass", response_model=AccountOut)
@@ -313,7 +322,7 @@ def accept_live_trading_bypass(
         raise HTTPException(status.HTTP_409_CONFLICT, "live trading was already accepted for this account")
     account.live_bypass_accepted_at = accept_live_bypass()
     account.live_bypass_disclosure_text = LIVE_TRADING_DISCLOSURE
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.put("/credentials", response_model=AccountOut)
@@ -360,7 +369,7 @@ def update_credentials(
         # second safety net this specific line is load-bearing for.
         account.bot_started_at = None
 
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.post("/enable-live-trading", response_model=AccountOut)
@@ -417,7 +426,7 @@ def enable_live_trading_route(
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 @router.post("/start-bot", response_model=AccountOut)
@@ -462,7 +471,7 @@ def start_bot_route(
     _require_no_open_trade(db, account, action="starting the bot")
 
     account.bot_started_at = start_bot()
-    return _to_account_out(account, has_paid=_paid(customer, settings), db=db)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
 def _paper_credentials(account: TradingAccount, settings: Settings) -> tuple[str | None, str | None]:
@@ -486,7 +495,7 @@ async def get_balance(
     actually LIVE (reuses the exact same mode computation as every other
     account response, never a separate check that could drift)."""
     account = _require_account(customer)
-    if _to_account_out(account, has_paid=_paid(customer, settings), db=db).mode != "live":
+    if _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).mode != "live":
         raise HTTPException(status.HTTP_409_CONFLICT, "balance is only available once live trading is enabled")
     if not settings.encryption_key or account.credential is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable trading credentials are configured")
@@ -522,7 +531,7 @@ async def get_position(
     if open_trade is None:
         return PositionOut(has_position=False)
 
-    is_live = _to_account_out(account, has_paid=_paid(customer, settings), db=db).mode == "live"
+    is_live = _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).mode == "live"
     current_price: float | None = None
     try:
         if is_live:

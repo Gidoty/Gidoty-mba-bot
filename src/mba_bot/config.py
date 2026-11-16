@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
+from . import leverage as leverage_module
+
 load_dotenv()
 
 
@@ -339,6 +341,9 @@ class Settings:
     # Futures ceiling (docs/safety/account_daily_loss.md). 0 = off. Above 0: a new live Futures entry is refused when the Binance leverage on the pair is higher than this
     # or the margin mode is not isolated (or cannot be read). The bot only READS leverage and margin mode; it never sets either.
     futures_max_leverage: float = 0.0
+    # strict (default): refuse an entry when the pair's Binance leverage is above FUTURES_MAX_LEVERAGE (above). size_cap: do not refuse; size the position to
+    # min(Binance leverage, the account's max_leverage). Needs PROTECTION_PRECHECK_MODE=enforce, otherwise it behaves as strict. See docs/safety/customer_leverage.md.
+    futures_leverage_mode: str = "strict"
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
@@ -553,6 +558,7 @@ def load_settings() -> Settings:
         account_daily_loss_pct=min(50.0, max(0.0, _env_float("ACCOUNT_DAILY_LOSS_PCT", 0.0))),
         account_day_timezone=(os.environ.get("ACCOUNT_DAY_TIMEZONE") or "Africa/Lagos").strip() or "Africa/Lagos",
         futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
+        futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),

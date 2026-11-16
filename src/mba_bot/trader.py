@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, donchian, exchange, kill_switch, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, donchian, exchange, kill_switch, leverage as leverage_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -337,6 +337,18 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         finally:
             _cycle_equity.pop(account.id, None)
             await client.close()
+
+
+def _leverage_mode(settings: Settings, now: datetime) -> str:
+    """strict or size_cap for this entry. size_cap only takes effect with PROTECTION_PRECHECK_MODE=enforce: without the liquidation check it must not run, so it
+    behaves as strict and says so once an hour (never silently size_cap without the check)."""
+    if settings.futures_leverage_mode != leverage_module.MODE_SIZE_CAP:
+        return leverage_module.MODE_STRICT
+    if settings.protection_precheck_mode != "enforce":
+        if protection_guard.should_alert("-", "-", "leverage_mode_fallback", now=now, repeat_hours=1.0):
+            logger.warning("FUTURES_LEVERAGE_MODE=size_cap needs PROTECTION_PRECHECK_MODE=enforce (it is %s); behaving as strict", settings.protection_precheck_mode)
+        return leverage_module.MODE_STRICT
+    return leverage_module.MODE_SIZE_CAP
 
 
 # One equity reading per account per cycle: the entry gate and the end-of-cycle tick share it (key: account id; cleared when a cycle starts and when it ends).
@@ -1045,8 +1057,20 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     now=now,
                 )
                 return
-            if settings.futures_max_leverage > 0:
-                # Owner ceiling (docs/safety/account_daily_loss.md): the bot only READS leverage and margin mode and refuses; it never sets either on Binance.
+            sizing_leverage = leverage  # the multiple the position value is capped at; below, the pre-entry check still judges the REAL Binance leverage
+            if _leverage_mode(settings, now) == leverage_module.MODE_SIZE_CAP:
+                # size_cap (docs/safety/customer_leverage.md): never refuse for a high Binance number; size to min(Binance, the customer's number). Isolated margin is still
+                # required, and the liquidation check below still uses the real Binance leverage. The bot only READS leverage and margin mode.
+                if margin_mode != "isolated":
+                    _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode, mode="size_cap")
+                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED, leverage_module.MSG_NOT_ISOLATED.format(pair=account.pair), now=now)
+                    return
+                cap = leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage)
+                sizing_leverage = leverage_module.effective(leverage, cap)
+                if leverage > cap:
+                    logger.info("account %s: size_cap: position value capped at %gx capital (customer setting %dx, Binance %gx)", account.id, sizing_leverage, cap, leverage)
+            elif settings.futures_max_leverage > 0:
+                # Global ceiling (docs/safety/account_daily_loss.md): the bot only READS leverage and margin mode and refuses; it never sets either on Binance.
                 # Checked before the pre-entry protection check below, which then judges the stop against the liquidation price.
                 if leverage > settings.futures_max_leverage + 1e-9:
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_LEVERAGE_CEILING, leverage=leverage, ceiling=settings.futures_max_leverage)
@@ -1061,7 +1085,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                                        "Switch the pair to isolated margin on Binance. MBA Bot never changes it for you.", now=now)
                     return
             size = apply_margin_ceiling(
-                size, entry_price=current_price, effective_capital=effective_capital, leverage=leverage
+                size, entry_price=current_price, effective_capital=effective_capital, leverage=sizing_leverage
             )
         if size.quantity <= 0:
             _tlog(telemetry.REJECTED, telemetry.R_SIZE_ZERO_CEILING)

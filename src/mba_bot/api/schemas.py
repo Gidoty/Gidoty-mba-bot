@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StrictInt, field_validator
 
 from ..config import ALL_KNOWN_PAIRS, SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS
 
@@ -158,6 +158,9 @@ class AccountUpdateRequest(BaseModel):
     # to toggle back into casually.
     allocated_capital: float | None = Field(default=None, gt=0)
     pair_selection_mode: str | None = None
+    # Customer leverage setting (Futures; Spot ignores it): a whole number from 1 to 5, never above the global hard limit. The router checks the global limit.
+    # Strict int: 3.0, "3" and true are rejected.
+    max_leverage: StrictInt | None = Field(default=None, ge=1, le=5)
 
     @field_validator("pair")
     @classmethod
@@ -255,6 +258,9 @@ class AccountOut(BaseModel):
     bot_started_at: datetime | None
     allocated_capital: float | None
     pair_selection_mode: str  # "manual" | "auto"
+    # The customer's leverage number as the bot reads it (3 when never set, never above the limit) and the highest number they may choose.
+    max_leverage: int = 3
+    max_leverage_limit: int = 5
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so

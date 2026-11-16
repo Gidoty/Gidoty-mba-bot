@@ -15,6 +15,8 @@ export default function BotSettings() {
   const [marketType, setMarketType] = useState(account.market_type);
   const [riskPct, setRiskPct] = useState(String(account.risk_pct));
   const [pairSelectionMode, setPairSelectionMode] = useState(account.pair_selection_mode);
+  const leverageLimit = account.max_leverage_limit || 5;
+  const [maxLeverage, setMaxLeverage] = useState(String(account.max_leverage || 3));
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -39,7 +41,8 @@ export default function BotSettings() {
     pair !== account.pair ||
     marketType !== account.market_type ||
     riskPct !== String(account.risk_pct) ||
-    pairSelectionMode !== account.pair_selection_mode;
+    pairSelectionMode !== account.pair_selection_mode ||
+    (marketType === "futures" && maxLeverage !== String(account.max_leverage || 3));
 
   async function save(e) {
     e.preventDefault();
@@ -52,6 +55,8 @@ export default function BotSettings() {
         market_type: marketType,
         risk_pct: riskPct ? Number(riskPct) : undefined,
         pair_selection_mode: pairSelectionMode,
+        // Futures only; applies to new trades only, an open trade is not touched.
+        max_leverage: marketType === "futures" ? Number(maxLeverage) : undefined,
       });
       await reloadAccount();
       setSaved(true);
@@ -169,6 +174,18 @@ export default function BotSettings() {
           <FormField label="Risk per trade (%)" hint="Between 0.1 and 2.">
             <input type="number" min="0.1" max="2" step="0.1" value={riskPct} onChange={(e) => setRiskPct(e.target.value)} className={inputClass} />
           </FormField>
+
+          {marketType === "futures" && (
+            <FormField label="Leverage (Futures)" hint={`Whole number from 1 to ${leverageLimit}. The most a position can be worth compared with your trading capital. Applies to new trades only.`}>
+              <select value={maxLeverage} onChange={(e) => setMaxLeverage(e.target.value)} className={inputClass}>
+                {Array.from({ length: leverageLimit }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n}x
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          )}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">

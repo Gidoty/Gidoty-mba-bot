@@ -81,6 +81,9 @@ class TradingAccount(Base):
     # Which of the NEW strategies this account has been opted in to (comma separated: rsi_mr_v1, donchian_breakout_v1). Set by the owner directly in the
     # database; no API, screen or onboarding step writes it. NULL or empty means EMA only, exactly as before. Read it through multi_trade.account_strategies.
     extra_strategies: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # The most position value, as a multiple of capital, the customer lets the bot open on Futures (whole number 1 to 5; empty is read as 3, see leverage.py).
+    # Applies to NEW entries only; Spot ignores it.
+    max_leverage: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
