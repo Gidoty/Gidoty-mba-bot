@@ -16,11 +16,13 @@ import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ... import leverage as leverage_module
 from ...config import Settings
 from ...db import get_account_by_telegram_link_token
-from ...models import Customer
+from ...models import Customer, TradingAccount
 from ...notifications.telegram import TelegramNotifier
 from ..deps import get_current_customer, get_db, get_settings
 from ..schemas import TelegramLinkOut
@@ -67,6 +69,44 @@ _INVALID_TOKEN_MESSAGE = (
     "link\" again to get a fresh one."
 )
 
+_NOT_LINKED_MESSAGE = "This chat is not linked to an MBA Bot account. Open your dashboard and link Telegram first."
+_SPOT_LEVERAGE_MESSAGE = "The leverage setting applies to Futures only. Your account trades Spot, so it has no effect on your trades."
+
+
+def _leverage_status(account: TradingAccount, settings: Settings) -> str:
+    top = leverage_module.limit(settings.futures_max_leverage)
+    current = leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage)
+    return (
+        f"Your leverage setting is {current}x. It is the most a position can be worth compared with your trading capital, and you can choose a whole number "
+        f"from {leverage_module.LEVERAGE_MIN} to {top}. To change it, send /leverage followed by the number, for example /leverage 2. "
+        "A change applies to new trades only; a trade that is already open is not touched. MBA Bot never changes your leverage or margin mode on Binance."
+    )
+
+
+async def _handle_leverage(db: Session, chat_id: str, arg: str, settings: Settings) -> None:
+    """`/leverage` shows the setting, `/leverage N` changes it. Only the account linked to this chat can be read or changed; replies are fixed strings."""
+    accounts = list(db.scalars(select(TradingAccount).where(TradingAccount.notification_channel == "telegram", TradingAccount.notification_target == chat_id)))
+    if len(accounts) != 1:
+        await _reply(chat_id, _NOT_LINKED_MESSAGE, settings=settings)
+        return
+    account = accounts[0]
+    if account.market_type != "futures":
+        await _reply(chat_id, _SPOT_LEVERAGE_MESSAGE, settings=settings)
+        return
+    if not arg:
+        await _reply(chat_id, _leverage_status(account, settings), settings=settings)
+        return
+    top = leverage_module.limit(settings.futures_max_leverage)
+    try:
+        if not arg.isascii() or not arg.isdigit():
+            raise ValueError
+        account.max_leverage = leverage_module.validate(int(arg), settings.futures_max_leverage)
+    except ValueError:
+        await _reply(chat_id, f"Send a whole number from {leverage_module.LEVERAGE_MIN} to {top}, for example /leverage 2. Nothing was changed.", settings=settings)
+        return
+    await _reply(chat_id, f"Done. Your leverage setting is now {account.max_leverage}x for new trades. A trade that is already open is not touched.", settings=settings)
+
+
 _LINKED_MESSAGE = "Your MBA Bot account is linked. Trade entries, exits, and daily P&L summaries will be sent here."
 
 
@@ -92,6 +132,11 @@ async def telegram_webhook(
     text = (message.get("text") or "").strip()
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
+
+    command = text.split(None, 1)[0].split("@", 1)[0].lower() if text else ""
+    if chat_id is not None and command == "/leverage":
+        await _handle_leverage(db, str(chat_id), text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else "", settings)
+        return {"ok": True}
 
     if chat_id is None or not (text == "/start" or text.startswith("/start ")):
         return {"ok": True}

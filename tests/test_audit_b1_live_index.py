@@ -111,7 +111,7 @@ def test_the_upgrade_refuses_when_an_account_already_has_two_live_trades_and_cha
 def test_the_chain_has_one_head_on_top_of_the_multi_trade_migration():
     from alembic.script import ScriptDirectory
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision(NEW).down_revision == HEAD_BEFORE and script.get_heads() == ["a8d2f6c1e3b7"]  # (the head moved on with the audit H2 migration)
+    assert script.get_revision(NEW).down_revision == HEAD_BEFORE and script.get_heads() == ["b9e3d7a2c5f1"]  # (the head moved on with the audit H2 migration)
 
 
 def test_the_upgrade_does_not_fail_when_the_index_already_exists(tmp_path, monkeypatch, keep_logging):
