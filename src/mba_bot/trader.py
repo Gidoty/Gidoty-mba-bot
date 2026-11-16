@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, donchian, exchange, kill_switch, leverage as leverage_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, donchian, exchange, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -388,6 +388,52 @@ class _LossCheck:
     approximate: bool = False
 
 
+async def _cycle_equity_read(session, account: TradingAccount, client, now: datetime) -> tuple[float | None, str]:
+    """The cycle's one equity reading (cached for the cycle; the cache is cleared at the start and the end of every cycle)."""
+    cached = _cycle_equity.get(account.id)
+    if cached is not None:
+        return cached[1], cached[2]
+    equity, reason = await _live_equity(session, account, client)
+    _cycle_equity[account.id] = (now, equity, reason)
+    return equity, reason
+
+
+@dataclass
+class _TotalCheck:
+    state: str  # off | ok | stopped | stopped_new | unreadable
+    reason: str = ""
+    stop: object | None = None
+
+
+async def _account_total_stop_check(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, *, now: datetime) -> _TotalCheck:
+    """The total loss stop (ACCOUNT_TOTAL_LOSS_STOP, docs/safety/risk_per_trade.md) for one LIVE account: new entries stop when equity is down max(10, 3 x the account's risk %)
+    percent (cap 80) from its reference equity, until the customer resets it. Shares the cycle's one equity reading. Never touches a trade. Fail closed: an unreadable equity
+    is reported, not assumed fine. The reference is the first healthy reading after the stop is switched on or after the customer's last reset."""
+    if not settings.account_total_loss_stop:
+        return _TotalCheck("off")
+    existing = account_loss.active_total_stop(session, account.id)
+    if existing is not None:
+        return _TotalCheck("stopped", "", existing)
+    equity, reason = await _cycle_equity_read(session, account, client, now)
+    if equity is None:
+        return _TotalCheck("unreadable", reason)
+    ref = account.loss_reference_equity
+    if ref is None:
+        account.loss_reference_equity = equity
+        account.loss_reference_at = now
+        return _TotalCheck("ok")
+    loss = risk_limits_module.total_loss_hit(reference_equity=ref, equity=equity, risk_pct=account.risk_pct)
+    if loss is None:
+        return _TotalCheck("ok")
+    threshold = risk_limits_module.total_loss_threshold(account.risk_pct)
+    stop = account_loss.write_total_stop(session, account.id, reference_equity=ref, equity=equity, loss_pct=loss, threshold_pct=threshold, risk_pct=account.risk_pct, now=now)
+    logger.warning("account %s: total loss stop: down %.2f%% from the reference equity, limit %.2f%%; no new entries until the customer resets it", account.id, stop.loss_pct, threshold)
+    account.last_error = account_loss.CUSTOMER_MESSAGE_TOTAL_STOP
+    account.last_error_at = now
+    await _notify_safe(notifier, account, f"MBA Bot: {account_loss.CUSTOMER_MESSAGE_TOTAL_STOP} (down {stop.loss_pct:.1f}%, limit {threshold:g}%)")
+    return _TotalCheck("stopped_new", "", stop)
+
+
 async def _account_loss_check(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, *, now: datetime) -> _LossCheck:
     """The whole daily-loss decision for one LIVE account, shared by the end-of-cycle tick and the entry gate (docs/safety/account_daily_loss.md).
 
@@ -400,12 +446,7 @@ async def _account_loss_check(session, account: TradingAccount, client, settings
     if tz is None:
         return _LossCheck("bad_timezone")
     existing = account_loss.active_pause(session, account.id, now, tz)
-    cached = _cycle_equity.get(account.id)
-    if cached is not None:  # read earlier in this same cycle (the cache is cleared at the start and the end of every cycle)
-        equity, reason = cached[1], cached[2]
-    else:
-        equity, reason = await _live_equity(session, account, client)
-        _cycle_equity[account.id] = (now, equity, reason)
+    equity, reason = await _cycle_equity_read(session, account, client, now)
     if equity is None:
         return _LossCheck("paused", reason, existing) if existing is not None else _LossCheck("unreadable", reason)
     row = account_loss.record_sample(session, account.id, equity, now, tz)  # keeps sampling during a pause so the next day can start from it
@@ -426,10 +467,20 @@ async def _account_equity_tick(session, account: TradingAccount, client, setting
     """Runs once at the end of every cycle of a LIVE account that has a client, whatever path the cycle took (idle scan, withdrawal block, no market data, multi
     path, open-trade path): records the equity sample and writes the daily loss pause the moment the limit is crossed. It never raises, never places or cancels an
     order and never touches a trade. A failed read logs one warning (once an hour per account) and the cycle carries on."""
-    if settings.account_daily_loss_pct <= 0:
+    if settings.account_daily_loss_pct <= 0 and not settings.account_total_loss_stop:
         return
     try:
         check = await _account_loss_check(session, account, client, settings, notifier, now=now)
+        total = await _account_total_stop_check(session, account, client, settings, notifier, now=now)
+        if total.state == "stopped_new":
+            stop = total.stop
+            telemetry.log_decision(
+                session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.REJECTED, reason=account_loss.R_ACCOUNT_TOTAL_STOP, is_paper=False, now=now,
+                detail=dict(loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct, risk_pct=stop.risk_pct, source="cycle_tick"),
+            )
+        elif total.state == "unreadable" and check.state == "off":
+            if protection_guard.should_alert(account.id, "-", "equity_sample_failed", now=now, repeat_hours=1.0):
+                logger.warning("account %s: could not record an equity sample this cycle (%s)", account.id, total.reason)
         if check.state == "paused_new":
             pause = check.pause
             telemetry.log_decision(
@@ -448,6 +499,17 @@ async def _account_loss_blocks(session, account: TradingAccount, client, setting
     zone or an unreadable equity also blocks. Off (ACCOUNT_DAILY_LOSS_PCT = 0) never blocks and reads nothing. Open trades are not touched by any of this."""
     check = await _account_loss_check(session, account, client, settings, notifier, now=now)
     if check.state in ("off", "ok"):
+        total = await _account_total_stop_check(session, account, client, settings, notifier, now=now)
+        if total.state in ("stopped", "stopped_new"):
+            stop = total.stop
+            tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_TOTAL_STOP, loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct, risk_pct=stop.risk_pct)
+            account.last_error = account_loss.CUSTOMER_MESSAGE_TOTAL_STOP
+            account.last_error_at = now
+            return True
+        if total.state == "unreadable":
+            tlog(telemetry.REJECTED, account_loss.R_EQUITY_UNREADABLE, why=total.reason)
+            await _block_entry(notifier, account, settings, account_loss.R_EQUITY_UNREADABLE, account_loss.CUSTOMER_MESSAGE_UNREADABLE, now=now)
+            return True
         return False
     if check.state == "bad_timezone":
         tlog(telemetry.REJECTED, account_loss.R_TIMEZONE_INVALID)
@@ -1288,7 +1350,7 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
         return size, (multi_trade.R_CAPITAL_SHORT, {"free": round(free, 2), "notional": round(notional, 2), "minimum": settings.paper_min_notional})
     hit = strategy_guard_rules.portfolio_hit(
         open_positions=len(open_ts), open_risk_pct=open_pct, new_risk_pct=size.risk_amount / balance * 100.0,
-        max_positions=0, max_total_risk_pct=settings.max_total_risk_pct,
+        max_positions=0, max_total_risk_pct=multi_trade.open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots),  # max(MAX_TOTAL_RISK_PCT, risk x slots), cap 100
     )
     if hit is not None:
         return size, (multi_trade.R_TOTAL_RISK_CAP, dict(hit.detail))

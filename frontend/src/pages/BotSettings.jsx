@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import RiskPctField, { acksComplete, riskFieldProblem } from "../components/RiskPctField.jsx";
+
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
 import { FormField, SavedNote, inputClass, primaryButton } from "../components/form.jsx";
@@ -7,6 +9,7 @@ import { Card, CardTitle, ErrorBanner, PageHeader, Pill, ThemeSwitch } from "../
 import { MARKET_TYPES, UPCOMING_PAIRS } from "../constants.js";
 import { usd } from "../lib/format.js";
 import { useAccount } from "../context/AccountContext.jsx";
+import { riskBand } from "../lib/riskBands.js";
 import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
 export default function BotSettings() {
@@ -15,6 +18,10 @@ export default function BotSettings() {
   const [marketType, setMarketType] = useState(account.market_type);
   const [riskPct, setRiskPct] = useState(String(account.risk_pct));
   const [pairSelectionMode, setPairSelectionMode] = useState(account.pair_selection_mode);
+  const riskLimit = account.risk_pct_limit || 2;
+  const [acks, setAcks] = useState({});
+  const [resetting, setResetting] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
   const leverageLimit = account.max_leverage_limit || 5;
   const [maxLeverage, setMaxLeverage] = useState(String(account.max_leverage || 3));
   const [error, setError] = useState(null);
@@ -43,6 +50,23 @@ export default function BotSettings() {
     riskPct !== String(account.risk_pct) ||
     pairSelectionMode !== account.pair_selection_mode ||
     (marketType === "futures" && maxLeverage !== String(account.max_leverage || 3));
+  const riskInvalid = riskFieldProblem(riskPct, riskLimit) !== null;
+  const needsAcks = !acksComplete(riskPct, acks);
+
+  async function resetTotalLoss(e) {
+    e.preventDefault();
+    setError(null);
+    setResetting(true);
+    try {
+      await api.post("/account/total-loss-reset", { confirm: true });
+      await reloadAccount();
+      setResetConfirm(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setResetting(false);
+    }
+  }
 
   async function save(e) {
     e.preventDefault();
@@ -54,6 +78,8 @@ export default function BotSettings() {
         pair,
         market_type: marketType,
         risk_pct: riskPct ? Number(riskPct) : undefined,
+        acknowledge_high_risk: !!acks.high,
+        acknowledge_very_high_risk: !!acks.very_high,
         pair_selection_mode: pairSelectionMode,
         // Futures only; applies to new trades only, an open trade is not touched.
         max_leverage: marketType === "futures" ? Number(maxLeverage) : undefined,
@@ -96,7 +122,7 @@ export default function BotSettings() {
         <span className="flex flex-wrap items-center gap-2">
           <Pill tone="info">{account.pair}</Pill>
           <Pill>{marketLabel}</Pill>
-          <Pill>{account.risk_pct}% risk per trade</Pill>
+          <Pill>{account.risk_pct}% risk per trade{riskBand(account.risk_pct) === "high" ? " - higher risk" : riskBand(account.risk_pct) === "very_high" ? " - very high risk" : ""}</Pill>
         </span>
       </PageHeader>
       <ErrorBanner message={error} />
@@ -171,9 +197,7 @@ export default function BotSettings() {
             </select>
           </FormField>
 
-          <FormField label="Risk per trade (%)" hint="Between 0.1 and 2.">
-            <input type="number" min="0.1" max="2" step="0.1" value={riskPct} onChange={(e) => setRiskPct(e.target.value)} className={inputClass} />
-          </FormField>
+          <RiskPctField value={riskPct} onChange={setRiskPct} limit={riskLimit} acks={acks} onAcksChange={setAcks} />
 
           {marketType === "futures" && (
             <FormField label="Leverage (Futures)" hint={`Whole number from 1 to ${leverageLimit}. The most a position can be worth compared with your trading capital. Applies to new trades only.`}>
@@ -189,13 +213,43 @@ export default function BotSettings() {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button type="submit" disabled={!dirty || saving} className={primaryButton}>
+          <button type="submit" disabled={!dirty || saving || riskInvalid || needsAcks} className={primaryButton}>
             {saving ? "Saving..." : "Save changes"}
           </button>
           {dirty && !saving && <span className="text-sm text-muted">You have unsaved changes.</span>}
         </div>
         <SavedNote show={saved && !dirty} children="Settings saved." />
       </form>
+
+      {account.total_loss_stop_enabled && (
+        <Card>
+          <CardTitle>Total loss limit</CardTitle>
+          <p className="text-sm text-fg">
+            New trades stop if your account falls {account.total_loss_stop_threshold_pct}% below its reference value
+            {account.total_loss_reference_equity != null ? ` (${usd(account.total_loss_reference_equity)})` : " (set at the next check)"}. Trades that are already open keep their
+            stops. This limit follows your risk setting: it is 10% or three times your risk per trade, whichever is higher, up to 80%.
+          </p>
+          {account.total_loss_stop_active && (
+            <p role="alert" className="mt-3 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm font-medium text-fg">
+              Stopped: new trades are off because the limit was reached. They stay off until you reset this.
+            </p>
+          )}
+          <form onSubmit={resetTotalLoss} className="mt-3 grid gap-2">
+            <label className="flex items-start gap-2 text-sm text-fg">
+              <input type="checkbox" className="mt-1 h-4 w-4" checked={resetConfirm} onChange={(e) => setResetConfirm(e.target.checked)} />
+              <span>
+                I confirm. The reference value is taken again from my balance at the next check{account.total_loss_stop_active ? ", and new trades can start again" : ""}. Use this after you
+                deposit or withdraw money so the limit measures from the right value.
+              </span>
+            </label>
+            <div>
+              <button type="submit" disabled={!resetConfirm || resetting} className={primaryButton}>
+                {resetting ? "Resetting..." : account.total_loss_stop_active ? "Reset and allow new trades" : "Reset the reference value"}
+              </button>
+            </div>
+          </form>
+        </Card>
+      )}
     </div>
   );
 }

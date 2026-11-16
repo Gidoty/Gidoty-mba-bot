@@ -5,6 +5,8 @@ implementation of the trial/bypass rules.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,8 @@ from ...crypto_utils import decrypt, encrypt
 from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
-from ...legal import RISK_DISCLOSURE_VERSION, record_acceptance
+from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
+from ... import account_loss, risk_limits
 from ...models import ApiCredential, Customer, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -44,6 +47,7 @@ from ..schemas import (
     OpenTradeOut,
     PositionOut,
     StartBotRequest,
+    TotalLossResetRequest,
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -59,6 +63,29 @@ def _paid(customer: Customer, settings: Settings) -> bool:
     """The one question every handler below asks: may this customer open NEW live trades? Exactly `customer.has_paid`
     unless SUBSCRIPTION_BILLING_ENABLED is on (billing/entitlement.py)."""
     return is_entitled(customer, settings=settings)
+
+
+def _check_risk_setting(db: Session, customer: Customer, risk_pct: float, *, ack_high: bool, ack_very_high: bool, settings: Settings) -> list[str]:
+    """Server-side rule for a customer's risk per trade (docs/safety/risk_per_trade.md). Raises 422 with a plain message if the number is outside 0.1 up to the current RISK_PCT_MAX
+    (it is never silently lowered), or if it needs an acknowledgment that is neither on file for the current version nor ticked in this request. Returns the acknowledgment
+    types to record (ticked now, not on file yet); the caller records them only once the whole request is going through."""
+    problem = risk_limits.validate_range(risk_pct, settings.risk_pct_max)
+    if problem is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+    ticked = {risk_limits.ACK_HIGH: ack_high, risk_limits.ACK_VERY_HIGH: ack_very_high}
+    to_record: list[str] = []
+    for doc_type in risk_limits.required_acknowledgments(risk_pct):
+        on_file = has_current_acceptance(db, customer_id=customer.id, document_type=doc_type, version=risk_limits.ACK_VERSION)
+        if on_file:
+            continue
+        if not ticked[doc_type]:
+            what = "above 2%" if doc_type == risk_limits.ACK_HIGH else "of 10% or more"
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"A risk per trade {what} needs your confirmation that you understand the risk. Tick the confirmation on the screen and save again. Nothing was changed.",
+            )
+        to_record.append(doc_type)
+    return to_record
 
 
 def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, settings: Settings | None = None) -> AccountOut:
@@ -127,6 +154,11 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         pair_selection_mode=account.pair_selection_mode,
         max_leverage=leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage if settings else None),
         max_leverage_limit=leverage_module.limit(settings.futures_max_leverage if settings else None),
+        risk_pct_limit=settings.risk_pct_max if settings else 2.0,
+        total_loss_stop_enabled=bool(settings.account_total_loss_stop) if settings else False,
+        total_loss_stop_active=account_loss.active_total_stop(db, account.id) is not None,
+        total_loss_stop_threshold_pct=risk_limits.total_loss_threshold(account.risk_pct),
+        total_loss_reference_equity=account.loss_reference_equity,
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -198,10 +230,14 @@ def create_account(
     if body.environment == "mainnet" and not _paid(customer, settings):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "pay to unlock before connecting a mainnet Binance account")
 
+    requested = body.risk_pct if body.risk_pct is not None else settings.risk_pct_default
+    to_record = _check_risk_setting(db, customer, requested, ack_high=body.acknowledge_high_risk, ack_very_high=body.acknowledge_very_high_risk, settings=settings)
     try:
-        risk_pct = clamp_risk_pct(body.risk_pct or settings.risk_pct_default, max_risk_pct=settings.risk_pct_max)
+        risk_pct = clamp_risk_pct(requested, max_risk_pct=settings.risk_pct_max)  # the last guard; the check above has already refused anything above the limit
     except InvalidRiskParameters as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    for doc_type in to_record:
+        record_acceptance(db, customer_id=customer.id, document_type=doc_type, version=risk_limits.ACK_VERSION)
 
     try:
         bot_code = assign_unique_bot_code(db)
@@ -253,6 +289,10 @@ def update_account(
     facts: dict | None = Depends(get_pair_facts),
 ) -> AccountOut:
     account = _require_account(customer)
+    ack_to_record: list[str] = []
+    if body.risk_pct is not None:
+        # Checked before anything is changed: a number above the limit is refused (never silently lowered), and a number above 2% or from 10% needs its recorded acknowledgment.
+        ack_to_record = _check_risk_setting(db, customer, body.risk_pct, ack_high=body.acknowledge_high_risk, ack_very_high=body.acknowledge_very_high_risk, settings=settings)
 
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
@@ -294,9 +334,11 @@ def update_account(
 
     if body.risk_pct is not None:
         try:
-            account.risk_pct = clamp_risk_pct(body.risk_pct, max_risk_pct=settings.risk_pct_max)
+            account.risk_pct = clamp_risk_pct(body.risk_pct, max_risk_pct=settings.risk_pct_max)  # the last guard
         except InvalidRiskParameters as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        for doc_type in ack_to_record:
+            record_acceptance(db, customer_id=customer.id, document_type=doc_type, version=risk_limits.ACK_VERSION)
     if body.max_leverage is not None:
         # Applies to NEW entries only (the bot reads it when it sizes an entry), so it is safe to change with a trade open: that trade is not touched.
         try:
@@ -309,6 +351,26 @@ def update_account(
         # how an already-open position is managed (same reasoning
         # risk_pct above has always been editable under).
         account.allocated_capital = body.allocated_capital
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
+
+
+@router.get("/risk-limits")
+def get_risk_limits(customer: Customer = Depends(require_legal_acceptance), settings: Settings = Depends(get_settings)) -> dict:
+    """What the risk-per-trade field may offer, readable before an account exists (onboarding): the highest value allowed right now and the two band edges."""
+    return {"risk_pct_limit": settings.risk_pct_max, "recommended_max": risk_limits.RISK_RECOMMENDED_MAX, "very_high_from": risk_limits.RISK_VERY_HIGH_FROM}
+
+
+@router.post("/total-loss-reset", response_model=AccountOut)
+def reset_total_loss_stop(
+    body: TotalLossResetRequest,
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AccountOut:
+    """The customer releases the total loss stop (docs/safety/risk_per_trade.md) after confirming. Never automatic. It also clears the reference value, so the next healthy
+    cycle takes a fresh one from the account's then-current equity (this is also how a deposit or withdrawal is accounted for). It never touches an open trade."""
+    account = _require_account(customer)
+    account_loss.reset_total_stop(db, account, datetime.now(timezone.utc))
     return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 

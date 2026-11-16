@@ -153,3 +153,19 @@ def open_risk_pct(open_risk_amounts, balance: float) -> float | None:
     if not all(_ok(a) and a >= 0 for a in amounts):
         return None
     return sum(amounts) / balance * 100.0
+
+
+OPEN_RISK_CAP_MAX = 100.0
+
+
+def open_risk_cap(max_total_risk_pct, risk_pct, positions_allowed) -> float:
+    """The cap on the sum of open risk (percent of balance): max(MAX_TOTAL_RISK_PCT, the account's risk x the positions it may hold), never above 100 (B1c,
+    docs/safety/risk_per_trade.md). MAX_TOTAL_RISK_PCT of 0 or less keeps meaning "no cap" and stays 0. Bad inputs fall back to the configured value."""
+    def finite(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+    if not finite(max_total_risk_pct) or max_total_risk_pct <= 0:
+        return 0.0
+    if not finite(risk_pct) or risk_pct <= 0 or isinstance(positions_allowed, bool) or not isinstance(positions_allowed, int) or positions_allowed < 1:
+        return min(OPEN_RISK_CAP_MAX, float(max_total_risk_pct))
+    return min(OPEN_RISK_CAP_MAX, max(float(max_total_risk_pct), float(risk_pct) * positions_allowed))

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 from . import leverage as leverage_module
+from . import risk_limits as risk_limits_module
 
 load_dotenv()
 
@@ -344,6 +345,9 @@ class Settings:
     # strict (default): refuse an entry when the pair's Binance leverage is above FUTURES_MAX_LEVERAGE (above). size_cap: do not refuse; size the position to
     # min(Binance leverage, the account's max_leverage). Needs PROTECTION_PRECHECK_MODE=enforce, otherwise it behaves as strict. See docs/safety/customer_leverage.md.
     futures_leverage_mode: str = "strict"
+    # Total loss stop (docs/safety/risk_per_trade.md), LIVE accounts only. False = off (default). True: new entries stop when an account's equity is down max(10, 3 x its risk %)
+    # percent (cap 80) from its reference equity, until the customer resets it on the dashboard. Open trades are never touched.
+    account_total_loss_stop: bool = False
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
@@ -488,7 +492,7 @@ def load_settings() -> Settings:
         atr_flat_threshold=_env_float("ATR_FLAT_THRESHOLD", 0.75),
         atr_rolling_window=_env_int("ATR_ROLLING_WINDOW", 50),
         risk_pct_default=_env_float("RISK_PCT_DEFAULT", 1.0),
-        risk_pct_max=_env_float("RISK_PCT_MAX", 2.0),
+        risk_pct_max=risk_limits_module.clamp_limit(_env_float("RISK_PCT_MAX", 2.0)),
         max_notional_multiplier=_env_float("MAX_NOTIONAL_MULTIPLIER", 3.0),
         # TESTNET_API_KEY/SECRET are the legacy, pre-split var names -
         # kept as a fallback for the spot pair only, so an existing
@@ -559,6 +563,7 @@ def load_settings() -> Settings:
         account_day_timezone=(os.environ.get("ACCOUNT_DAY_TIMEZONE") or "Africa/Lagos").strip() or "Africa/Lagos",
         futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
         futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),
+        account_total_loss_stop=_env_bool("ACCOUNT_TOTAL_LOSS_STOP", False),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),

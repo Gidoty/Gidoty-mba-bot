@@ -22,7 +22,7 @@ TERMS_VERSION = "2026-10-18"
 PRIVACY_VERSION = "2026-10-18"
 RISK_DISCLOSURE_VERSION = "2026-10-18"
 
-DOCUMENT_TYPES = ("terms", "privacy", "risk_disclosure")
+DOCUMENT_TYPES = ("terms", "privacy", "risk_disclosure", "risk_ack_high", "risk_ack_very_high")  # the last two: the risk-per-trade acknowledgments (risk_limits.py)
 
 # The exact, required wording for the Enable Live Trading confirmation -
 # shown verbatim and prominently by the frontend, not paraphrased.

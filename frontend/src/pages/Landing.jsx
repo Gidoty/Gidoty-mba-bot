@@ -13,7 +13,7 @@ const STEPS = [
 
 const CONTROLS = [
   ["Pair and market", "Choose the pair and spot or USD-M futures."],
-  ["Risk per trade", "Set 0.1% to 2% of your balance. Every trade sizes itself from that and a stop-loss."],
+  ["Risk per trade", "Choose your own, from 0.1% of your balance. We recommend 2% or less. Every trade sizes itself from that and a stop-loss."],
   ["Trading capital", "Set a ceiling on how much of your balance the bot may use."],
   ["Your Binance key", "Trade-only, with withdrawals off. Your funds stay in your own Binance account."],
 ];

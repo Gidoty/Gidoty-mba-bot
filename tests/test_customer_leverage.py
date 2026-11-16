@@ -237,9 +237,9 @@ def test_the_migration_is_additive_idempotent_and_reversible(tmp_path, monkeypat
     cols = lambda: {c["name"] for c in inspect(create_engine(f"sqlite:///{path}")).get_columns("trading_accounts")}
     assert "max_leverage" not in cols()
     before = cols()
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "b9e3d7a2c5f1")  # this revision only (later ones add other columns)
     assert cols() == before | {"max_leverage"}
-    command.upgrade(cfg, "head")  # idempotent
+    command.upgrade(cfg, "b9e3d7a2c5f1")  # idempotent
     command.downgrade(cfg, "a8d2f6c1e3b7")
     assert cols() == before
     command.upgrade(cfg, "head")
@@ -250,7 +250,7 @@ def test_the_head_is_the_new_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == ["b9e3d7a2c5f1"] and script.get_revision("b9e3d7a2c5f1").down_revision == "a8d2f6c1e3b7"
+    assert script.get_revision("b9e3d7a2c5f1").down_revision == "a8d2f6c1e3b7" and script.get_heads() == ["c1f4a8d2e6b3"]  # (the head moved on with B1c)
 
 
 def test_the_help_file_and_the_code_agree_on_every_message():

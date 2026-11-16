@@ -154,3 +154,52 @@ def write_pause(session: Session, account_id: str, hit: DailyLossHit, *, limit_p
     session.add(row)
     session.flush()
     return row
+
+
+# ---------------------------------------------------------------------------------------------------- total loss stop (B1c)
+# Separate from the daily pause above, which this block does not change. It measures from a reference equity (the first healthy reading after ACCOUNT_TOTAL_LOSS_STOP is
+# switched on, or after the customer's last reset), stops NEW live entries, and never ends by itself: only the customer's reset on the dashboard releases it.
+KIND_TOTAL_LOSS = "total_loss"
+R_ACCOUNT_TOTAL_STOP = "account_total_loss_stop"
+CUSTOMER_MESSAGE_TOTAL_STOP = (
+    "New trades are stopped because your account is down by the total loss limit from its reference value. Open positions keep their protective stops and exits. "
+    "New trades start again only after you reset this on your dashboard."
+)
+
+
+def active_total_stop(session: Session, account_id: str):
+    """The unreleased total loss stop of the account, if any."""
+    from .models import AccountTotalLossStop
+
+    return session.execute(
+        select(AccountTotalLossStop).where(AccountTotalLossStop.account_id == account_id, AccountTotalLossStop.reset_at.is_(None)).order_by(AccountTotalLossStop.triggered_at.desc()).limit(1)
+    ).scalar_one_or_none()
+
+
+def write_total_stop(session: Session, account_id: str, *, reference_equity: float, equity: float, loss_pct: float, threshold_pct: float, risk_pct: float, now: datetime):
+    """The audit row for a total loss stop. Idempotent while one is active: the existing row is returned. Non-finite numbers are stored as 0 / 100 (the row records that the
+    stop acted, not a measurement)."""
+    from .models import AccountTotalLossStop
+
+    existing = active_total_stop(session, account_id)
+    if existing is not None:
+        return existing
+    row = AccountTotalLossStop(
+        account_id=account_id, triggered_at=_aware(now), reference_equity=reference_equity if _finite(reference_equity) else 0.0, equity_at_hit=equity if _finite(equity) else 0.0,
+        loss_pct=loss_pct if _finite(loss_pct) else 100.0, threshold_pct=float(threshold_pct), risk_pct=float(risk_pct) if _finite(risk_pct) else 0.0,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def reset_total_stop(session: Session, account, now: datetime) -> bool:
+    """The customer's reset: releases any active stop and clears the reference, so the next healthy cycle sets a fresh one from the then-current equity.
+    Returns True if a stop was active. Never touches a trade."""
+    row = active_total_stop(session, account.id)
+    if row is not None:
+        row.reset_at = _aware(now)
+    account.loss_reference_equity = None
+    account.loss_reference_at = None
+    session.flush()
+    return row is not None
