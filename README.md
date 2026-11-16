@@ -22,8 +22,7 @@ how well the code is written.
 - **Strategy:** EMA(20/50) crossover trend-following, with an ATR
   volatility filter that skips signals when the market is flat/range-bound
   (crossover strategies lose money chopping sideways).
-- **Risk:** every trade risks 1-2% of account balance (customer-set,
-  hard-capped), sized off an ATR-based stop-loss distance - never a fixed
+- **Risk:** every trade risks a share of account balance that the customer sets (default 1%, we recommend 2% or less; the highest value allowed is RISK_PCT_MAX, default 2%, hard ceiling 40%; see docs/safety/risk_per_trade.md), sized off an ATR-based stop-loss distance - never a fixed
   coin quantity.
 - **Onboarding:** every account starts in a 7-day paper trial on Binance
   testnet with simulated funds. Skipping straight to live trading requires

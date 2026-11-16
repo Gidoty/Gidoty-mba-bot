@@ -489,16 +489,19 @@ def test_no_log_line_or_notification_carries_customer_data(db, monkeypatch, capl
 
 
 def test_the_portfolio_cap_uses_the_donchian_risk_cap_for_the_new_trade(db):
-    st = settings(max_open_positions=3, max_total_risk_pct=1.5)
-    aid = paper_account(st)  # the account's own risk is 1.0
+    # B1c: the cap is max(MAX_TOTAL_RISK_PCT, the account's risk x the positions it may hold). A LIVE account holds one position, so with the account's own risk at 2.0 and
+    # MAX_TOTAL_RISK_PCT at 2.5 the cap is 2.5: one open trade (2.0) plus a Donchian trade at its own 0.5 cap fits exactly, an EMA trade at the account's 2.0 does not.
+    st = settings(max_open_positions=3, max_total_risk_pct=2.5)
+    aid = paper_account(st)
     with session_scope() as s:
-        s.add(Trade(account_id=aid, side="long", is_paper=True, entry_price=90.0, quantity=1.0, stop_loss_price=89.0, status="open", pair="ETH/USDT",
+        s.get(TradingAccount, aid).risk_pct = 2.0
+        s.add(Trade(account_id=aid, side="long", is_paper=False, entry_price=90.0, quantity=1.0, stop_loss_price=89.0, status="open", pair="ETH/USDT",
                     strategy_id="ema_cross_atr_v1", opened_at=datetime.now(U)))
     don = dataclasses.replace(D.DonchianSignal("long", "x"), atr_pct=0.05)
     ema = StrategySignal(SignalType.BULLISH_CROSSOVER, "x", 100.0, 99.0, 1.0, 0.05, gap_atr=1.0)
     with session_scope() as s:
         acct = s.get(TradingAccount, aid)
-        d = [h.code for h in g.evaluate(s, acct, st, signal=don, is_paper=True, now=datetime.now(U), strategy_id="donchian_breakout_v1")]
-        e = [h.code for h in g.evaluate(s, acct, st, signal=ema, is_paper=True, now=datetime.now(U))]
-    assert g.R_PORTFOLIO_CAP not in d  # 1.0 open + 0.5 new = 1.5, within the cap
-    assert g.R_PORTFOLIO_CAP in e  # 1.0 open + 1.0 new = 2.0, over it
+        d = [h.code for h in g.evaluate(s, acct, st, signal=don, is_paper=False, now=datetime.now(U), strategy_id="donchian_breakout_v1")]
+        e = [h.code for h in g.evaluate(s, acct, st, signal=ema, is_paper=False, now=datetime.now(U))]
+    assert g.R_PORTFOLIO_CAP not in d  # 2.0 open + 0.5 new = 2.5, within the cap
+    assert g.R_PORTFOLIO_CAP in e  # 2.0 open + 2.0 new = 4.0, over it

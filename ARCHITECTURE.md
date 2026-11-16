@@ -836,7 +836,7 @@ account without needing their UUID.
 |---|---|
 | `indicators.py` | Pure EMA / ATR math. No I/O, no state. |
 | `strategy.py` | EMA(20/50) crossover + ATR volatility filter -> a `StrategySignal`. Stateless: doesn't know about open positions. |
-| `risk.py` | Position sizing (risk % of balance / stop distance) and stop-loss placement. Enforces the 1-2% cap. |
+| `risk.py` | Position sizing (risk % of balance / stop distance) and stop-loss placement. Enforces the RISK_PCT_MAX cap (default 2%, never above 40%, `risk_limits.py`). |
 | `onboarding.py` | Trial start/expiry, the live-trading bypass and its logged disclosure/timestamp. |
 | `legal.py` | Terms/Privacy/Risk-Disclosure document versions and the single "is this customer's acceptance current" check. |
 | `crypto_utils.py` | Fernet encryption for stored API credentials. |

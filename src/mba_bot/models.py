@@ -84,6 +84,10 @@ class TradingAccount(Base):
     # The most position value, as a multiple of capital, the customer lets the bot open on Futures (whole number 1 to 5; empty is read as 3, see leverage.py).
     # Applies to NEW entries only; Spot ignores it.
     max_leverage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The equity the total loss stop (ACCOUNT_TOTAL_LOSS_STOP, docs/safety/risk_per_trade.md) measures from: the first healthy reading after the stop is switched on, or after the
+    # customer's last reset. NULL = not set yet (the next healthy cycle sets it). Numbers and times only.
+    loss_reference_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loss_reference_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
@@ -533,6 +537,23 @@ class AccountLossPause(Base):
     loss_pct: Mapped[float] = mapped_column(Float, nullable=False)
     limit_pct: Mapped[float] = mapped_column(Float, nullable=False)
     timezone_name: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class AccountTotalLossStop(Base):
+    """Audit row for a total loss stop: new live entries stop from `triggered_at` until the customer resets it (`reset_at`). Never ends by itself. Numbers and times only."""
+
+    __tablename__ = "account_total_loss_stops"
+    __table_args__ = (Index("ix_account_total_loss_stops_account", "account_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    reference_equity: Mapped[float] = mapped_column(Float, nullable=False)
+    equity_at_hit: Mapped[float] = mapped_column(Float, nullable=False)
+    loss_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    threshold_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    risk_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BillingPayment(Base):

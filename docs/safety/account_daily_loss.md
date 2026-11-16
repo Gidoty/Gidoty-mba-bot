@@ -14,6 +14,7 @@ For a LIVE account (paper accounts are not affected). When the account's equity 
 * Blocks NEW entries only. Open trades keep their stops and strategy exits (tested: an exit runs during the loss).
 * Audit: one row per account and day in `account_loss_pauses` (start equity, equity at hit, loss, limit, zone), one decision-log row per refused signal (`account_daily_loss_pause`, `account_equity_unreadable`, `account_day_timezone_invalid`), one customer alert when the pause starts.
 * Known limit: a deposit or withdrawal you make during the day moves equity. A withdrawal looks like a loss (fails safe). A deposit can hide one. The keys are trade-only, so the bot never moves money. There is no adjustment command yet (planned, not built).
+* The daily limit is one fixed value for every account. It does NOT scale with an account's risk per trade (B1c, owner decision). With a risk setting above the daily limit, one stop-out can already exceed it, so the pause then allows at most one losing trade per Lagos day; it never closes an open trade.
 * Not a cumulative stop: it resets every day. A cumulative stop from the pilot start is a separate item.
 
 ## 2. Futures ceiling (`FUTURES_MAX_LEVERAGE`)

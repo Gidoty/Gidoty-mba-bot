@@ -94,6 +94,9 @@ class AccountCreateRequest(BaseModel):
     market_type: str
     notification_channel: str
     risk_pct: float | None = Field(default=None, gt=0, le=100)
+    # Recorded acknowledgments for a risk setting above 2 percent / from 10 percent (the server refuses the setting without them; see risk_limits.py).
+    acknowledge_high_risk: bool = False
+    acknowledge_very_high_risk: bool = False
     # Both optional: paper-mode trading never reads an account's own
     # credential (it always uses the shared platform testnet keys - see
     # trader.py's _resolve_credentials), so a brand-new, unpaid account
@@ -146,6 +149,8 @@ PAIR_SELECTION_MODES = ("manual", "auto")
 
 class AccountUpdateRequest(BaseModel):
     risk_pct: float | None = Field(default=None, gt=0, le=100)
+    acknowledge_high_risk: bool = False
+    acknowledge_very_high_risk: bool = False
     pair: str | None = None
     market_type: str | None = None
     # How much of the customer's available Binance balance the bot may
@@ -176,6 +181,19 @@ class AccountUpdateRequest(BaseModel):
     @classmethod
     def _valid_pair_selection_mode(cls, v: str | None) -> str | None:
         return v if v is None else _validate_choice(v, PAIR_SELECTION_MODES, "pair_selection_mode")
+
+
+class TotalLossResetRequest(BaseModel):
+    """The customer's confirmation that new trades may start again after a total loss stop (or that the reference value should be taken afresh)."""
+
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def _must_confirm(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("confirm must be true - this endpoint only does something when you confirm")
+        return v
 
 
 class LiveBypassRequest(BaseModel):
@@ -261,6 +279,12 @@ class AccountOut(BaseModel):
     # The customer's leverage number as the bot reads it (3 when never set, never above the limit) and the highest number they may choose.
     max_leverage: int = 3
     max_leverage_limit: int = 5
+    # The highest risk per trade a customer may choose right now (RISK_PCT_MAX, code ceiling 40) and the total loss stop state (docs/safety/risk_per_trade.md).
+    risk_pct_limit: float = 2.0
+    total_loss_stop_enabled: bool = False
+    total_loss_stop_active: bool = False
+    total_loss_stop_threshold_pct: float = 10.0
+    total_loss_reference_equity: float | None = None
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so

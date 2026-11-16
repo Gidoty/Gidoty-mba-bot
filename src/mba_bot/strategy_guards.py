@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from . import protection_guard as pg
 from .config import Settings
-from .multi_trade import EMA_STRATEGY_ID
+from .multi_trade import EMA_STRATEGY_ID, configured_cap, open_risk_cap
 from .donchian import STRATEGY_ID as DONCHIAN_ID
 from .rsi_mr import STRATEGY_ID as RSI_ID
 from .models import NON_TERMINAL_TRADE_STATUSES, TRADE_CLOSED, StrategyPause, Trade
@@ -250,8 +250,11 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
         n_open, open_risk = open_position_numbers(session, account.id, account.risk_pct)
         new_risk = (min(account.risk_pct, settings.rsi_mr_risk_pct) if rsi else
                     min(account.risk_pct, settings.donchian_risk_pct) if don else account.risk_pct)
+        # The cap on total open risk grows with the account's own risk setting: max(MAX_TOTAL_RISK_PCT, risk x the positions the account may hold), never above 100 (risk_limits.py).
+        # A LIVE account holds one position, a paper account up to MAX_OPEN_POSITIONS (at most 3). 0 keeps meaning "no cap".
+        slots = 1 if not is_paper else configured_cap(settings.max_open_positions)
         h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=new_risk,
-                          max_positions=settings.max_open_positions, max_total_risk_pct=settings.max_total_risk_pct)
+                          max_positions=settings.max_open_positions, max_total_risk_pct=open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots))
         if h:
             hits.append(h)
 

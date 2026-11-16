@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import BrandLogo from "../components/BrandLogo.jsx";
 import HelpTip from "../components/HelpTip.jsx";
+import RiskPctField, { acksComplete, riskFieldProblem } from "../components/RiskPctField.jsx";
 import { PAIRS, UPCOMING_PAIRS } from "../constants.js";
 import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
@@ -44,6 +45,11 @@ function AccountForm({ onLogout, onCreated }) {
   const [pair, setPair] = useState(PAIRS[0]);
   const [marketType, setMarketType] = useState("spot");
   const [riskPct, setRiskPct] = useState("1");
+  const [acks, setAcks] = useState({});
+  const [riskLimit, setRiskLimit] = useState(2); // the highest value the server allows right now; read below, 2 until then
+  useEffect(() => {
+    api.get("/account/risk-limits").then((r) => setRiskLimit(r.risk_pct_limit || 2)).catch(() => {});
+  }, []);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const { pairs: pairOptions, loaded: pairsLoaded } = usePairs(marketType);
@@ -65,6 +71,8 @@ function AccountForm({ onLogout, onCreated }) {
         market_type: marketType,
         notification_channel: "telegram",
         risk_pct: riskPct ? Number(riskPct) : undefined,
+        acknowledge_high_risk: !!acks.high,
+        acknowledge_very_high_risk: !!acks.very_high,
       });
       onCreated();
     } catch (err) {
@@ -117,22 +125,7 @@ function AccountForm({ onLogout, onCreated }) {
           </select>
         </label>
 
-        <label className="block">
-          <span className="text-sm font-medium text-fg">
-            Risk per trade (%)
-            <HelpTip text="How much of your balance the bot risks on a single trade before its stop-loss triggers. Lower means smaller, steadier moves; higher means bigger swings, up and down. Kept at 2% or less either way." />
-          </span>
-          <input
-            type="number"
-            min="0.1"
-            max="2"
-            step="0.1"
-            value={riskPct}
-            onChange={(e) => setRiskPct(e.target.value)}
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm"
-          />
-          <span className="mt-1 block text-xs text-muted">Capped at 2% of your account balance per trade.</span>
-        </label>
+        <RiskPctField value={riskPct} onChange={setRiskPct} limit={riskLimit} acks={acks} onAcksChange={setAcks} />
 
         <div className="rounded-md bg-brand-soft border border-accent/20 px-3 py-2 text-xs text-fg">
           Your account starts in an unlimited practice environment - no real money is involved, and no Binance
@@ -144,7 +137,7 @@ function AccountForm({ onLogout, onCreated }) {
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || riskFieldProblem(riskPct, riskLimit) !== null || !acksComplete(riskPct, acks)}
           className="w-full rounded-md bg-brand px-4 py-2 font-medium text-brand-ink hover:brightness-105 disabled:opacity-60"
         >
           {submitting ? "Creating..." : "Continue"}

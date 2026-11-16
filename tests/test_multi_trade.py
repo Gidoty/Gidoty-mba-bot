@@ -401,11 +401,27 @@ def test_a_lower_grade_never_closes_a_trade_and_only_blocks_new_entries(db, monk
     assert len(pairs_open(aid)) == 3
 
 
-def test_total_open_risk_is_capped_by_max_total_risk_pct(db, monkeypatch):
-    st, client, aid = multi_setup(db, monkeypatch, max_total_risk_pct=2.0)  # 1% risk per trade: a third would make 3%
+def test_total_open_risk_cap_grows_with_the_risk_setting_and_the_slots(db, monkeypatch):
+    # B1c (owner decision): the cap is max(MAX_TOTAL_RISK_PCT, risk x the positions allowed), so three slots at 1% risk allow three trades even with MAX_TOTAL_RISK_PCT at 2.0.
+    # (Before B1c this test expected two: 1% x 3 = 3% was over a 2% cap.)
+    st, client, aid = multi_setup(db, monkeypatch, max_total_risk_pct=2.0)
     for _ in range(5):
         run_cycle(aid, st)
-    assert len(pairs_open(aid)) == 2
+    assert len(pairs_open(aid)) == 3
+    assert mt.open_risk_cap(2.0, 1.0, 3) == 3.0
+
+
+def test_the_open_risk_cap_formula_and_where_it_still_bites():
+    cap = mt.open_risk_cap
+    assert cap(2.0, 1.0, 1) == 2.0 and cap(2.0, 1.0, 2) == 2.0 and cap(2.0, 1.0, 3) == 3.0 and cap(2.0, 10.0, 3) == 30.0 and cap(2.0, 40.0, 3) == 100.0  # never above 100
+    assert cap(5.0, 1.0, 3) == 5.0  # a higher MAX_TOTAL_RISK_PCT still wins
+    assert cap(0.0, 40.0, 3) == 0.0 and cap(-1.0, 1.0, 3) == 0.0  # 0 keeps meaning "no cap"
+    assert cap(2.0, 1.0, 0) == 2.0 and cap(2.0, 0.0, 3) == 2.0 and cap(2.0, float("nan"), 3) == 2.0 and cap(float("nan"), 1.0, 3) == 0.0  # bad input falls back
+    from mba_bot.strategy_guard_rules import portfolio_hit
+
+    # the cap still refuses when the open risk is above nominal (a fill worse than planned): 4.5 open + 1.0 new against max(5.0, 3) = 5.0
+    assert portfolio_hit(open_positions=2, open_risk_pct=4.5, new_risk_pct=1.0, max_positions=0, max_total_risk_pct=cap(5.0, 1.0, 3)) is not None
+    assert portfolio_hit(open_positions=2, open_risk_pct=2.0, new_risk_pct=1.0, max_positions=0, max_total_risk_pct=cap(5.0, 1.0, 3)) is None
 
 
 def test_a_third_trade_is_skipped_when_free_capital_is_short_and_the_reason_is_logged(db, monkeypatch, caplog):
