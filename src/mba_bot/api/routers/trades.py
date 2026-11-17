@@ -20,15 +20,19 @@ def _account_or_404(customer: Customer):
     return customer.account
 
 
-def _filter_is_paper(trades: list[Trade], is_paper: bool | None) -> list[Trade]:
+def _filter_is_paper(trades: list[Trade], is_paper: bool | None, is_demo: bool | None = None) -> list[Trade]:
+    """Paper, demo and live records are never mixed: is_demo=true gives the demo trades only; is_paper=false (the Live screens) excludes demo trades; is_paper=true never includes them."""
+    if is_demo:
+        return [t for t in trades if t.is_demo]
     if is_paper is None:
         return trades
-    return [t for t in trades if t.is_paper == is_paper]
+    return [t for t in trades if t.is_paper == is_paper and not (not is_paper and t.is_demo)]
 
 
 @router.get("", response_model=list[TradeOut])
 def list_trades(
     is_paper: bool | None = None,
+    is_demo: bool | None = None,
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ) -> list[TradeOut]:
@@ -36,7 +40,7 @@ def list_trades(
     keeps getting every trade, same as before this filter existed - the
     Testnet and Live pages are the only callers that need to pass it."""
     account = _account_or_404(customer)
-    return _filter_is_paper(list_trades_for_account(db, account.id), is_paper)
+    return _filter_is_paper(list_trades_for_account(db, account.id), is_paper, is_demo)
 
 
 def _pnl_since(closed_trades: list[Trade], *, cutoff: datetime | None) -> float:
@@ -56,6 +60,7 @@ def _pnl_since(closed_trades: list[Trade], *, cutoff: datetime | None) -> float:
 @router.get("/summary", response_model=TradesSummaryOut)
 def trades_summary(
     is_paper: bool | None = None,
+    is_demo: bool | None = None,
     customer: Customer = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ) -> TradesSummaryOut:
@@ -65,7 +70,7 @@ def trades_summary(
     Dashboard always passes `is_paper=false`. Omitting it (no existing
     caller does) falls back to the old unscoped behaviour."""
     account = _account_or_404(customer)
-    trades = _filter_is_paper(list_trades_for_account(db, account.id), is_paper)
+    trades = _filter_is_paper(list_trades_for_account(db, account.id), is_paper, is_demo)
     closed = [t for t in trades if t.status == "closed"]
     open_ = [t for t in trades if t.status in NON_TERMINAL_TRADE_STATUSES]
     net_pnl = sum(t.pnl or 0.0 for t in closed)

@@ -306,7 +306,7 @@ def test_the_migration_is_additive_idempotent_and_reversible(tmp_path, monkeypat
     before = cols()
     assert "account_total_loss_stops" not in eng().get_table_names()
     command.upgrade(cfg, "head")
-    daily = {"daily_loss_limit_usd", "daily_loss_limit_pending_usd", "daily_loss_limit_pending_from", "daily_loss_limit_is_default"}  # the later daily limit migration
+    daily = {"daily_loss_limit_usd", "daily_loss_limit_pending_usd", "daily_loss_limit_pending_from", "daily_loss_limit_is_default", "demo_enabled_at"}  # the later daily limit and demo runner migrations
     assert cols() == before | {"loss_reference_equity", "loss_reference_at"} | daily and "account_total_loss_stops" in eng().get_table_names()
     command.upgrade(cfg, "head")
     command.downgrade(cfg, "b9e3d7a2c5f1")
@@ -319,4 +319,4 @@ def test_the_head_is_the_new_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["f4c7d9b2a6e1"]  # (the head moved on with the daily loss limit)
+    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["a6e2c4f8b1d3"]  # (the head moved on with the daily loss limit)

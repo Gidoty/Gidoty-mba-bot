@@ -109,9 +109,14 @@ class LiveContext:
     # Set by establish_protection when it gives up: "structural" | "transient" | "other" (see classify_protection_failure)
     protection_failure_kind: str | None = None
     protection_failure_detail: str | None = None
+    is_demo: bool = False  # DEMO mode: the trade is recorded as a demo trade and every message says DEMO, never LIVE
 
 
 # --- ids / small helpers --------------------------------------------------------
+
+
+def _mode_tag(ctx) -> str:
+    return "DEMO" if getattr(ctx, "is_demo", False) else "LIVE"
 
 
 def client_id(trade: Trade, role: str, attempt: int = 0) -> str:
@@ -265,6 +270,7 @@ async def open_live_trade(
         account_id=account.id,
         side=side,
         is_paper=False,
+        is_demo=ctx.is_demo,
         strategy_id=EMA_STRATEGY_ID,
         entry_price=signal_price,
         quantity=quantity,
@@ -516,7 +522,7 @@ async def _protect_or_emergency(
             closed_at=ctx.now, close_reason="dust_unprotectable", exit_price=trade.entry_price, pnl=0.0,
             protection_status=PROTECTION_CANCELLED,
         )
-        await _notify(ctx, "[LIVE] A tiny partial fill was below Binance's minimum tradable size, so no stop could be placed on it. No trade is open.")
+        await _notify(ctx, f"[{_mode_tag(ctx)}] A tiny partial fill was below Binance's minimum tradable size, so no stop could be placed on it. No trade is open.")
         return trade
 
     outcome = await establish_protection(ctx, trade)
@@ -526,7 +532,7 @@ async def _protect_or_emergency(
         if announce_entry:
             await _notify(
                 ctx,
-                f"[LIVE] Entered {trade.side.upper()} {_pair(ctx, trade)}\n"
+                f"[{_mode_tag(ctx)}] Entered {trade.side.upper()} {_pair(ctx, trade)}\n"
                 f"Entry: {trade.entry_price:.4f}  Qty: {trade.quantity:.6f}  Stop: {trade.stop_loss_price:.4f} "
                 f"(resting at Binance)\n{risk_text}".rstrip(),
             )
@@ -602,7 +608,7 @@ async def emergency_close(
         why = why or "Binance would not accept the protective stop for this trade"
         await _notify(
             ctx,
-            f"[LIVE] Safety exit on {_pair(ctx, trade)}: {why}, "
+            f"[{_mode_tag(ctx)}] Safety exit on {_pair(ctx, trade)}: {why}, "
             f"so the bot closed the position immediately instead of leaving it unprotected.\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
@@ -710,7 +716,7 @@ async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str
         label = "stop-loss triggered at Binance" if reason == "exchange_stop_triggered" else "closed on Binance"
         await _notify(
             ctx,
-            f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
+            f"[{_mode_tag(ctx)}] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
         if was_attention:
@@ -851,7 +857,7 @@ async def _record_exit(
         }.get(reason, "closed")
         await _notify(
             ctx,
-            f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
+            f"[{_mode_tag(ctx)}] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
     if was_attention:

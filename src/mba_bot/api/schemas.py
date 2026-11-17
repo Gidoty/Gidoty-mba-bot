@@ -144,6 +144,25 @@ class CredentialUpdateRequest(BaseModel):
         return _validate_choice(v, CREDENTIAL_ENVIRONMENTS, "environment")
 
 
+class DemoCredentialsRequest(BaseModel):
+    """Keys created on Binance's DEMO system (Futures Demo Trading for a Futures account, Spot Testnet for a Spot account). Never a live key."""
+
+    api_key: str = Field(min_length=1)
+    api_secret: str = Field(min_length=1)
+
+
+class DemoModeRequest(BaseModel):
+    enabled: bool
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def _must_confirm(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("confirm must be true - this endpoint only does something when you confirm")
+        return v
+
+
 PAIR_SELECTION_MODES = ("manual", "auto")
 
 
@@ -314,6 +333,10 @@ class AccountOut(BaseModel):
     # SMALL_CAPITAL_PAIRS: set while the bot has recently skipped the account's own pair because its capital cannot meet the pair's smallest order (a plain text and the capital needed).
     pair_skip_message: str | None = None
     pair_skip_min_capital: float | None = None
+    # DEMO mode (DEMO_RUNNER): `demo_available` says the service offers it, `demo_has_keys` that demo keys are on file, `demo_enabled_at` that the customer switched it on (then `mode` is "demo").
+    demo_available: bool = False
+    demo_has_keys: bool = False
+    demo_enabled_at: datetime | None = None
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so
@@ -353,6 +376,8 @@ class TradeOut(BaseModel):
     # strategy_id means ema_cross_atr_v1.
     pair: str | None = None
     strategy_id: str | None = None
+    # True for a DEMO trade (the demo runner). Live and paper screens exclude these.
+    is_demo: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -145,6 +145,9 @@ class TradingAccount(Base):
     # gate still blocks LIVE regardless), but there is no reason to
     # leave it lying around.
     bot_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # DEMO mode (DEMO_RUNNER, docs/safety/demo_runner.md): set by the customer's explicit action when separate demo keys are on file. Runs the full live path against Binance Futures Demo
+    # Trading or Spot Testnet. Never set together with live trading; never mixed with live or paper records (trades.is_demo).
+    demo_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # How much of the customer's available Binance balance the bot may
     # use as its capital base for position sizing - NOT a transfer, the
@@ -192,6 +195,7 @@ class TradingAccount(Base):
 
     customer: Mapped["Customer"] = relationship(back_populates="account")
     credential: Mapped["ApiCredential"] = relationship(back_populates="account", uselist=False, cascade="all, delete-orphan")
+    demo_credential: Mapped["DemoCredential | None"] = relationship(uselist=False, cascade="all, delete-orphan")
     trades: Mapped[list["Trade"]] = relationship(back_populates="account", cascade="all, delete-orphan")
 
     @property
@@ -334,6 +338,8 @@ class Trade(Base):
 
     side: Mapped[str] = mapped_column(String(10), nullable=False)  # "long" | "short"
     is_paper: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # True for a trade placed in DEMO mode (real orders on Binance Demo Trading / Spot Testnet with the customer's own demo keys). Always False for live and paper. Live screens and figures exclude it.
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
@@ -549,6 +555,19 @@ class AccountLossPause(Base):
     limit_pct: Mapped[float] = mapped_column(Float, nullable=False)  # the limit as a percent of the day-start value (for the dollar limit: limit_usd / start_equity)
     limit_usd: Mapped[float | None] = mapped_column(Float, nullable=True)  # the dollar amount that was in force when the pause was written (NULL on rows from the old percent rule)
     timezone_name: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class DemoCredential(Base):
+    """The customer's DEMO keys (Binance Futures Demo Trading or Spot Testnet), kept apart from `api_credentials` so a demo key can never be read as a live one and a live key never as a demo one.
+    Encrypted at rest like every other credential. Used only when the account is in DEMO mode, always against the demo endpoint."""
+
+    __tablename__ = "demo_credentials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(ForeignKey("trading_accounts.id"), nullable=False, unique=True)
+    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_api_secret: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class PairSkip(Base):

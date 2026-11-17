@@ -18,6 +18,7 @@ import Landing from "./pages/Landing.jsx";
 import LegalPage from "./pages/LegalPage.jsx";
 import Login from "./pages/Login.jsx";
 import DailyLimitNotice from "./components/DailyLimitNotice.jsx";
+import DemoBanner from "./components/DemoBanner.jsx";
 import PairSkipNotice from "./components/PairSkipNotice.jsx";
 import Notifications from "./pages/Notifications.jsx";
 import Onboarding from "./pages/Onboarding.jsx";
@@ -164,6 +165,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
     <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code}>
       {needsTelegram && route !== "notifications" && <TelegramLinkBanner />}
       <BillingNoticeBanner />
+      <DemoBanner account={account} />
       {Page ? (
         <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} />
       ) : (

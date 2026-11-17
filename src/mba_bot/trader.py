@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -116,8 +116,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         has_mainnet_credential=account.has_mainnet_credential,
         bot_started_at=account.bot_started_at,
         now=now,
+        demo_enabled=demo_module.available(account, settings),
     )
     is_paper = trial_state.mode == TradingMode.PAPER
+    is_demo = trial_state.mode == TradingMode.DEMO  # real orders on the demo system with the customer's own demo keys; never real money
 
     if not is_paper:
         # Visibility only (a forgotten kill switch must not stay on silently): one journal line per repeat window while
@@ -126,7 +128,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         if ks.engaged or ks.attempts > 1:
             kill_switch.log_decision(ks, scope=account.id, now=now, repeat_hours=settings.protection_alert_repeat_hours)
 
-    if not is_paper and account.live_notified_at is None:
+    if not is_paper and not is_demo and account.live_notified_at is None:
         account.live_notified_at = now
         await _notify_safe(
             notifier,
@@ -152,13 +154,14 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     open_trade = open_trades[0] if open_trades else None
     # With more than one open trade (a paper multi-trade account, or an unexpected live pair) the client is a live one if ANY is live.
     effective_is_paper = all(t.is_paper for t in open_trades) if open_trades else is_paper
+    effective_is_demo = any(t.is_demo for t in open_trades) if open_trades else is_demo
 
-    api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper)
+    api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper, is_demo=effective_is_demo)
     if api_key is None:
         logger.warning(
             "account %s has no usable credentials for mode=%s, skipping",
             account.id,
-            "paper" if effective_is_paper else "live",
+            "demo" if effective_is_demo else "paper" if effective_is_paper else "live",
         )
         await _record_error(notifier, account, "No usable trading credentials are configured for this account.", now=now)
         return
@@ -168,7 +171,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         market_type=account.market_type,
         api_key=api_key,
         api_secret=api_secret,
-        sandbox=effective_is_paper,
+        sandbox=effective_is_paper or effective_is_demo,  # a demo client is proven (exchange.assert_routing) to route only to the demo system
     )
     try:
         # Withdrawal permission is checked every cycle for a live key, but it
@@ -178,7 +181,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         # risk reduction only - that path runs on a venue that cannot place
         # an entry at all.
         withdrawal_detected = False
-        if not effective_is_paper:
+        if not effective_is_paper and not effective_is_demo:
             withdrawal_detected = await exchange.has_withdrawal_permission(client)
             if withdrawal_detected:
                 await _flag_withdrawal_block(session, account, notifier, now=now)
@@ -194,7 +197,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             # any market data is needed: restart recovery, a stop that
             # fired while we were offline, an unprotected or unresolved
             # state all get handled here, whatever the strategy says.
-            open_trade, ctx = await _manage_live_trade(session, account, client, open_trade, settings, notifier, now=now)
+            open_trade, ctx = await _manage_live_trade(session, account, client, open_trade, settings, notifier, now=now, is_demo=effective_is_demo)
             account.last_error = None
             account.last_error_at = None
             if open_trade.status != TRADE_OPEN or open_trade.protection_status != PROTECTION_PROTECTED:
@@ -319,7 +322,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 pass  # a closed-candle crossover that is too old to enter at a fair price; logged once per candle
             else:
                 await _maybe_enter(
-                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx
+                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
                 )
         else:
             # Only a PAPER trade reaches here: live trades returned above.
@@ -340,7 +343,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         try:
             # The equity sample and the daily loss pause run on EVERY normal end of a live cycle, whichever `return` it took. Not after an exception
             # (the exchange is probably unreachable and the cycle's own error handling has already run).
-            if not effective_is_paper and sys.exc_info()[0] is None:
+            if not effective_is_paper and not effective_is_demo and sys.exc_info()[0] is None:  # the equity samples and loss limits are the live account's; demo money must not mix into them
                 await _account_equity_tick(session, account, client, settings, notifier, now=now)
                 await _foreign_order_check(session, account, client, settings, notifier, now=now)
         finally:
@@ -790,7 +793,9 @@ def _precheck_message(account: TradingAccount, check: StopViability, leverage: f
     return "the stop-safety check could not be completed from the available data, so no trade was opened."
 
 
-def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool) -> tuple[str | None, str | None]:
+def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool, is_demo: bool = False) -> tuple[str | None, str | None]:
+    if is_demo:
+        return demo_module.credentials(account, settings)  # the customer's own demo keys, never the live credential
     if is_paper:
         # Spot Testnet and Futures Demo Trading are separate Binance systems
         # with separate key registrations - a key from one is not valid on
@@ -963,7 +968,7 @@ def _note_scan(scan_out: dict, scanned: list, ranked: list, settings: Settings) 
         pass
 
 
-async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None):
+async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None, is_demo=False):
     pair = pair or account.pair  # a multi-trade paper account enters on the pair it scanned; every other caller passes none
     is_rsi = isinstance(signal, rsi_mr.RsiSignal)
     is_don = isinstance(signal, donchian.DonchianSignal)
@@ -1000,7 +1005,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
 
     if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
         return
-    if not is_paper and await _account_loss_blocks(session, account, client, settings, notifier, _tlog, now=now):
+    if not is_paper and not is_demo and await _account_loss_blocks(session, account, client, settings, notifier, _tlog, now=now):
         return  # account-wide daily loss pause: no NEW live entry today; open trades keep their stops and exits
 
     if pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
@@ -1084,7 +1089,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 await _block_entry(notifier, account, settings, hit.reason_code, _limit_message(account, hit), now=now)
                 return
         try:
-            await exchange.assert_trade_only(client)
+            if not is_demo:  # demo keys are not real keys: the withdrawal-permission read (a production-only endpoint) is skipped for them, never for live
+                await exchange.assert_trade_only(client)
         except exchange.WithdrawalPermissionDetected:
             _tlog(telemetry.REJECTED, telemetry.R_WITHDRAWAL_DETECTED)
             await _flag_withdrawal_block(session, account, notifier, now=now)
@@ -1152,7 +1158,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             entries_allowed=True,  # the ONLY place: assert_trade_only just passed above
         )
         ctx = lifecycle.LiveContext(
-            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now
+            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo
         )
         try:
             await venue.prepare()
@@ -1754,7 +1760,7 @@ async def _flag_withdrawal_block(session, account, notifier, *, now) -> None:
             logger.exception("account %s: failed to send the withdrawal-permission alert", account.id)
 
 
-async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now):
+async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now, is_demo: bool = False):
     """Verify the exchange can be managed safely, then reconcile `trade`
     against Binance. Returns (trade, LiveContext)."""
     venue = build_venue(
@@ -1763,7 +1769,7 @@ async def _manage_live_trade(session, account, client, trade: Trade, settings, n
         pair=trade.pair or account.pair,
         spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
     )
-    ctx = lifecycle.LiveContext(session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now)
+    ctx = lifecycle.LiveContext(session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo or bool(trade.is_demo))
     try:
         await venue.prepare(managing=True)
     except (exchange.UnsupportedAccountMode, exchange.UnsupportedSymbol, ProtectionUnavailable):

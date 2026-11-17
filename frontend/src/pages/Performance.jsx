@@ -19,10 +19,11 @@ const RANGES = [
 
 export default function Performance() {
   const { account } = useAccount();
-  const isPaper = account.mode !== "live";
+  const isDemo = account.mode === "demo";
+  const isPaper = account.mode !== "live" && !isDemo;
   const L = pnlLabels(account, { paper: isPaper });
   const unit = quoteCurrency(account) || "USDT";
-  const { status, trades, reload } = useTrades(isPaper, account.id);
+  const { status, trades, reload } = useTrades(isPaper, account.id, isDemo);
   const [range, setRange] = useState("all");
   const days = range === "all" ? null : Number(range);
 
@@ -35,7 +36,7 @@ export default function Performance() {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Performance" subtitle={isPaper ? "Based on practice trades (simulated)." : "Based on real trades."}>
+      <PageHeader title="Performance" subtitle={isDemo ? "DEMO: based on demo trades. No real money." : isPaper ? "Based on practice trades (simulated)." : "Based on real trades."}>
         <Seg label="Range" value={range} onChange={setRange} options={RANGES} />
       </PageHeader>
       <UnprovenNotice paper={isPaper} closedCount={status === "ready" ? allClosed.length : null} />

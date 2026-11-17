@@ -48,6 +48,7 @@ LIVE_TRADING_ACTIVATION_DISCLOSURE = (
 class TradingMode(Enum):
     PAPER = "paper"
     LIVE = "live"
+    DEMO = "demo"  # real orders on Binance Demo Trading / Spot Testnet with the customer's own demo keys (DEMO_RUNNER); never real money
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ def resolve_trading_mode(
     has_mainnet_credential: bool,
     bot_started_at: datetime | None,
     now: datetime | None = None,
+    demo_enabled: bool = False,
 ) -> TrialState:
     """The single source of truth for "is this account allowed to place
     real orders right now". Fails safe: any ambiguity resolves to PAPER,
@@ -169,6 +171,11 @@ def resolve_trading_mode(
 
     if not has_paid:
         return paper
+
+    if demo_enabled and live_trading_enabled_at is None and bot_started_at is None:
+        # DEMO needs the caller to have checked the switch, the demo keys and the customer's explicit demo action; it never coexists with an enabled live account (ambiguity falls through to the
+        # ordinary chain, which resolves to PAPER or LIVE exactly as before).
+        return TrialState(mode=TradingMode.DEMO, trial_ends_at=trial_ends_at, bypassed=bypassed, bypass_accepted_at=live_bypass_accepted_at)
 
     if not is_live_eligible(trial_ends_at=trial_ends_at, live_bypass_accepted_at=live_bypass_accepted_at, now=now):
         return paper

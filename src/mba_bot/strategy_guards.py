@@ -93,7 +93,7 @@ def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps
                    strategy_id: str | None = None, pair: str | None = None, costs=None) -> list[Result]:
     """This account's closed STRATEGY trades in this mode, newest first, incident trades excluded. With `strategy_id` only that strategy's
     trades count (an empty strategy_id on a row means ema_cross_atr_v1); with `pair` only that pair's. Without either: every trade, as before."""
-    q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.closed_at.isnot(None))
+    q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.is_demo.is_(False), Trade.closed_at.isnot(None))
     if strategy_id is not None:
         q = q.where(or_(Trade.strategy_id.is_(None), Trade.strategy_id == "", Trade.strategy_id == EMA_STRATEGY_ID) if strategy_id == EMA_STRATEGY_ID
                     else Trade.strategy_id == strategy_id)

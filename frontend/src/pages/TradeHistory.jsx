@@ -15,10 +15,11 @@ const price = (v) => (v === null || v === undefined ? "-" : fmtPrice(v, priceDec
 
 export default function TradeHistory() {
   const { account } = useAccount();
-  const isPaper = account.mode !== "live";
+  const isDemo = account.mode === "demo";
+  const isPaper = account.mode !== "live" && !isDemo;
   const L = pnlLabels(account, { paper: isPaper });
   const unit = quoteCurrency(account) || "USDT";
-  const { status, trades, reload } = useTrades(isPaper, account.id);
+  const { status, trades, reload } = useTrades(isPaper, account.id, isDemo);
   const [filter, setFilter] = useState("all");
   const [pages, setPages] = useState(1);
 
@@ -36,7 +37,7 @@ export default function TradeHistory() {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Trade History" subtitle={isPaper ? "Completed practice trades (simulated)." : "Completed trades using real funds."} />
+      <PageHeader title="Trade History" subtitle={isDemo ? "DEMO: completed trades on Binance's demo system. No real money." : isPaper ? "Completed practice trades (simulated)." : "Completed trades using real funds."} />
       <UnprovenNotice paper={isPaper} closedCount={status === "ready" ? stats.n : null} />
       {status === "ready" && stats.n > 0 && isThin(stats.n) && <ThinNotice closedCount={stats.n} />}
       {L.caption && <p className="-mt-2 text-xs text-muted">{L.caption}</p>}

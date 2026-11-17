@@ -10,19 +10,19 @@ import { Badge, Card, CardTitle, ErrorBanner, LoadingBlock, PageHeader, PnlText,
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
 
-export default function LiveDashboard({ account }) {
+export default function LiveDashboard({ account, demo = false }) {
   const L = pnlLabels(account, { paper: false });
   const unit = quoteCurrency(account) || "USDT";
   const [balance, setBalance] = useState(undefined); // undefined = loading, null = unavailable
   const [summary, setSummary] = useState(null);
   const [position, setPosition] = useState(undefined);
-  const { status, trades, reload } = useTrades(false, account.id);
+  const { status, trades, reload } = useTrades(false, account.id, demo);
 
   useEffect(() => {
     api.get("/account/balance").then(setBalance).catch(() => setBalance(null));
-    api.get("/trades/summary?is_paper=false").then(setSummary).catch(() => {});
+    api.get(demo ? "/trades/summary?is_demo=true" : "/trades/summary?is_paper=false").then(setSummary).catch(() => {});
     api.get("/account/position").then(setPosition).catch(() => setPosition(null));
-  }, [account.id]);
+  }, [account.id, demo]);
 
   const closed = useMemo(() => closedTrades(trades), [trades]);
   const stats = useMemo(() => summarize(closed), [closed]);
@@ -31,7 +31,7 @@ export default function LiveDashboard({ account }) {
   return (
     <div className="grid gap-4">
       <PageHeader title="Dashboard" subtitle={`${account.pair} · ${account.market_type}`}>
-        <Badge tone="red">LIVE</Badge>
+        <Badge tone={demo ? "amber" : "red"}>{demo ? "DEMO" : "LIVE"}</Badge>
       </PageHeader>
 
       <UnprovenNotice closedCount={status === "ready" ? stats.n : null} />
