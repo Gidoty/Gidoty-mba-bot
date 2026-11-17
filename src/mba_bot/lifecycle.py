@@ -42,7 +42,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import kill_switch, pnl_labels
+from . import kill_switch, pnl_labels, protection_guard
 from . import venue as venue_mod
 from .config import Settings
 from .multi_trade import EMA_STRATEGY_ID
@@ -276,6 +276,7 @@ async def open_live_trade(
         entry_price=signal_price,
         quantity=quantity,
         stop_loss_price=stop,
+        initial_stop_price=stop,
         status=TRADE_PENDING,
         opened_at=ctx.now,
         pair=account.pair,
@@ -856,6 +857,8 @@ async def _record_exit(
             "stop_limit_gap": "stop-loss",
             "crossover_exit": "crossover exit",
             "profit_target": "profit target",
+            "channel_exit": "channel exit",
+            "trailing_stop": "trailing stop",
             "rsi_exit": "RSI back to 50",
             "time_stop": "time stop",
         }.get(reason, "closed")
@@ -867,6 +870,59 @@ async def _record_exit(
     if was_attention:
         await _clear_attention(ctx, trade)
     return "closed"
+
+
+async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_price: float) -> str:
+    """Move a live trade's protective stop to `new_stop` (docs/safety/live_donchian.md). It only ever moves in the FAVOURABLE direction (up for a long, down for a short) and stays on the losing side
+    of the current price. The position is never without a stop: the NEW stop is placed first and read back resting, only then does the trade record it, and only then is the OLD one cancelled. If
+    placing or verifying the new stop fails, the old stop is untouched, the trade stays open and protected, and the customer is told once. Returns 'moved', 'kept' (a move was tried and failed),
+    'skipped' (nothing to do or not allowed) or 'busy' (another worker changed the trade). Never gated by the kill switch (it reduces risk) and never places an entry."""
+    venue, session = ctx.venue, ctx.session
+    if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not trade.protection_attempt:
+        return "skipped"
+    try:
+        stop = venue.round_stop(new_stop, side=trade.side)
+    except Exception:  # noqa: BLE001
+        return "skipped"
+    long_side = trade.side == "long"
+    if not (stop > trade.stop_loss_price if long_side else stop < trade.stop_loss_price):
+        return "skipped"  # never loosened, never the same level
+    if not (stop < current_price if long_side else stop > current_price):
+        return "skipped"  # it must stay on the losing side of the price, or it would trigger at once
+    old_attempt, old_kind = trade.protection_attempt, trade.protective_kind
+    old_cid = client_id(trade, "stop", old_attempt)
+    new_cid = client_id(trade, "stop", old_attempt + 1)
+    try:
+        await venue.protection_precheck(side=trade.side, stop_price=stop)
+        placed = await venue.place_protection(side=trade.side, quantity=trade.quantity, stop_price=stop, client_id=new_cid, entry_price=trade.entry_price)
+        verified = await venue.get_protection(kind=placed.kind, client_id=new_cid)
+        if verified is None or not verified.is_resting:
+            raise RuntimeError("the new protective order is not resting")
+    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the old stop stays
+        logger.warning("account %s: trailing stop move to %.4f failed (%s); the existing stop stays", ctx.account.id, stop, type(exc).__name__)
+        try:  # an order that may have been placed but not verified must not be left to add a second, unrecorded stop
+            await venue.cancel_by_client_id(new_cid, conditional=True)
+        except Exception:  # noqa: BLE001
+            pass
+        if protection_guard.should_alert(ctx.account.id, trade.pair or ctx.account.pair, f"trail_failed:{trade.id}", now=ctx.now, repeat_hours=6.0):
+            await _notify(ctx, f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place.")
+        return "kept"
+    moved = _cas(
+        session, trade, (TRADE_OPEN,), TRADE_OPEN,
+        stop_loss_price=stop, protection_attempt=old_attempt + 1, protective_order_id=verified.order_id, protective_kind=verified.kind,
+        protective_limit_price=verified.limit_price, protection_verified_at=ctx.now,
+    )
+    if not moved:
+        try:
+            await venue.cancel_by_client_id(new_cid, conditional=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return "busy"
+    try:
+        await venue.cancel_protection(kind=old_kind, client_id=old_cid)  # reads the final state of the old stop
+    except Exception as exc:  # noqa: BLE001 - two stops resting is safe; the leftover is cleared when the trade closes
+        logger.warning("account %s: the previous protective stop could not be cancelled after a trailing move (%s); it is cleared when the trade closes", ctx.account.id, type(exc).__name__)
+    return "moved"
 
 
 # --- reconciliation -------------------------------------------------------------------

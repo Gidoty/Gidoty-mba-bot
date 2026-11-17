@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -221,13 +221,16 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             account.last_signal = signal.signal.value
             account.last_signal_at = now
             rsi_trade = multi_trade.strategy_of(open_trade) == rsi_mr.STRATEGY_ID
-            opposite_cross = not rsi_trade and (
+            don_trade = multi_trade.strategy_of(open_trade) == donchian.STRATEGY_ID
+            opposite_cross = not rsi_trade and not don_trade and (
                 (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
                     open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
             if rsi_trade and open_trade.status == TRADE_OPEN:
                 await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms)
+            if don_trade and open_trade.status == TRADE_OPEN:
+                await _live_donchian_manage(ctx, open_trade, client, settings, now_ms=now_ms, current_price=candles[-1].close)
             await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
             return
 
@@ -322,7 +325,13 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # reflects the pair actually just traded, never an
                 # intermediate scan result that didn't lead to a trade.
                 account.pair = scan_pair
-            if _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
+            don_took_it = False
+            if not is_paper and settings.live_donchian:
+                await _live_donchian_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # highest priority: Donchian, then EMA, then RSI
+                don_took_it = bool(list_open_trades(session, account.id))
+            if don_took_it:
+                pass  # the one live slot is taken; EMA and RSI wait for the next cycle
+            elif _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
                 pass  # a closed-candle crossover that is too old to enter at a fair price; logged once per candle
             else:
                 await _maybe_enter(
@@ -980,8 +989,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
     is_don = isinstance(signal, donchian.DonchianSignal)
     strategy_id = rsi_mr.STRATEGY_ID if is_rsi else (donchian.STRATEGY_ID if is_don else multi_trade.EMA_STRATEGY_ID)
     if is_don:
-        # donchian_breakout_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever DONCHIAN_PAPER_ONLY or any other setting says.
-        if (not is_paper or not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account)
+        # donchian_breakout_v1 is paper only unless LIVE_DONCHIAN is on (default off): then an opted-in LIVE or DEMO account may enter, with every guard an EMA entry has (docs/safety/live_donchian.md).
+        if ((not is_paper and not settings.live_donchian) or not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account)
                 or signal.side not in ("long", "short") or signal.stop is None):
             return
         if signal.side == "short" and account.market_type != "futures":
@@ -1658,6 +1667,59 @@ async def _manage_donchian_trade(session, account, trade: Trade, closed: list, s
 def _rsi_params(settings: Settings) -> rsi_mr.RsiParams:
     return rsi_mr.RsiParams(adx_max=settings.rsi_mr_adx_max, stop_atr=settings.rsi_mr_stop_atr, target_atr=settings.rsi_mr_target_atr,
                             time_stop_candles=settings.rsi_mr_time_stop_candles)
+
+
+async def _live_donchian_entry(session, account, client, settings: Settings, notifier, *, now, now_ms: int, is_demo: bool) -> None:
+    """LIVE_DONCHIAN only (default off). Looks for a Donchian breakout entry on the account's pair from CLOSED candles, only if the account is opted in (extra_strategies). The entry goes through
+    `_maybe_enter` exactly like an EMA entry (kill switch, daily dollar limit, 50% total stop, guards in enforce and the fee guard, pre-entry protection check, leverage cap, risk per trade, the protective
+    stop placed and verified right after the fill). Spot is long only."""
+    if not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account):
+        return
+    if list_open_trades(session, account.id):
+        return
+    tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(account.pair, account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    raw = candles_from_ohlcv(ohlcv)
+    closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+    if not raw or not closed:
+        return
+    sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=account.market_type == "futures")
+    if not sig.side:
+        return
+    age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+    if not 0 <= age_ms <= window_ms:
+        if protection_guard.should_alert(account.id, account.pair, f"stale:{donchian.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: donchian_breakout_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, account.pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return
+    await _maybe_enter(session, account, client, sig, raw[-1].close, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
+
+
+async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float) -> None:
+    """A live donchian_breakout_v1 trade: (1) a CLOSE beyond the opposite 10-candle channel exits through `lifecycle.execute_exit` (the only live exit path); (2) otherwise the protective stop is trailed
+    (`lifecycle.move_stop`: favourable direction only, new stop placed first, old one cancelled after, a failed move keeps the old stop). The initial stop and the trailing stop are exchange-side
+    stops; touching either inside the candles is left to the exchange and the software backstop. Runs whenever such a trade is open, whatever the switch says."""
+    tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    trade_pair = trade.pair or ctx.account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(trade_pair, ctx.account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
+    if not closed:
+        return
+    p = _donchian_params(settings)
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    opened_ms = int(opened.timestamp() * 1000)
+    initial = trade.initial_stop_price if trade.initial_stop_price else trade.stop_loss_price
+    ex = donchian.exit_check(side=trade.side, entry=trade.entry_price, stop=initial, opened_ms=opened_ms, closed=closed, tf_ms=tf_ms, p=p)
+    if ex is not None and ex.reason == donchian.EXIT_CHANNEL:
+        await lifecycle.execute_exit(ctx, trade, reason=ex.reason, price_hint=ex.price)
+        return
+    if ex is not None:
+        return  # the stop or the trailing stop was touched: the exchange-side stop owns that exit
+    level = donchian_trail.trailing_level(side=trade.side, entry=trade.entry_price, opened_ms=opened_ms, closed=closed, p=p)
+    if level is not None:
+        await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=current_price)
 
 
 async def _live_rsi_entry(session, account, client, settings: Settings, notifier, *, now, now_ms: int, is_demo: bool) -> None:

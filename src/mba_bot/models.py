@@ -340,6 +340,8 @@ class Trade(Base):
     is_paper: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # True for a trade placed in DEMO mode (real orders on Binance Demo Trading / Spot Testnet with the customer's own demo keys). Always False for live and paper. Live screens and figures exclude it.
     is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    # The stop the trade was opened with. `stop_loss_price` is where the protective stop rests now (a trailing stop moves it); strategies that judge exits from the entry read this one. NULL on older rows.
+    initial_stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)

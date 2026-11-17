@@ -27,7 +27,7 @@ KILL_SWITCH_REVISION = "e5b9c2d7f1a4"  # the kill switch tables
 SUBSCRIPTION_REVISION = "f6c3a9d1b8e2"  # subscription billing tables (Stage 0), on top of the kill switch
 TOKENS_REVISION = "a7d4e1c9b3f5"  # subscription_tokens (Stage 1)
 NOTICES_REVISION = "b8e5f2a0c4d6"  # billing_notices (customer reminders)
-LATEST_HEAD = "a6e2c4f8b1d3"  # head now also includes the demo runner columns and table (B4), on top of the pair_skips table f4c7d9b2a6e1 (B3)
+LATEST_HEAD = "b7f3d5a9c2e4"  # head now also includes trades.initial_stop_price (B5b), on top of the demo runner a6e2c4f8b1d3 (B4)
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -238,7 +238,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     assert script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"  # the fee columns (PR 2)
     assert script.get_revision("e3b6c8a1d5f2").down_revision == "d2a5b9c7e1f4"  # the customer daily loss limit
     assert script.get_revision("f4c7d9b2a6e1").down_revision == "e3b6c8a1d5f2"  # the pair skips (B3)
-    assert script.get_revision(LATEST_HEAD).down_revision == "f4c7d9b2a6e1"  # the demo runner (B4)
+    assert script.get_revision("a6e2c4f8b1d3").down_revision == "f4c7d9b2a6e1"  # the demo runner (B4)
+    assert script.get_revision(LATEST_HEAD).down_revision == "a6e2c4f8b1d3"  # the initial stop (B5b)
 
 
 # =========================== single-instance lock ===========================
