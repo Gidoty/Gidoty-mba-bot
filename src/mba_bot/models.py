@@ -246,7 +246,7 @@ class LegalAcceptance(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False)
-    document_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "terms" | "privacy" | "risk_disclosure"
+    document_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "terms" | "privacy" | "risk_disclosure" | "risk_ack_high" | "risk_ack_very_high" (the last two: risk_limits.py)
     version: Mapped[str] = mapped_column(String(20), nullable=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

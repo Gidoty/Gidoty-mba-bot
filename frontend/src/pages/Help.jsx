@@ -6,6 +6,7 @@ import { BINANCE_GUIDE_SUPPORT } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { GLOSSARY } from "../glossary.js";
 import { pnlLabels } from "../pnlLabels.js";
+import { RISK_HELP_TOPICS } from "../riskGuideText.js";
 
 const TOPICS = [
   { title: "What is Testnet?", body: GLOSSARY.testnet.long },
@@ -13,6 +14,7 @@ const TOPICS = [
     title: "How does automated trading work?",
     body: "The bot checks the market on a schedule and follows a fixed strategy - it does not guess, and it does not need your confirmation before every trade. You choose your pair, market, and risk level; the bot handles entries and exits within those settings.",
   },
+  ...RISK_HELP_TOPICS,
   { title: "What is Spot trading?", body: GLOSSARY.spot.long },
   { title: "What is Futures trading?", body: GLOSSARY.futures.long },
   { title: "What is a trading pair?", body: GLOSSARY.pair.long },
@@ -61,6 +63,10 @@ const GROUPS = {
   "What is Futures trading?": "Trading basics",
   "What is a trading pair?": "Trading basics",
   "What is P&L?": "Trading basics",
+  "How much can I risk on one trade?": "Risk and safety",
+  "What does the leverage setting do?": "Risk and safety",
+  "What can stop the bot from opening new trades?": "Risk and safety",
+  "Should I deposit or withdraw while the bot runs?": "Risk and safety",
   "What does Bot Active mean?": "Using the bot",
   "What does Scanning mean?": "Using the bot",
   "What is an open position?": "Using the bot",
@@ -69,7 +75,7 @@ const GROUPS = {
   "Managing your Binance connection": "Your account",
   "Moving between Testnet and Live": "Your account"
 };
-const GROUP_ORDER = ["Getting started", "Trading basics", "Using the bot", "Your account", "More"];
+const GROUP_ORDER = ["Getting started", "Trading basics", "Risk and safety", "Using the bot", "Your account", "More"];
 
 export default function Help() {
   const { account } = useAccount();
