@@ -38,6 +38,9 @@ export const LEVERAGE_HELP = {
 ],
 };
 
+// Shown under the "what Binance has for your pair" line when Auto Select is on (docs/customer/leverage_help.md, section 4).
+export const AUTO_SELECT_BINANCE_NOTE = "Auto Select is on: this line shows the pair saved on your account. The bot reads Binance's settings for each pair just before it trades it.";
+
 export const MARGIN_MODE_HELP = {
   title: "About margin mode",
   blocks: [

@@ -55,6 +55,8 @@ The dashboard shows one line under the Leverage control, read from Binance on re
 - "Not applicable: your account is in practice mode, so it does not use your Binance settings."
 - "Not applicable: leverage and margin mode apply to Futures only."
 
+When Auto Select is on, one more sentence is shown under the line: "Auto Select is on: this line shows the pair saved on your account. The bot reads Binance's settings for each pair just before it trades it."
+
 ## 5. For the reviewer
 Statements about how Binance behaves, which the bot's code does not prove and which need confirming on Binance by the owner (UNVERIFIED). None of them is shown to customers:
 - The exact names of the Leverage and Margin Mode controls on Binance's Futures page. The customer text only says to open the Futures page for the pair and look for the Leverage and Margin Mode settings.

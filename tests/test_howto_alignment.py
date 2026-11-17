@@ -53,7 +53,7 @@ def _step(js, title):
 
 
 def test_the_guide_numbers_match_the_code(js):
-    risk = _step(js, "Risk per trade")
+    risk = _step(js, "Choosing your risk")
     assert f"from {rl.RISK_MIN:g}% up to {rl.RISK_CEILING:g}% at most" in risk
     assert f"We recommend {rl.RISK_RECOMMENDED_MAX:g}% or less" in risk and f"Above {rl.RISK_RECOMMENDED_MAX:g}%" in risk and f"From {rl.RISK_VERY_HIGH_FROM:g}%" in risk
     lev = _step(js, "Leverage on Futures")
