@@ -21,8 +21,8 @@ from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
-from ... import account_loss, daily_limit, risk_limits, small_capital
-from ...models import ApiCredential, Customer, TradingAccount
+from ... import account_loss, daily_limit, demo as demo_module, live_multi, risk_limits, small_capital
+from ...models import ApiCredential, Customer, DemoCredential, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
     LIVE_TRADING_DISCLOSURE,
@@ -42,6 +42,8 @@ from ..schemas import (
     BalanceOut,
     CredentialTestOut,
     CredentialUpdateRequest,
+    DemoCredentialsRequest,
+    DemoModeRequest,
     EnableLiveTradingRequest,
     LiveBypassRequest,
     OpenTradesOut,
@@ -139,6 +141,7 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         live_trading_enabled_at=account.live_trading_enabled_at,
         has_mainnet_credential=account.has_mainnet_credential,
         bot_started_at=account.bot_started_at,
+        demo_enabled=bool(settings is not None and demo_module.available(account, settings)),
     )
 
     # Priority order: `is_active` has no customer-facing control anymore
@@ -204,6 +207,13 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         total_loss_reference_equity=account.loss_reference_equity,
         **_daily_limit_fields(account, db=db, settings=settings),
         **_pair_skip_fields(account, db=db, settings=settings),
+        reports_available=bool(settings.reporting_v2) if settings else False,
+        live_slots=live_multi.slot_cap(account.live_slots, switch_on=True) if (settings and settings.live_multi_position) else 1,
+        live_multi_available=bool(settings.live_multi_position) if settings else False,
+        live_pair_count=len(live_multi.live_pairs(account)),
+        demo_available=bool(settings.demo_runner) if settings else False,
+        demo_has_keys=account.demo_credential is not None,
+        demo_enabled_at=account.demo_enabled_at,
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -345,6 +355,14 @@ def update_account(
         if problem is not None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
 
+    if body.live_slots is not None:
+        if not settings.live_multi_position:
+            raise HTTPException(status.HTTP_409_CONFLICT, "holding more than one live trade at a time is not available on this service")
+        if body.live_slots > 1 and (body.pair_selection_mode or account.pair_selection_mode) == "auto":
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Switch pair selection to Manual to hold more than one trade at once.")
+    elif settings.live_multi_position and live_multi.slot_cap(account.live_slots, switch_on=True) > 1 and body.pair_selection_mode == "auto":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Set the number of open trades to 1 before switching pair selection to Auto Select.")
+
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
     changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
@@ -394,6 +412,8 @@ def update_account(
         # Lowering applies at once, a raise starts at the next midnight Lagos time (daily_limit.set_amount). Safe with a trade open: open trades keep their stops.
         today, tomorrow = _day_keys(settings)
         daily_limit.set_amount(account, body.daily_loss_limit_usd, today_key=today, next_day_key=tomorrow)
+    if body.live_slots is not None:
+        account.live_slots = body.live_slots  # lowering never closes a trade; it only stops new entries until fewer are open
     if body.max_leverage is not None:
         # Applies to NEW entries only (the bot reads it when it sizes an entry), so it is safe to change with a trade open: that trade is not touched.
         try:
@@ -594,6 +614,9 @@ def enable_live_trading_route(
     if account.live_trading_enabled_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "live trading is already enabled for this account")
 
+    if account.demo_enabled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_LIVE_BLOCKED)
+
     # Enabling live trading while a (paper) trade is open is its own
     # hazard: the very next cycle could resolve to LIVE and try to
     # manage that paper position with a real production order against a
@@ -648,12 +671,121 @@ def start_bot_route(
     if account.bot_started_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "the bot is already started for this account")
 
+    if account.demo_enabled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_LIVE_BLOCKED)
+
     _require_no_open_trade(db, account, action="starting the bot")
 
     if account.daily_loss_limit_usd is None:
         raise HTTPException(status.HTTP_409_CONFLICT, DAILY_LIMIT_REQUIRED_TEXT)
 
     account.bot_started_at = start_bot()
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
+
+
+async def _demo_keys_accepted(account: TradingAccount, api_key: str, api_secret: str) -> bool:
+    """One authenticated read against the DEMO endpoint (a client built with sandbox=True and proven to route only to the demo system). False for any failure: a real key, a key for the other
+    demo system, a bad key, an unreachable service. Never returns or logs the exchange's text."""
+    client = None
+    try:
+        client = exchange.build_exchange_client(exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=True)
+        await client.fetch_balance()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _require_demo_runner(settings: Settings) -> None:
+    if not settings.demo_runner:
+        raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_OFF)
+
+
+@router.put("/demo-credentials", response_model=AccountOut)
+async def put_demo_credentials(
+    body: DemoCredentialsRequest,
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AccountOut:
+    """Store the customer's DEMO keys (separate from the live credential). Refused unless Binance accepts them on the demo endpoint; refused outright if they equal the stored live keys."""
+    _require_demo_runner(settings)
+    account = _require_account(customer)
+    if not settings.encryption_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "ENCRYPTION_KEY is not configured")
+    if account.live_trading_enabled_at is not None or account.bot_started_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_LIVE_ACTIVE)
+    _require_no_open_trade(db, account, action="changing your demo keys")
+    if account.credential is not None:
+        try:
+            if body.api_key == decrypt(account.credential.encrypted_api_key, key=settings.encryption_key):
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, demo_module.MSG_SAME_AS_LIVE)
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 - an unreadable stored key cannot be compared; the demo-endpoint read below is the real test
+            pass
+    if not await _demo_keys_accepted(account, body.api_key, body.api_secret):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, demo_module.MSG_KEYS_REFUSED)
+    cred = account.demo_credential
+    if cred is None:
+        cred = DemoCredential(account_id=account.id, encrypted_api_key="", encrypted_api_secret="")
+        db.add(cred)
+    cred.encrypted_api_key = encrypt(body.api_key, key=settings.encryption_key)
+    cred.encrypted_api_secret = encrypt(body.api_secret, key=settings.encryption_key)
+    db.flush()
+    db.refresh(account)
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
+
+
+@router.post("/demo-mode", response_model=AccountOut)
+async def set_demo_mode(
+    body: DemoModeRequest,
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AccountOut:
+    """Switch DEMO mode on or off. On needs: the service switch, demo keys on file that Binance accepts on the demo endpoint right now, no live trading enabled or started, trading capital set and no
+    open trade. Off needs no open trade (a position is never stranded). Live trading is refused while DEMO is on."""
+    account = _require_account(customer)
+    if body.enabled:
+        _require_demo_runner(settings)
+        if account.live_trading_enabled_at is not None or account.bot_started_at is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_LIVE_ACTIVE)
+        key, secret = demo_module.credentials(account, settings)
+        if key is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, demo_module.MSG_NEED_KEYS)
+        if account.allocated_capital is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "configure your trading capital before switching demo mode on")
+        _require_no_open_trade(db, account, action="switching demo mode on")
+        if not await _demo_keys_accepted(account, key, secret):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, demo_module.MSG_KEYS_REFUSED)
+        if account.demo_enabled_at is None:
+            account.demo_enabled_at = datetime.now(timezone.utc)
+    else:
+        _require_no_open_trade(db, account, action="switching demo mode off")
+        account.demo_enabled_at = None
+    return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
+
+
+@router.delete("/demo-credentials", response_model=AccountOut)
+def delete_demo_credentials(
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AccountOut:
+    """Remove the demo keys. Demo mode is switched off with them. Refused while a trade is open."""
+    account = _require_account(customer)
+    _require_no_open_trade(db, account, action="removing your demo keys")
+    account.demo_enabled_at = None
+    if account.demo_credential is not None:
+        db.delete(account.demo_credential)
+        db.flush()
+        db.refresh(account)
     return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 
@@ -678,15 +810,20 @@ async def get_balance(
     actually LIVE (reuses the exact same mode computation as every other
     account response, never a separate check that could drift)."""
     account = _require_account(customer)
-    if _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).mode != "live":
+    mode = _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).mode
+    if mode not in ("live", "demo"):
         raise HTTPException(status.HTTP_409_CONFLICT, "balance is only available once live trading is enabled")
-    if not settings.encryption_key or account.credential is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable trading credentials are configured")
-
-    api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
-    api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
+    if mode == "demo":
+        api_key, api_secret = demo_module.credentials(account, settings)  # the customer's demo keys, on the demo endpoint only
+        if api_key is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable demo keys are configured")
+    else:
+        if not settings.encryption_key or account.credential is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no usable trading credentials are configured")
+        api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
+        api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
     client = exchange.build_exchange_client(
-        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=False
+        exchange="binance", market_type=account.market_type, api_key=api_key, api_secret=api_secret, sandbox=(mode == "demo")
     )
     try:
         available = await exchange.fetch_available_quote_balance(client, account.pair)

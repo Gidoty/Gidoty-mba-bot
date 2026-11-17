@@ -12,10 +12,11 @@ import { pnlLabels, quoteCurrency } from "../pnlLabels.js";
 
 export default function Positions() {
   const { account } = useAccount();
-  const isPaper = account.mode !== "live";
+  const isDemo = account.mode === "demo";
+  const isPaper = account.mode !== "live" && !isDemo;
   const L = pnlLabels(account, { paper: isPaper });
   const unit = quoteCurrency(account) || "USDT";
-  const { status, trades, reload } = useTrades(isPaper, account.id);
+  const { status, trades, reload } = useTrades(isPaper, account.id, isDemo);
   const [live, setLive] = useState(undefined); // GET /account/position, live accounts only
 
   useEffect(() => {
@@ -34,7 +35,7 @@ export default function Positions() {
     <div className="grid gap-4">
       <PageHeader
         title="Positions"
-        subtitle={isPaper ? "Open positions in your practice environment (simulated)." : "Open positions trading with real funds."}
+        subtitle={isDemo ? "DEMO: open positions on Binance's demo system. No real money." : isPaper ? "Open positions in your practice environment (simulated)." : "Open positions trading with real funds."}
       />
       <UnprovenNotice paper={isPaper} closedCount={status === "ready" ? closedCount : null} />
 

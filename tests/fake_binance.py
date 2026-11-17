@@ -64,6 +64,7 @@ class FakeBinance:
         trades_fee_info: bool = True,
         liquidation_price: float | None = None,
         reject_close_position: bool = False,
+        reject_second_close_stop: bool = False,
         margin_mode: str | None = "isolated",
         maintenance_tiers=None,
         other_positions=None,
@@ -93,6 +94,7 @@ class FakeBinance:
         self.before_hooks: dict = {}  # role -> callable(fake) run just before that order is processed
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
+        self.reject_second_close_stop = reject_second_close_stop  # models Binance refusing a second closePosition stop in the same direction while one rests
         self._tiers_raise = False
         self.margin_mode = margin_mode  # what symbolConfig reports ("isolated" | "cross"); None = not reported
         # Binance leverageBracket-shaped brackets (notionalFloor/Cap, maintMarginRatio, cum). Default: a single wide,
@@ -459,6 +461,8 @@ class FakeBinance:
         reduce_only = bool(params.get("reduceOnly"))
         if close_position and self.reject_close_position:
             raise ccxt.InvalidOrder("closePosition is not accepted here")
+        if close_position and self.reject_second_close_stop and any(o["status"] == "open" and o["conditional"] and o["close_position"] and o["side"] == side for o in self.orders.values()):
+            raise ccxt.InvalidOrder("an open stop with closePosition in the same direction already exists")
         if close_position and reduce_only:
             raise ccxt.InvalidOrder("closePosition and reduceOnly cannot both be set")
         if close_position and amount is not None:

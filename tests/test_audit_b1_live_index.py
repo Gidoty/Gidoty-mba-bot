@@ -1,5 +1,6 @@
 """Audit B1: the database again allows only ONE non-terminal LIVE trade per account (alembic e7a2c9d4b1f8, models.Trade), whatever the pair.
-Paper rows are outside the rule, so paper multi-trade keeps working."""
+Paper rows are outside the rule, so paper multi-trade keeps working. (Since B7 the same rule is kept per slot, d9b5f7c2e4a6: with every live trade in slot 0 it is unchanged, and the first tests below
+run against the current schema; the migration tests stop at e7a2c9d4b1f8, the revision they are about.)"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -86,15 +87,15 @@ def test_the_migration_is_additive_idempotent_and_reversible(tmp_path, monkeypat
     names = lambda: {i["name"] for i in inspect(create_engine(f"sqlite:///{path}")).get_indexes("trades")}
     assert INDEX not in names()
     _insert(path, [("BTC/USDT", False, "open"), ("ETH/USDT", True, "open"), ("BNB/USDT", True, "open")])  # one live, two paper: allowed
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, NEW)
     assert INDEX in names()
-    command.upgrade(cfg, "head")  # a rerun is a no-op
+    command.upgrade(cfg, NEW)  # a rerun is a no-op
     command.downgrade(cfg, HEAD_BEFORE)
     assert INDEX not in names()
     eng = create_engine(f"sqlite:///{path}")
     with eng.connect() as c:
         assert c.execute(text("select count(*) from trades")).scalar() == 3  # no row touched
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, NEW)
     assert INDEX in names()
 
 
@@ -104,14 +105,14 @@ def test_the_upgrade_refuses_when_an_account_already_has_two_live_trades_and_cha
     command.upgrade(cfg, HEAD_BEFORE)
     _insert(path, [("BTC/USDT", False, "open"), ("ETH/USDT", False, "pending")])
     with pytest.raises(Exception, match="more than one non-terminal LIVE trade"):
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, NEW)
     assert INDEX not in {i["name"] for i in inspect(create_engine(f"sqlite:///{path}")).get_indexes("trades")}
 
 
 def test_the_chain_has_one_head_on_top_of_the_multi_trade_migration():
     from alembic.script import ScriptDirectory
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision(NEW).down_revision == HEAD_BEFORE and script.get_heads() == ["f4c7d9b2a6e1"]  # (the head moved on with the audit H2 migration)
+    assert script.get_revision(NEW).down_revision == HEAD_BEFORE and script.get_heads() == ["d9b5f7c2e4a6"]  # (the head moved on with the later migrations)
 
 
 def test_the_upgrade_does_not_fail_when_the_index_already_exists(tmp_path, monkeypatch, keep_logging):
@@ -122,5 +123,5 @@ def test_the_upgrade_does_not_fail_when_the_index_already_exists(tmp_path, monke
     eng = create_engine(f"sqlite:///{path}")
     with eng.begin() as c:
         c.execute(text(f"CREATE UNIQUE INDEX {INDEX} ON trades (account_id) WHERE status NOT IN ('closed', 'void') AND NOT is_paper"))
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, NEW)
     assert INDEX in {i["name"] for i in inspect(create_engine(f"sqlite:///{path}")).get_indexes("trades")}

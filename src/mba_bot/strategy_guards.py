@@ -93,7 +93,7 @@ def closed_results(session: Session, account_id: str, *, is_paper: bool, fee_bps
                    strategy_id: str | None = None, pair: str | None = None, costs=None) -> list[Result]:
     """This account's closed STRATEGY trades in this mode, newest first, incident trades excluded. With `strategy_id` only that strategy's
     trades count (an empty strategy_id on a row means ema_cross_atr_v1); with `pair` only that pair's. Without either: every trade, as before."""
-    q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.closed_at.isnot(None))
+    q = select(Trade).where(Trade.account_id == account_id, Trade.status == TRADE_CLOSED, Trade.is_paper.is_(is_paper), Trade.is_demo.is_(False), Trade.closed_at.isnot(None))
     if strategy_id is not None:
         q = q.where(or_(Trade.strategy_id.is_(None), Trade.strategy_id == "", Trade.strategy_id == EMA_STRATEGY_ID) if strategy_id == EMA_STRATEGY_ID
                     else Trade.strategy_id == strategy_id)
@@ -253,8 +253,14 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
         # The cap on total open risk grows with the account's own risk setting: max(MAX_TOTAL_RISK_PCT, risk x the positions the account may hold), never above 100 (risk_limits.py).
         # A LIVE account holds one position, a paper account up to MAX_OPEN_POSITIONS (at most 3). 0 keeps meaning "no cap".
         slots = 1 if not is_paper else configured_cap(settings.max_open_positions)
+        max_positions = settings.max_open_positions
+        if not is_paper and settings.live_multi_position:
+            # LIVE_MULTI_POSITION: the account's own slots (1 to 3) are the positions it may hold; with the switch off the live account keeps the one slot and MAX_OPEN_POSITIONS exactly as before.
+            from .live_multi import slot_cap as live_slot_cap
+
+            slots = max_positions = live_slot_cap(getattr(account, "live_slots", None), switch_on=True)
         h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=new_risk,
-                          max_positions=settings.max_open_positions, max_total_risk_pct=open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots))
+                          max_positions=max_positions, max_total_risk_pct=open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots))
         if h:
             hits.append(h)
 

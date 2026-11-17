@@ -1,4 +1,5 @@
 import BinanceConnectionPanel from "../components/BinanceConnectionPanel.jsx";
+import DemoPanel from "../components/DemoPanel.jsx";
 import { linkButton } from "../components/form.jsx";
 import { Card, CardTitle, EmptyState, Notice, PageHeader } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
@@ -14,6 +15,8 @@ export default function ExchangeConnection({ customer }) {
       <Notice>
         <strong className="font-semibold">Trading can lose money.</strong> Only use funds you can afford to lose.
       </Notice>
+
+      <DemoPanel account={account} onAccountChanged={refreshAccount} />
 
       {account.has_mainnet_credential ? (
         <BinanceConnectionPanel account={account} onAccountChanged={refreshAccount} defaultOpen />

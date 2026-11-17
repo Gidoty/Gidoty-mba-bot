@@ -42,7 +42,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import kill_switch, pnl_labels
+from . import kill_switch, pnl_labels, protection_guard
 from . import venue as venue_mod
 from .config import Settings
 from .multi_trade import EMA_STRATEGY_ID
@@ -109,9 +109,15 @@ class LiveContext:
     # Set by establish_protection when it gives up: "structural" | "transient" | "other" (see classify_protection_failure)
     protection_failure_kind: str | None = None
     protection_failure_detail: str | None = None
+    slot_cap: int = 1  # how many non-terminal trades a live account may hold (live_multi.slot_cap; 1 unless LIVE_MULTI_POSITION is on)
+    is_demo: bool = False  # DEMO mode: the trade is recorded as a demo trade and every message says DEMO, never LIVE
 
 
 # --- ids / small helpers --------------------------------------------------------
+
+
+def _mode_tag(ctx) -> str:
+    return "DEMO" if getattr(ctx, "is_demo", False) else "LIVE"
 
 
 def client_id(trade: Trade, role: str, attempt: int = 0) -> str:
@@ -241,6 +247,8 @@ async def open_live_trade(
     signal_price: float,
     stop_price: float,
     risk_text: str,
+    strategy_id: str = EMA_STRATEGY_ID,
+    pair: str | None = None,
 ) -> Trade | None:
     """Write-ahead -> entry order -> resolve fill -> protect -> open.
     Returns the Trade (any state) or None if the write-ahead insert lost to
@@ -254,24 +262,31 @@ async def open_live_trade(
     if paused.engaged:
         raise kill_switch.EntryPaused(paused)
     stop = venue.round_stop(stop_price, side=side)
-    # A LIVE account holds at most ONE non-terminal trade, whatever any setting says (multi_trade.slot_cap). The database now only
-    # allows one per account AND pair, so this is the check that keeps the live rule: before any write and before any order.
-    if session.scalars(
-        select(Trade.id).where(Trade.account_id == account.id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
-    ).first() is not None:
-        logger.warning("account %s: a non-terminal trade already exists, a live account holds one at a time; not entering", account.id)
+    # A LIVE account holds at most ONE non-terminal trade unless LIVE_MULTI_POSITION is on and the account has more slots (live_multi.slot_cap, never above 3). The database allows one per account AND
+    # pair, so this is the check that keeps the slot rule: before any write and before any order.
+    held = session.execute(select(Trade.id, Trade.live_slot).where(Trade.account_id == account.id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))).all()
+    cap = max(1, min(3, ctx.slot_cap))
+    if len(held) >= cap:
+        logger.warning("account %s: %d non-terminal trade(s) already exist, the account holds at most %d; not entering", account.id, len(held), ctx.slot_cap)
+        return None
+    taken_slots = {row[1] if row[1] is not None else 0 for row in held}
+    slot = next((n for n in range(cap) if n not in taken_slots), None)
+    if slot is None:
         return None
     trade = Trade(
         account_id=account.id,
         side=side,
         is_paper=False,
-        strategy_id=EMA_STRATEGY_ID,
+        is_demo=ctx.is_demo,
+        strategy_id=strategy_id,
         entry_price=signal_price,
         quantity=quantity,
         stop_loss_price=stop,
+        initial_stop_price=stop,
+        live_slot=slot,
         status=TRADE_PENDING,
         opened_at=ctx.now,
-        pair=account.pair,
+        pair=pair or account.pair,
         protection_status=PROTECTION_PENDING,
         protection_attempt=0,
         exit_attempt=0,
@@ -516,7 +531,7 @@ async def _protect_or_emergency(
             closed_at=ctx.now, close_reason="dust_unprotectable", exit_price=trade.entry_price, pnl=0.0,
             protection_status=PROTECTION_CANCELLED,
         )
-        await _notify(ctx, "[LIVE] A tiny partial fill was below Binance's minimum tradable size, so no stop could be placed on it. No trade is open.")
+        await _notify(ctx, f"[{_mode_tag(ctx)}] A tiny partial fill was below Binance's minimum tradable size, so no stop could be placed on it. No trade is open.")
         return trade
 
     outcome = await establish_protection(ctx, trade)
@@ -526,9 +541,9 @@ async def _protect_or_emergency(
         if announce_entry:
             await _notify(
                 ctx,
-                f"[LIVE] Entered {trade.side.upper()} {_pair(ctx, trade)}\n"
+                f"[{_mode_tag(ctx)}] Entered {trade.side.upper()} {_pair(ctx, trade)}\n"
                 f"Entry: {trade.entry_price:.4f}  Qty: {trade.quantity:.6f}  Stop: {trade.stop_loss_price:.4f} "
-                f"(resting at Binance)\n{risk_text}".rstrip(),
+                f"(resting at Binance)\n{risk_text}".rstrip() + (f"\nStrategy: {trade.strategy_id}" if trade.strategy_id and trade.strategy_id != EMA_STRATEGY_ID else ""),
             )
         return trade
     if outcome == "executed":
@@ -602,7 +617,7 @@ async def emergency_close(
         why = why or "Binance would not accept the protective stop for this trade"
         await _notify(
             ctx,
-            f"[LIVE] Safety exit on {_pair(ctx, trade)}: {why}, "
+            f"[{_mode_tag(ctx)}] Safety exit on {_pair(ctx, trade)}: {why}, "
             f"so the bot closed the position immediately instead of leaving it unprotected.\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
@@ -710,7 +725,7 @@ async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str
         label = "stop-loss triggered at Binance" if reason == "exchange_stop_triggered" else "closed on Binance"
         await _notify(
             ctx,
-            f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
+            f"[{_mode_tag(ctx)}] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
         if was_attention:
@@ -848,15 +863,73 @@ async def _record_exit(
             "stop_loss": "stop-loss",
             "stop_limit_gap": "stop-loss",
             "crossover_exit": "crossover exit",
+            "profit_target": "profit target",
+            "channel_exit": "channel exit",
+            "trailing_stop": "trailing stop",
+            "rsi_exit": "RSI back to 50",
+            "time_stop": "time stop",
         }.get(reason, "closed")
         await _notify(
             ctx,
-            f"[LIVE] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
+            f"[{_mode_tag(ctx)}] Exited {trade.side.upper()} {_pair(ctx, trade)} ({label})\n"
             + pnl_labels.exit_line(trade.entry_price, trade.exit_price, trade.pnl, on=ctx.settings.pnl_labels, quote=pnl_labels.quote_of(_pair(ctx, trade))),
         )
     if was_attention:
         await _clear_attention(ctx, trade)
     return "closed"
+
+
+async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_price: float) -> str:
+    """Move a live trade's protective stop to `new_stop` (docs/safety/live_donchian.md). It only ever moves in the FAVOURABLE direction (up for a long, down for a short) and stays on the losing side
+    of the current price. The position is never without a stop: the NEW stop is placed first and read back resting, only then does the trade record it, and only then is the OLD one cancelled. If
+    placing or verifying the new stop fails, the old stop is untouched, the trade stays open and protected, and the customer is told once. Returns 'moved', 'kept' (a move was tried and failed),
+    'skipped' (nothing to do or not allowed) or 'busy' (another worker changed the trade). Never gated by the kill switch (it reduces risk) and never places an entry."""
+    venue, session = ctx.venue, ctx.session
+    if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not trade.protection_attempt:
+        return "skipped"
+    try:
+        stop = venue.round_stop(new_stop, side=trade.side)
+    except Exception:  # noqa: BLE001
+        return "skipped"
+    long_side = trade.side == "long"
+    if not (stop > trade.stop_loss_price if long_side else stop < trade.stop_loss_price):
+        return "skipped"  # never loosened, never the same level
+    if not (stop < current_price if long_side else stop > current_price):
+        return "skipped"  # it must stay on the losing side of the price, or it would trigger at once
+    old_attempt, old_kind = trade.protection_attempt, trade.protective_kind
+    old_cid = client_id(trade, "stop", old_attempt)
+    new_cid = client_id(trade, "stop", old_attempt + 1)
+    try:
+        await venue.protection_precheck(side=trade.side, stop_price=stop)
+        placed = await venue.place_protection(side=trade.side, quantity=trade.quantity, stop_price=stop, client_id=new_cid, entry_price=trade.entry_price)
+        verified = await venue.get_protection(kind=placed.kind, client_id=new_cid)
+        if verified is None or not verified.is_resting:
+            raise RuntimeError("the new protective order is not resting")
+    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the old stop stays
+        logger.warning("account %s: trailing stop move to %.4f failed (%s); the existing stop stays", ctx.account.id, stop, type(exc).__name__)
+        try:  # an order that may have been placed but not verified must not be left to add a second, unrecorded stop
+            await venue.cancel_by_client_id(new_cid, conditional=True)
+        except Exception:  # noqa: BLE001
+            pass
+        if protection_guard.should_alert(ctx.account.id, trade.pair or ctx.account.pair, f"trail_failed:{trade.id}", now=ctx.now, repeat_hours=6.0):
+            await _notify(ctx, f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place.")
+        return "kept"
+    moved = _cas(
+        session, trade, (TRADE_OPEN,), TRADE_OPEN,
+        stop_loss_price=stop, protection_attempt=old_attempt + 1, protective_order_id=verified.order_id, protective_kind=verified.kind,
+        protective_limit_price=verified.limit_price, protection_verified_at=ctx.now,
+    )
+    if not moved:
+        try:
+            await venue.cancel_by_client_id(new_cid, conditional=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return "busy"
+    try:
+        await venue.cancel_protection(kind=old_kind, client_id=old_cid)  # reads the final state of the old stop
+    except Exception as exc:  # noqa: BLE001 - two stops resting is safe; the leftover is cleared when the trade closes
+        logger.warning("account %s: the previous protective stop could not be cancelled after a trailing move (%s); it is cleared when the trade closes", ctx.account.id, type(exc).__name__)
+    return "moved"
 
 
 # --- reconciliation -------------------------------------------------------------------

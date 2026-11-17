@@ -34,6 +34,7 @@ export default function BotSettings() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const leverageLimit = account.max_leverage_limit || 5;
   const [maxLeverage, setMaxLeverage] = useState(String(account.max_leverage || 3));
+  const [liveSlots, setLiveSlots] = useState(String(account.live_slots || 1));
   const [capitalInput, setCapitalInput] = useState(account.allocated_capital != null ? String(account.allocated_capital) : "");
   // The saved baseline is the amount the customer last chose: a raise that waits for midnight counts as saved, so the form is not "unsaved" after a raise.
   const savedLimit = account.daily_loss_limit_pending_usd != null ? String(account.daily_loss_limit_pending_usd) : account.daily_loss_limit_usd != null ? String(account.daily_loss_limit_usd) : "";
@@ -56,7 +57,8 @@ export default function BotSettings() {
   }, [pairsLoaded, pairOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const savedCapital = account.allocated_capital != null ? String(account.allocated_capital) : "";
-  const tradingDirty = pair !== account.pair || marketType !== account.market_type || pairSelectionMode !== account.pair_selection_mode || capitalInput !== savedCapital;
+  const slotsDirty = account.live_multi_available && liveSlots !== String(account.live_slots || 1);
+  const tradingDirty = pair !== account.pair || marketType !== account.market_type || pairSelectionMode !== account.pair_selection_mode || capitalInput !== savedCapital || slotsDirty;
   const riskDirty = riskPct !== String(account.risk_pct) || (marketType === "futures" && maxLeverage !== String(account.max_leverage || 3)) || limitInput !== savedLimit;
   const dirty = tradingDirty || riskDirty;
 
@@ -76,7 +78,7 @@ export default function BotSettings() {
   }
   const limitFieldProblem = limitInput !== savedLimit ? limitProblem(limitInput, account.daily_loss_limit_max_usd) : null;
   // A message shown on a tab goes away as soon as the customer edits anything again.
-  const editKey = [pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, JSON.stringify(acks)].join("|");
+  const editKey = [pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, JSON.stringify(acks)].join("|");
   useEffect(() => {
     setProblems({ trading: null, risk: null });
   }, [editKey]);
@@ -121,6 +123,7 @@ export default function BotSettings() {
         // Futures only; applies to new trades only, an open trade is not touched.
         max_leverage: marketType === "futures" ? Number(maxLeverage) : undefined,
         allocated_capital: capitalInput !== savedCapital ? Number(capitalInput) : undefined,
+        live_slots: slotsDirty ? Number(liveSlots) : undefined,
         daily_loss_limit_usd: limitInput !== savedLimit ? Number(limitInput) : undefined,
       });
       await reloadAccount();
@@ -229,6 +232,24 @@ export default function BotSettings() {
                 : "Not configured yet. Required before you can start the bot on a live account."}
             </span>
           </div>
+
+          {account.live_multi_available && (
+            <div className="mt-4 max-w-xs">
+              <label htmlFor="live-slots" className="text-sm font-medium text-fg">
+                Open trades at once
+              </label>
+              <select id="live-slots" value={liveSlots} onChange={(e) => setLiveSlots(e.target.value)} className={inputClass} aria-describedby="live-slots-hint">
+                {[1, 2, 3].map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <span id="live-slots-hint" className="mt-1 block text-xs text-muted">
+                The most trades the bot may hold at the same time, one per pair, 1 to 3. More than one needs Manual pair selection, and the bot only trades the pairs set for your account (you have {account.live_pair_count || 1}). The daily loss limit and the automatic total stop cover all your trades together. Lowering it never closes a trade.
+              </span>
+            </div>
+          )}
         </div>
 
         <div {...tabPanelProps("risk", tab)} className="pt-4">

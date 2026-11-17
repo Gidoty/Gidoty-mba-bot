@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -116,8 +116,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         has_mainnet_credential=account.has_mainnet_credential,
         bot_started_at=account.bot_started_at,
         now=now,
+        demo_enabled=demo_module.available(account, settings),
     )
     is_paper = trial_state.mode == TradingMode.PAPER
+    is_demo = trial_state.mode == TradingMode.DEMO  # real orders on the demo system with the customer's own demo keys; never real money
 
     if not is_paper:
         # Visibility only (a forgotten kill switch must not stay on silently): one journal line per repeat window while
@@ -126,7 +128,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         if ks.engaged or ks.attempts > 1:
             kill_switch.log_decision(ks, scope=account.id, now=now, repeat_hours=settings.protection_alert_repeat_hours)
 
-    if not is_paper and account.live_notified_at is None:
+    if not is_paper and not is_demo and account.live_notified_at is None:
         account.live_notified_at = now
         await _notify_safe(
             notifier,
@@ -152,13 +154,14 @@ async def process_account(session: Session, account: TradingAccount, settings: S
     open_trade = open_trades[0] if open_trades else None
     # With more than one open trade (a paper multi-trade account, or an unexpected live pair) the client is a live one if ANY is live.
     effective_is_paper = all(t.is_paper for t in open_trades) if open_trades else is_paper
+    effective_is_demo = any(t.is_demo for t in open_trades) if open_trades else is_demo
 
-    api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper)
+    api_key, api_secret = _resolve_credentials(account, settings, is_paper=effective_is_paper, is_demo=effective_is_demo)
     if api_key is None:
         logger.warning(
             "account %s has no usable credentials for mode=%s, skipping",
             account.id,
-            "paper" if effective_is_paper else "live",
+            "demo" if effective_is_demo else "paper" if effective_is_paper else "live",
         )
         await _record_error(notifier, account, "No usable trading credentials are configured for this account.", now=now)
         return
@@ -168,7 +171,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         market_type=account.market_type,
         api_key=api_key,
         api_secret=api_secret,
-        sandbox=effective_is_paper,
+        sandbox=effective_is_paper or effective_is_demo,  # a demo client is proven (exchange.assert_routing) to route only to the demo system
     )
     try:
         # Withdrawal permission is checked every cycle for a live key, but it
@@ -178,7 +181,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         # risk reduction only - that path runs on a venue that cannot place
         # an entry at all.
         withdrawal_detected = False
-        if not effective_is_paper:
+        if not effective_is_paper and not effective_is_demo:
             withdrawal_detected = await exchange.has_withdrawal_permission(client)
             if withdrawal_detected:
                 await _flag_withdrawal_block(session, account, notifier, now=now)
@@ -186,7 +189,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         if _use_multi(account, settings, is_paper, open_trades):
             # More than one trade, or a PAPER multi-trade account (MAX_OPEN_POSITIONS above 1 and an owner-set pair list). With
             # the defaults (one trade, one pair) this is never true and the single-trade path below runs exactly as before.
-            await _process_multi(session, account, client, open_trades, settings, notifier, is_paper=is_paper, now=now)
+            await _process_multi(session, account, client, open_trades, settings, notifier, is_paper=is_paper, now=now, is_demo=is_demo)
             return
 
         if open_trade is not None and not open_trade.is_paper:
@@ -194,7 +197,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             # any market data is needed: restart recovery, a stop that
             # fired while we were offline, an unprotected or unresolved
             # state all get handled here, whatever the strategy says.
-            open_trade, ctx = await _manage_live_trade(session, account, client, open_trade, settings, notifier, now=now)
+            open_trade, ctx = await _manage_live_trade(session, account, client, open_trade, settings, notifier, now=now, is_demo=effective_is_demo)
             account.last_error = None
             account.last_error_at = None
             if open_trade.status != TRADE_OPEN or open_trade.protection_status != PROTECTION_PROTECTED:
@@ -217,10 +220,17 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             signal = _ema_generate(sig_candles, settings)
             account.last_signal = signal.signal.value
             account.last_signal_at = now
-            opposite_cross = (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
-                open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
-            )
+            rsi_trade = multi_trade.strategy_of(open_trade) == rsi_mr.STRATEGY_ID
+            don_trade = multi_trade.strategy_of(open_trade) == donchian.STRATEGY_ID
+            opposite_cross = not rsi_trade and not don_trade and (
+                (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
+                    open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
+            )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            if rsi_trade and open_trade.status == TRADE_OPEN:
+                await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms)
+            if don_trade and open_trade.status == TRADE_OPEN:
+                await _live_donchian_manage(ctx, open_trade, client, settings, now_ms=now_ms, current_price=candles[-1].close)
             await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
             return
 
@@ -315,12 +325,20 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # reflects the pair actually just traded, never an
                 # intermediate scan result that didn't lead to a trade.
                 account.pair = scan_pair
-            if _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
+            don_took_it = False
+            if not is_paper and settings.live_donchian:
+                await _live_donchian_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # highest priority: Donchian, then EMA, then RSI
+                don_took_it = bool(list_open_trades(session, account.id))
+            if don_took_it:
+                pass  # the one live slot is taken; EMA and RSI wait for the next cycle
+            elif _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
                 pass  # a closed-candle crossover that is too old to enter at a fair price; logged once per candle
             else:
                 await _maybe_enter(
-                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx
+                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
                 )
+            if not is_paper and settings.live_rsi_mr:
+                await _live_rsi_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # lowest priority: only if EMA took no entry
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
@@ -340,7 +358,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         try:
             # The equity sample and the daily loss pause run on EVERY normal end of a live cycle, whichever `return` it took. Not after an exception
             # (the exchange is probably unreachable and the cycle's own error handling has already run).
-            if not effective_is_paper and sys.exc_info()[0] is None:
+            if not effective_is_paper and not effective_is_demo and sys.exc_info()[0] is None:  # the equity samples and loss limits are the live account's; demo money must not mix into them
                 await _account_equity_tick(session, account, client, settings, notifier, now=now)
                 await _foreign_order_check(session, account, client, settings, notifier, now=now)
         finally:
@@ -790,7 +808,9 @@ def _precheck_message(account: TradingAccount, check: StopViability, leverage: f
     return "the stop-safety check could not be completed from the available data, so no trade was opened."
 
 
-def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool) -> tuple[str | None, str | None]:
+def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_paper: bool, is_demo: bool = False) -> tuple[str | None, str | None]:
+    if is_demo:
+        return demo_module.credentials(account, settings)  # the customer's own demo keys, never the live credential
     if is_paper:
         # Spot Testnet and Futures Demo Trading are separate Binance systems
         # with separate key registrations - a key from one is not valid on
@@ -963,22 +983,22 @@ def _note_scan(scan_out: dict, scanned: list, ranked: list, settings: Settings) 
         pass
 
 
-async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None):
+async def _maybe_enter(session, account, client, signal, current_price, settings, notifier, *, is_paper, now, tctx=None, pair=None, multi=None, is_demo=False):
     pair = pair or account.pair  # a multi-trade paper account enters on the pair it scanned; every other caller passes none
     is_rsi = isinstance(signal, rsi_mr.RsiSignal)
     is_don = isinstance(signal, donchian.DonchianSignal)
     strategy_id = rsi_mr.STRATEGY_ID if is_rsi else (donchian.STRATEGY_ID if is_don else multi_trade.EMA_STRATEGY_ID)
     if is_don:
-        # donchian_breakout_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever DONCHIAN_PAPER_ONLY or any other setting says.
-        if (not is_paper or not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account)
+        # donchian_breakout_v1 is paper only unless LIVE_DONCHIAN is on (default off): then an opted-in LIVE or DEMO account may enter, with every guard an EMA entry has (docs/safety/live_donchian.md).
+        if ((not is_paper and not settings.live_donchian) or not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account)
                 or signal.side not in ("long", "short") or signal.stop is None):
             return
         if signal.side == "short" and account.market_type != "futures":
             return
         side = signal.side
     elif is_rsi:
-        # rsi_mr_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever RSI_MR_PAPER_ONLY or any other setting says.
-        if (not is_paper or not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account)
+        # rsi_mr_v1 is paper only unless LIVE_RSI_MR is on (default off): then an opted-in LIVE or DEMO account may enter, with every guard an EMA entry has (docs/safety/live_rsi.md).
+        if ((not is_paper and not settings.live_rsi_mr) or not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account)
                 or signal.side not in ("long", "short")):
             return
         if signal.side == "short" and account.market_type != "futures":
@@ -1000,7 +1020,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
 
     if not is_paper and await _kill_switch_blocks(session, settings, notifier, account, _tlog, now=now, stage="early"):
         return
-    if not is_paper and await _account_loss_blocks(session, account, client, settings, notifier, _tlog, now=now):
+    if not is_paper and not is_demo and await _account_loss_blocks(session, account, client, settings, notifier, _tlog, now=now):
         return  # account-wide daily loss pause: no NEW live entry today; open trades keep their stops and exits
 
     if pair not in manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion):
@@ -1063,7 +1083,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             []
             if settings.protection_fail_limit_mode == "off"
             else protection_guard.limit_hits(
-                session, account.id, account.pair, now=now, settings=settings, codes=_LIMIT_CODES
+                session, account.id, pair, now=now, settings=settings, codes=_LIMIT_CODES
             )
         )
         for hit in hits:
@@ -1077,14 +1097,15 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 _observe_line(
                     account, settings, hit.reason_code, now,
                     "account %s: [observe] %s protection-failure limit reached on %s (%d in %gh, limit %d); entry NOT blocked",
-                    account.id, hit.kind, account.pair, hit.failures, hit.window_hours, hit.limit,
+                    account.id, hit.kind, pair, hit.failures, hit.window_hours, hit.limit,
                 )
             else:
                 _tlog(telemetry.REJECTED, hit.reason_code, mode="enforce", **limit_detail)
                 await _block_entry(notifier, account, settings, hit.reason_code, _limit_message(account, hit), now=now)
                 return
         try:
-            await exchange.assert_trade_only(client)
+            if not is_demo:  # demo keys are not real keys: the withdrawal-permission read (a production-only endpoint) is skipped for them, never for live
+                await exchange.assert_trade_only(client)
         except exchange.WithdrawalPermissionDetected:
             _tlog(telemetry.REJECTED, telemetry.R_WITHDRAWAL_DETECTED)
             await _flag_withdrawal_block(session, account, notifier, now=now)
@@ -1101,12 +1122,20 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             logger.warning("account %s: live account has no allocated_capital configured, refusing to enter", account.id)
             _tlog(telemetry.REJECTED, telemetry.R_NO_CAPITAL_SET)
             return
-        live_balance = await exchange.fetch_available_quote_balance(client, account.pair)
+        live_balance = await exchange.fetch_available_quote_balance(client, pair)
         # The customer's configured ceiling, never more than what
         # Binance actually shows as free right now - see models.py's
         # allocated_capital docstring and the capital-allocation spec:
         # effective_capital = min(configured_trading_capital, currently_available_balance).
         effective_capital = min(account.allocated_capital, live_balance)
+        open_live = [t for t in list_open_trades(session, account.id) if not t.is_paper] if settings.live_multi_position else []
+        if open_live:
+            # A second or third live trade (LIVE_MULTI_POSITION): the trading capital is shared, so this trade is sized from what the open trades have not already used.
+            cap_for_share = small_capital.leverage_cap_for(account.market_type, leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage))
+            effective_capital = min(effective_capital, live_multi.free_capital(account.allocated_capital, open_live, cap_for_share))
+            if effective_capital <= 0:
+                _tlog(telemetry.REJECTED, live_multi.R_CAPITAL_SHORT, allocated=account.allocated_capital, open_trades=len(open_live))
+                return
         if effective_capital <= 0:
             _tlog(telemetry.REJECTED, telemetry.R_NO_FREE_BALANCE, allocated=account.allocated_capital, free=live_balance)
             return
@@ -1147,12 +1176,13 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         venue = build_venue(
             client,
             market_type=account.market_type,
-            pair=account.pair,
+            pair=pair,
             spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
             entries_allowed=True,  # the ONLY place: assert_trade_only just passed above
         )
         ctx = lifecycle.LiveContext(
-            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now
+            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo,
+            slot_cap=live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position),
         )
         try:
             await venue.prepare()
@@ -1210,7 +1240,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 # required, and the liquidation check below still uses the real Binance leverage. The bot only READS leverage and margin mode.
                 if margin_mode != "isolated":
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode, mode="size_cap")
-                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED, leverage_module.MSG_NOT_ISOLATED.format(pair=account.pair), now=now)
+                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED, leverage_module.MSG_NOT_ISOLATED.format(pair=pair), now=now)
                     return
                 cap = leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage)
                 sizing_leverage = leverage_module.effective(leverage, cap)
@@ -1222,13 +1252,13 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 if leverage > settings.futures_max_leverage + 1e-9:
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_LEVERAGE_CEILING, leverage=leverage, ceiling=settings.futures_max_leverage)
                     await _block_entry(notifier, account, settings, telemetry.R_FUTURES_LEVERAGE_CEILING,
-                                       f"your Binance Futures leverage on {account.pair} ({leverage:g}x) is above the limit of {settings.futures_max_leverage:g}x set for this service. "
+                                       f"your Binance Futures leverage on {pair} ({leverage:g}x) is above the limit of {settings.futures_max_leverage:g}x set for this service. "
                                        "Lower it for this pair on Binance. MBA Bot never changes it for you.", now=now)
                     return
                 if margin_mode != "isolated":
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode)
                     await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED,
-                                       f"your Binance Futures margin mode on {account.pair} is not isolated (or could not be read), and this service trades isolated margin only. "
+                                       f"your Binance Futures margin mode on {pair} is not isolated (or could not be read), and this service trades isolated margin only. "
                                        "Switch the pair to isolated margin on Binance. MBA Bot never changes it for you.", now=now)
                     return
             size = apply_margin_ceiling(
@@ -1247,6 +1277,17 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             )
             _note_small_capital(session, account, venue, settings, price=current_price, capital=effective_capital, reason=small_capital.R_BELOW_FILTERS, now=now, is_paper=is_paper)
             return
+        if open_live:
+            # The open risk across the trades is capped: every open trade at its CURRENT stop plus this one must stay within LIVE_TOTAL_RISK_CAP_PCT of the trading capital and within the daily dollar limit.
+            refused = live_multi.check_additional_entry(
+                open_live, new_risk=quantity * size.stop_distance, capital=account.allocated_capital, cap_pct=settings.live_total_risk_cap_pct,
+                daily_limit_usd=account.daily_loss_limit_usd if settings.account_daily_loss_limit else None,
+            )
+            if refused is not None:
+                _tlog(telemetry.REJECTED, refused, open_risk=round(live_multi.total_open_risk(open_live), 4), new_risk=round(quantity * size.stop_distance, 4), open_trades=len(open_live))
+                if protection_guard.should_alert(account.id, pair, f"multi_risk:{refused}", now=now, repeat_hours=6.0):
+                    logger.info("account %s: additional entry on %s refused (%s): open risk %.4f, new %.4f", account.id, pair, refused, live_multi.total_open_risk(open_live), quantity * size.stop_distance)
+                return
         precheck_detail = None
         if account.market_type == "futures" and settings.protection_precheck_mode != "off":
             check = await _precheck_entry(
@@ -1265,7 +1306,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     _observe_line(
                         account, settings, check.reason, now,
                         "account %s: [observe] protection pre-check would refuse %s %s (%s) %s; entry NOT blocked",
-                        account.id, side, account.pair, check.reason, precheck_detail,
+                        account.id, side, pair, check.reason, precheck_detail,
                     )
                 else:
                     _tlog(telemetry.REJECTED, check.reason, **detail)
@@ -1273,14 +1314,14 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     await _block_entry(notifier, account, settings, check.reason, _precheck_message(account, check, leverage), now=now)
                     return
             elif settings.protection_precheck_mode == "observe" and protection_guard.should_alert(
-                account.id, account.pair, "observe:pass", now=now, repeat_hours=_PASS_LOG_REPEAT_HOURS
+                account.id, pair, "observe:pass", now=now, repeat_hours=_PASS_LOG_REPEAT_HOURS
             ):
                 # Journal record of a PASS (the decision log carries it on the accepted row when telemetry is on), so
                 # observe mode is measurable without telemetry. One line per entry, not per round.
                 logger.info(
                     "account %s: [observe] protection pre-check passes %s %s at %gx: stop %.3f%% of entry, allowed "
                     "%.3f%%, bracket %s (effective maintenance rate %.3f%%), %s margin",
-                    account.id, side, account.pair, leverage, check.stop_distance_frac * 100,
+                    account.id, side, pair, leverage, check.stop_distance_frac * 100,
                     check.max_allowed_stop_frac * 100, check.tier, check.effective_maint_rate * 100, check.margin_basis,
                 )
         # The steps above made several exchange calls: read the kill switch again right before the order.
@@ -1294,7 +1335,9 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 quantity=quantity,
                 signal_price=current_price,
                 stop_price=stop_price,
-                risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
+                risk_text=f"Risk: {risk_amount:.2f} ({risk_pct_used:.2f}% of balance)",
+                strategy_id=strategy_id,
+                pair=pair,
             )
         except kill_switch.EntryPaused as paused:
             await _kill_switch_refuse(notifier, account, settings, paused.decision, _tlog, now=now, stage="in_lifecycle")
@@ -1365,6 +1408,8 @@ def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open
     never ignored)."""
     if len(open_trades) > 1:
         return True
+    if not is_paper and live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position) > 1:
+        return True  # LIVE_MULTI_POSITION and the account has more than one slot
     if open_trades and all(t.is_paper for t in open_trades) and any(multi_trade.strategy_of(t) in multi_trade.NEW_STRATEGY_IDS for t in open_trades):
         # A paper trade that rsi_mr_v1 or donchian_breakout_v1 opened is managed by ITS OWN rules, even if its switch was turned off since and even if the account
         # now resolves as LIVE (audit L1; refusing would leave the trade with no exit). It runs on the paper environment, places no order and enters nothing new
@@ -1444,9 +1489,12 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
     return size, None
 
 
-async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now) -> None:
+async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now, is_demo: bool = False) -> None:
     notifier = _SafeNotifier(notifier, account)  # one failed message must not stop the other trades being managed (audit L8)
     live = [t for t in open_trades if not t.is_paper]
+    if (live or not is_paper) and live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position) > 1:
+        await _process_live_multi(session, account, client, live, settings, notifier, now=now, is_demo=is_demo)
+        return
     if live:
         await _process_multi_live(session, account, client, live, settings, notifier, now=now)
         return
@@ -1647,6 +1695,104 @@ def _rsi_params(settings: Settings) -> rsi_mr.RsiParams:
                             time_stop_candles=settings.rsi_mr_time_stop_candles)
 
 
+async def _live_donchian_entry(session, account, client, settings: Settings, notifier, *, now, now_ms: int, is_demo: bool) -> None:
+    """LIVE_DONCHIAN only (default off). Looks for a Donchian breakout entry on the account's pair from CLOSED candles, only if the account is opted in (extra_strategies). The entry goes through
+    `_maybe_enter` exactly like an EMA entry (kill switch, daily dollar limit, 50% total stop, guards in enforce and the fee guard, pre-entry protection check, leverage cap, risk per trade, the protective
+    stop placed and verified right after the fill). Spot is long only."""
+    if not settings.donchian_enabled or donchian.STRATEGY_ID not in multi_trade.account_strategies(account):
+        return
+    if list_open_trades(session, account.id):
+        return
+    tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(account.pair, account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    raw = candles_from_ohlcv(ohlcv)
+    closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+    if not raw or not closed:
+        return
+    sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=account.market_type == "futures")
+    if not sig.side:
+        return
+    age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+    if not 0 <= age_ms <= window_ms:
+        if protection_guard.should_alert(account.id, account.pair, f"stale:{donchian.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: donchian_breakout_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, account.pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return
+    await _maybe_enter(session, account, client, sig, raw[-1].close, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
+
+
+async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float) -> None:
+    """A live donchian_breakout_v1 trade: (1) a CLOSE beyond the opposite 10-candle channel exits through `lifecycle.execute_exit` (the only live exit path); (2) otherwise the protective stop is trailed
+    (`lifecycle.move_stop`: favourable direction only, new stop placed first, old one cancelled after, a failed move keeps the old stop). The initial stop and the trailing stop are exchange-side
+    stops; touching either inside the candles is left to the exchange and the software backstop. Runs whenever such a trade is open, whatever the switch says."""
+    tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    trade_pair = trade.pair or ctx.account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(trade_pair, ctx.account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
+    if not closed:
+        return
+    p = _donchian_params(settings)
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    opened_ms = int(opened.timestamp() * 1000)
+    initial = trade.initial_stop_price if trade.initial_stop_price else trade.stop_loss_price
+    ex = donchian.exit_check(side=trade.side, entry=trade.entry_price, stop=initial, opened_ms=opened_ms, closed=closed, tf_ms=tf_ms, p=p)
+    if ex is not None and ex.reason == donchian.EXIT_CHANNEL:
+        await lifecycle.execute_exit(ctx, trade, reason=ex.reason, price_hint=ex.price)
+        return
+    if ex is not None:
+        return  # the stop or the trailing stop was touched: the exchange-side stop owns that exit
+    level = donchian_trail.trailing_level(side=trade.side, entry=trade.entry_price, opened_ms=opened_ms, closed=closed, p=p)
+    if level is not None:
+        await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=current_price)
+
+
+async def _live_rsi_entry(session, account, client, settings: Settings, notifier, *, now, now_ms: int, is_demo: bool) -> None:
+    """LIVE_RSI_MR only (default off). Looks for an RSI mean-reversion entry on the account's pair from CLOSED candles, only if the account is opted in (extra_strategies) and EMA took no entry this
+    cycle (one live slot, EMA first). The entry itself goes through `_maybe_enter` exactly like an EMA entry: kill switch, daily dollar limit and 50% total stop, strategy guards (enforce) and fee guard,
+    pre-entry protection check, leverage cap, risk per trade (the smaller of the account's and RSI_MR_RISK_PCT), the protective stop placed and verified right after the fill."""
+    if not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account):
+        return
+    if list_open_trades(session, account.id):
+        return  # a trade is open (EMA just opened one, or one was already running): one live slot
+    tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    pair = account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    raw = candles_from_ohlcv(ohlcv)
+    closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+    if not raw or not closed:
+        return
+    sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=account.market_type == "futures")
+    if not sig.side:
+        return
+    age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+    if not 0 <= age_ms <= window_ms:  # the signal candle must be the latest closed one and closed within the window (audit M5)
+        if protection_guard.should_alert(account.id, pair, f"stale:{rsi_mr.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: rsi_mr_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return
+    await _maybe_enter(session, account, client, sig, raw[-1].close, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
+
+
+async def _live_rsi_exit(ctx, trade: Trade, client, settings: Settings, *, now_ms: int) -> None:
+    """A live rsi_mr_v1 trade is exited by ITS rules (profit target, RSI back to 50, time stop) from the closed candles after it opened, through `lifecycle.execute_exit` (the only live exit path).
+    The stop is the exchange-side stop placed at entry (and the software backstop in monitor_trade); a stop touch found here is left to them. Runs whenever such a trade is open, whatever the switch says."""
+    tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    pair = trade.pair or ctx.account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, ctx.account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
+    if not closed:
+        return
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    ex = rsi_mr.exit_check(side=trade.side, entry=trade.entry_price, stop=trade.stop_loss_price, opened_ms=int(opened.timestamp() * 1000), closed=closed, tf_ms=tf_ms, p=_rsi_params(settings))
+    if ex is None or ex.reason == rsi_mr.EXIT_STOP:
+        return
+    await lifecycle.execute_exit(ctx, trade, reason=ex.reason, price_hint=ex.price)
+
+
 async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settings: Settings, notifier, *, p: rsi_mr.RsiParams, tf_ms: int, now) -> None:
     """Exit a PAPER rsi_mr_v1 trade by its own rules (stop, profit target, RSI back to 50, time stop) from the closed candles that ended
     after it was opened. The result depends only on the candles, not on when this cycle ran."""
@@ -1672,6 +1818,111 @@ async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settin
         + pnl_labels.exit_line(trade.entry_price, ex.price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
         + f"\nStrategy: {rsi_mr.STRATEGY_ID}",
     )
+
+
+async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session):
+    """(signal, price) for one strategy on one pair from closed candles, or None when it has no actionable, fresh signal. Read-only."""
+    allow_short = account.market_type == "futures"
+    symbol = exchange.exchange_symbol(pair, account.market_type)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+
+    def fresh(closed: list, tf_ms: int, label: str) -> bool:
+        age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+        if 0 <= age_ms <= window_ms:
+            return True
+        if protection_guard.should_alert(account.id, pair, f"stale:{label}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: %s signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, label, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return False
+
+    if strategy == donchian.STRATEGY_ID:
+        tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+        tf_ms = rsi_mr.timeframe_ms(tf)
+        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+        if not raw or not closed:
+            return None
+        sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=allow_short)
+        return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
+    if strategy == rsi_mr.STRATEGY_ID:
+        tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+        tf_ms = rsi_mr.timeframe_ms(tf)
+        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+        if not raw or not closed:
+            return None
+        sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=allow_short)
+        return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
+    candles = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=settings.timeframe, limit=settings.ohlcv_limit))
+    if not candles:
+        return None
+    sig_candles = _ema_signal_candles(candles, settings, now_ms)
+    sig = _ema_generate(sig_candles, settings)
+    if sig.signal == SignalType.NONE or _ema_entry_stale(session, settings, account, sig, sig_candles, pair, now=now, now_ms=now_ms, is_paper=False):
+        return None
+    return sig, candles[-1].close
+
+
+async def _process_live_multi(session, account, client, live_trades: list[Trade], settings, notifier, *, now, is_demo: bool) -> None:
+    """LIVE_MULTI_POSITION and the account has more than one slot (docs/safety/live_multi_position.md). (1) Every open live trade is reconciled against Binance and managed with ITS strategy's rules
+    (EMA: opposite crossover; RSI: target, RSI line, time stop; Donchian: channel exit and the trailing stop), whatever the strategy switches say. (2) At most ONE new entry per cycle, only if a slot is
+    free, on a pair with no open trade, in the priority Donchian, then EMA, then RSI. Every entry goes through `_maybe_enter` (kill switch, daily dollar limit, 50% total stop, guards, pre-entry
+    protection check, leverage cap, risk per trade, protective stop) plus the open-risk cap and the shared capital for a second or third trade."""
+    now_ms = int(now.timestamp() * 1000)
+    for t in live_trades:
+        t, ctx = await _manage_live_trade(session, account, client, t, settings, notifier, now=now, is_demo=is_demo)
+        if t.status != TRADE_OPEN or t.protection_status != PROTECTION_PROTECTED:
+            continue  # closed this cycle, or unhealthy and worked by the reconciler: no strategy decision on unverified protection
+        pair = t.pair or account.pair
+        strategy = multi_trade.strategy_of(t)
+        ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+        candles = candles_from_ohlcv(ohlcv)
+        if not candles:
+            logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
+            continue
+        price = candles[-1].close
+        if strategy == donchian.STRATEGY_ID:
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_donchian_manage(ctx, t, client, settings, now_ms=now_ms, current_price=price)
+        elif strategy == rsi_mr.STRATEGY_ID:
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_rsi_exit(ctx, t, client, settings, now_ms=now_ms)
+        else:
+            signal = _ema_generate(_ema_signal_candles(candles, settings, now_ms), settings)
+            opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=price)
+    account.last_error = None
+    account.last_error_at = None
+
+    slots = live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position)
+    open_now = [t for t in list_open_trades(session, account.id) if not t.is_paper]
+    if len(open_now) < slots:
+        taken = {t.pair or account.pair for t in open_now}
+        free_pairs = [p for p in live_multi.live_pairs(account) if p not in taken]
+        opted = multi_trade.account_strategies(account)
+        order = (
+            ([donchian.STRATEGY_ID] if (settings.live_donchian and settings.donchian_enabled and donchian.STRATEGY_ID in opted) else [])
+            + [multi_trade.EMA_STRATEGY_ID]
+            + ([rsi_mr.STRATEGY_ID] if (settings.live_rsi_mr and settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted) else [])
+        )
+        entered = False
+        for strategy in order:
+            for pair in free_pairs:
+                got = await _live_strategy_signal(client, account, pair, strategy, settings, now=now, now_ms=now_ms, session=session)
+                if got is None:
+                    continue
+                sig, price = got
+                if strategy == multi_trade.EMA_STRATEGY_ID:
+                    account.last_signal = sig.signal.value
+                    account.last_signal_at = now
+                await _maybe_enter(session, account, client, sig, price, settings, notifier, is_paper=False, now=now, pair=pair, is_demo=is_demo)
+                if len([t for t in list_open_trades(session, account.id) if not t.is_paper]) > len(open_now):
+                    entered = True
+                    break  # one new entry per cycle
+            if entered:
+                break
+    await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
 
 
 async def _process_multi_live(session, account, client, live_trades: list[Trade], settings, notifier, *, now) -> None:
@@ -1754,7 +2005,7 @@ async def _flag_withdrawal_block(session, account, notifier, *, now) -> None:
             logger.exception("account %s: failed to send the withdrawal-permission alert", account.id)
 
 
-async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now):
+async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now, is_demo: bool = False):
     """Verify the exchange can be managed safely, then reconcile `trade`
     against Binance. Returns (trade, LiveContext)."""
     venue = build_venue(
@@ -1763,7 +2014,7 @@ async def _manage_live_trade(session, account, client, trade: Trade, settings, n
         pair=trade.pair or account.pair,
         spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
     )
-    ctx = lifecycle.LiveContext(session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now)
+    ctx = lifecycle.LiveContext(session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo or bool(trade.is_demo))
     try:
         await venue.prepare(managing=True)
     except (exchange.UnsupportedAccountMode, exchange.UnsupportedSymbol, ProtectionUnavailable):
@@ -1832,6 +2083,9 @@ async def _maybe_send_daily_summary(session, account, notifier, *, now, settings
 
     total_pnl = sum(t.pnl or 0.0 for t in closed_today)
     quote = exchange.quote_currency(account.pair)
+    if settings is not None and settings.reporting_v2:
+        await notifier.send(account.notification_target, reporting.daily_summary_text(today, closed_today, quote))  # modes kept apart; "net" only with every fee known
+        return
     await notifier.send(
         account.notification_target,
         pnl_labels.daily_summary(

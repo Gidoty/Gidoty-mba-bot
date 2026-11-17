@@ -144,6 +144,25 @@ class CredentialUpdateRequest(BaseModel):
         return _validate_choice(v, CREDENTIAL_ENVIRONMENTS, "environment")
 
 
+class DemoCredentialsRequest(BaseModel):
+    """Keys created on Binance's DEMO system (Futures Demo Trading for a Futures account, Spot Testnet for a Spot account). Never a live key."""
+
+    api_key: str = Field(min_length=1)
+    api_secret: str = Field(min_length=1)
+
+
+class DemoModeRequest(BaseModel):
+    enabled: bool
+    confirm: bool
+
+    @field_validator("confirm")
+    @classmethod
+    def _must_confirm(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("confirm must be true - this endpoint only does something when you confirm")
+        return v
+
+
 PAIR_SELECTION_MODES = ("manual", "auto")
 
 
@@ -165,6 +184,8 @@ class AccountUpdateRequest(BaseModel):
     pair_selection_mode: str | None = None
     # The customer's daily loss limit in USDT (docs/safety/account_daily_loss.md). Omitted = unchanged. Lower applies at once, higher starts at the next midnight Lagos time.
     daily_loss_limit_usd: float | None = Field(default=None, gt=0)
+    # How many live trades the bot may hold at once, 1 to 3 (only while LIVE_MULTI_POSITION is on; otherwise refused). Omitted = unchanged.
+    live_slots: int | None = Field(default=None, ge=1, le=3)
     # Customer leverage setting (Futures; Spot ignores it): a whole number from 1 to 5, never above the global hard limit. The router checks the global limit.
     # Strict int: 3.0, "3" and true are rejected.
     max_leverage: StrictInt | None = Field(default=None, ge=1, le=5)
@@ -314,6 +335,14 @@ class AccountOut(BaseModel):
     # SMALL_CAPITAL_PAIRS: set while the bot has recently skipped the account's own pair because its capital cannot meet the pair's smallest order (a plain text and the capital needed).
     pair_skip_message: str | None = None
     pair_skip_min_capital: float | None = None
+    # DEMO mode (DEMO_RUNNER): `demo_available` says the service offers it, `demo_has_keys` that demo keys are on file, `demo_enabled_at` that the customer switched it on (then `mode` is "demo").
+    reports_available: bool = False
+    live_slots: int = 1
+    live_multi_available: bool = False
+    live_pair_count: int = 1
+    demo_available: bool = False
+    demo_has_keys: bool = False
+    demo_enabled_at: datetime | None = None
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so
@@ -353,6 +382,8 @@ class TradeOut(BaseModel):
     # strategy_id means ema_cross_atr_v1.
     pair: str | None = None
     strategy_id: str | None = None
+    # True for a DEMO trade (the demo runner). Live and paper screens exclude these.
+    is_demo: bool = False
 
     model_config = {"from_attributes": True}
 

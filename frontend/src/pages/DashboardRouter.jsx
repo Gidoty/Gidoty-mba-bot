@@ -63,6 +63,10 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
     return <TestnetDashboard account={account} onAccountChanged={refreshAccount} onActivate={startActivation} />;
   }
 
+  if (account.mode === "demo") {
+    return <LiveDashboard account={account} demo />;
+  }
+
   if (account.mode === "live") {
     return <LiveDashboard account={account} />;
   }

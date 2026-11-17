@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import BarChart from "../components/charts/BarChart.jsx";
 import EquityChart from "../components/charts/EquityChart.jsx";
+import ReportPanel from "../components/ReportPanel.jsx";
 import SplitBar from "../components/charts/SplitBar.jsx";
 import useTrades from "../components/dashboard/useTrades.js";
 import { Card, CardTitle, EmptyState, ErrorBanner, LoadingBlock, PageHeader, Pill, PnlText, Seg, StatTile, ThinNotice, UnprovenNotice } from "../components/ui.jsx";
@@ -19,10 +20,11 @@ const RANGES = [
 
 export default function Performance() {
   const { account } = useAccount();
-  const isPaper = account.mode !== "live";
+  const isDemo = account.mode === "demo";
+  const isPaper = account.mode !== "live" && !isDemo;
   const L = pnlLabels(account, { paper: isPaper });
   const unit = quoteCurrency(account) || "USDT";
-  const { status, trades, reload } = useTrades(isPaper, account.id);
+  const { status, trades, reload } = useTrades(isPaper, account.id, isDemo);
   const [range, setRange] = useState("all");
   const days = range === "all" ? null : Number(range);
 
@@ -35,7 +37,7 @@ export default function Performance() {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Performance" subtitle={isPaper ? "Based on practice trades (simulated)." : "Based on real trades."}>
+      <PageHeader title="Performance" subtitle={isDemo ? "DEMO: based on demo trades. No real money." : isPaper ? "Based on practice trades (simulated)." : "Based on real trades."}>
         <Seg label="Range" value={range} onChange={setRange} options={RANGES} />
       </PageHeader>
       <UnprovenNotice paper={isPaper} closedCount={status === "ready" ? allClosed.length : null} />
@@ -122,6 +124,7 @@ export default function Performance() {
           </Card>
         </>
       )}
+      <ReportPanel account={account} />
     </div>
   );
 }

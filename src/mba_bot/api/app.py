@@ -26,7 +26,7 @@ from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
 from ..scheduler import run_forever
 from .ratelimit import RateLimitMiddleware
-from .routers import account, auth, billing, pairs, telegram, trades
+from .routers import account, auth, billing, pairs, reports, telegram, trades
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(telegram.router)
     app.include_router(billing.router)
     app.include_router(pairs.router)
+    app.include_router(reports.router)
 
     @app.get("/api/health")
     def health() -> dict:

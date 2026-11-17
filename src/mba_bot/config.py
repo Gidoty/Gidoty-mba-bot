@@ -353,6 +353,22 @@ class Settings:
     # Small-capital pairs (docs/safety/small_capital_pairs.md): False = off (default), nothing changes. True: a pair whose minimum order the account's capital x leverage cap cannot meet is
     # recorded with a reason, shown to the customer with the capital needed, and left out of Auto Select.
     small_capital_pairs: bool = False
+    # Demo runner (docs/safety/demo_runner.md): False = off (default), no demo endpoint is reachable and no account can resolve to DEMO. True: a customer who enters separate demo keys and
+    # confirms can run the full live path against Binance Futures Demo Trading / Spot Testnet, labelled DEMO everywhere and kept apart from live and paper records.
+    demo_runner: bool = False
+    # Live RSI mean reversion (docs/safety/live_rsi.md): False = off (default), rsi_mr_v1 stays paper only. True: a LIVE (or DEMO) account that is opted in to rsi_mr_v1 (extra_strategies) may take an RSI entry when
+    # RSI_MR_ENABLED is on and NEW_STRATEGY_GUARDS_MODE=enforce, with the same guards, sizing, protective stop and limits as an EMA entry. One live slot: EMA has priority, RSI only if EMA took no entry.
+    live_rsi_mr: bool = False
+    # Live Donchian breakout with a trailing stop (docs/safety/live_donchian.md): False = off (default), donchian_breakout_v1 stays paper only. True: an opted-in LIVE (or DEMO) account may take a Donchian
+    # entry with the same guards and limits as EMA, and its protective stop is moved only in the favourable direction (new stop placed and verified first, old one cancelled after; a failed move keeps the old stop).
+    live_donchian: bool = False
+    # Live multi-position (docs/safety/live_multi_position.md): False = off (default), a live account holds one trade at a time as before. True: an account may hold up to its own `live_slots` (1 to 3) trades,
+    # one per pair, priority Donchian then EMA then RSI, one new entry per cycle, with the open risk capped across the trades (LIVE_TOTAL_RISK_CAP_PCT and the daily dollar limit) and the capital shared.
+    live_multi_position: bool = False
+    # Reporting (docs/safety/reporting.md): False = off (default), the existing summaries and screens are unchanged. True: GET /api/reports/summary and the Performance report, and a daily Telegram summary that keeps
+    # live, demo and practice apart and says "net" only when the real fees of every trade are known.
+    reporting_v2: bool = False
+    live_total_risk_cap_pct: float = 3.0  # the most open risk, as a percent of the trading capital, across all open live trades once a second or third trade is added (0 = no percent cap)
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
     foreign_order_alarm: str = "off"
@@ -574,6 +590,12 @@ def load_settings() -> Settings:
         futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),
         account_total_loss_stop=_env_bool("ACCOUNT_TOTAL_LOSS_STOP", False),
         small_capital_pairs=_env_bool("SMALL_CAPITAL_PAIRS", False),
+        demo_runner=_env_bool("DEMO_RUNNER", False),
+        live_rsi_mr=_env_bool("LIVE_RSI_MR", False),
+        live_donchian=_env_bool("LIVE_DONCHIAN", False),
+        live_multi_position=_env_bool("LIVE_MULTI_POSITION", False),
+        reporting_v2=_env_bool("REPORTING_V2", False),
+        live_total_risk_cap_pct=min(100.0, max(0.0, _env_float("LIVE_TOTAL_RISK_CAP_PCT", 3.0))),
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
