@@ -21,7 +21,7 @@ from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
-from ... import account_loss, daily_limit, risk_limits
+from ... import account_loss, daily_limit, risk_limits, small_capital
 from ...models import ApiCredential, Customer, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -121,6 +121,16 @@ def _daily_limit_fields(account: TradingAccount, *, db: Session, settings: Setti
     )
 
 
+def _pair_skip_fields(account: TradingAccount, *, db: Session, settings: Settings | None) -> dict:
+    """SMALL_CAPITAL_PAIRS off (default): nothing. On: the plain message for the account's own pair when the bot skipped it in the last 24 hours for being too small for the capital."""
+    if settings is None or not settings.small_capital_pairs:
+        return {}
+    row = small_capital.latest_for_pair(db, account.id, account.pair)
+    if row is None:
+        return {}
+    return dict(pair_skip_message=small_capital.row_message(row), pair_skip_min_capital=row.min_capital)
+
+
 def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, settings: Settings | None = None) -> AccountOut:
     state = resolve_trading_mode(
         trial_ends_at=account.trial_ends_at,
@@ -193,6 +203,7 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         total_loss_stop_threshold_pct=risk_limits.total_loss_threshold(),
         total_loss_reference_equity=account.loss_reference_equity,
         **_daily_limit_fields(account, db=db, settings=settings),
+        **_pair_skip_fields(account, db=db, settings=settings),
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,

@@ -350,6 +350,9 @@ class Settings:
     # Total loss stop (docs/safety/risk_per_trade.md), LIVE accounts only. False = off (default). True: new entries stop when an account's equity is 50 percent or more below its
     # reference equity (risk_limits.TOTAL_STOP_PCT, the same for every account), until the customer resets it on the dashboard. Open trades are never touched.
     account_total_loss_stop: bool = False
+    # Small-capital pairs (docs/safety/small_capital_pairs.md): False = off (default), nothing changes. True: a pair whose minimum order the account's capital x leverage cap cannot meet is
+    # recorded with a reason, shown to the customer with the capital needed, and left out of Auto Select.
+    small_capital_pairs: bool = False
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
     foreign_order_alarm: str = "off"
@@ -570,6 +573,7 @@ def load_settings() -> Settings:
         futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
         futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),
         account_total_loss_stop=_env_bool("ACCOUNT_TOTAL_LOSS_STOP", False),
+        small_capital_pairs=_env_bool("SMALL_CAPITAL_PAIRS", False),
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),

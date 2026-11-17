@@ -76,6 +76,13 @@ def capital_supports_market(allocated_capital: float, min_notional: float | None
     return allocated_capital * max_notional_multiplier >= min_notional
 
 
+def min_capital_needed(min_notional: float | None, leverage_cap: float) -> float | None:
+    """The trading capital whose position ceiling (capital x leverage cap) reaches the pair's minimum notional, or None when the exchange did not say."""
+    if min_notional is None or not leverage_cap or leverage_cap <= 0:
+        return None
+    return min_notional / leverage_cap
+
+
 def assess_pair(pair: str, facts: PairFacts | None, *, allocated_capital: float | None, max_notional_multiplier: float) -> PairStatus:
     """`facts` None (catalog unavailable) or `allocated_capital` None (not
     configured yet) means that check cannot be made and the pair is shown available."""

@@ -319,4 +319,4 @@ def test_the_head_is_the_new_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["e3b6c8a1d5f2"]  # (the head moved on with the daily loss limit)
+    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["f4c7d9b2a6e1"]  # (the head moved on with the daily loss limit)

@@ -551,6 +551,25 @@ class AccountLossPause(Base):
     timezone_name: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class PairSkip(Base):
+    """Why a pair was skipped for an account (SMALL_CAPITAL_PAIRS, docs/safety/small_capital_pairs.md): one row per account, pair, reason and UTC day, with a count. Numbers only."""
+
+    __tablename__ = "pair_skips"
+    __table_args__ = (UniqueConstraint("account_id", "pair", "reason", "day_key", name="uq_pair_skips_account_pair_reason_day"), Index("ix_pair_skips_last_seen", "last_seen"))
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    pair: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    day_key: Mapped[str] = mapped_column(String(10), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+    leverage_cap: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_capital: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class AccountTotalLossStop(Base):
     """Audit row for a total loss stop: new live entries stop from `triggered_at` until the customer resets it (`reset_at`). Never ends by itself. Numbers and times only."""
 

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -34,7 +34,7 @@ from .risk import (
     StopViability,
 )
 from .strategy import SignalType, StrategySignal, candles_from_ohlcv, generate_signal
-from .venue import ProtectionUnavailable, build_venue
+from .venue import ProtectionUnavailable, build_venue, rules_from_market
 
 logger = logging.getLogger(__name__)
 
@@ -246,8 +246,16 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 if (account.market_type == "futures" and settings.futures_pair_expansion and not is_paper)
                 else None
             )
+            viability_out: list | None = None
+            if settings.small_capital_pairs and not is_paper and account.allocated_capital is not None:
+                auto_capital, viability_out = account.allocated_capital, []  # every live account, Spot included, scans only pairs its capital can trade
             scan_out: dict | None = {} if telemetry.enabled(settings) else None
-            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms)
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms, viability_out=viability_out)
+            for skipped_pair, v in viability_out or []:
+                try:
+                    small_capital.record_skip(session, account, skipped_pair, small_capital.R_BELOW_MIN_CAPITAL, v, now=now)
+                except Exception:  # noqa: BLE001
+                    logger.warning("account %s: could not record the pair skip", account.id)
             if scan_out is not None:
                 scan_info = _scan_info(scan_out, auto_result)
                 telemetry.log_auto_scan(
@@ -800,8 +808,21 @@ def _resolve_credentials(account: TradingAccount, settings: Settings, *, is_pape
     )
 
 
+def _note_small_capital(session, account, venue, settings: Settings, *, price, capital, reason: str, now, is_paper: bool = False) -> None:
+    """SMALL_CAPITAL_PAIRS only: record why the account's own pair was skipped, with the capital its smallest order needs at the customer's leverage cap. Read-only against the exchange (the rules
+    are already loaded), writes one counter row, never raises into the entry decision."""
+    if not settings.small_capital_pairs or is_paper:
+        return
+    try:
+        cap = small_capital.leverage_cap_for(account.market_type, leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage))
+        v = small_capital.assess(venue.rules, price, capital=capital, leverage_cap=cap)
+        small_capital.record_skip(session, account, account.pair, reason, v, now=now)
+    except Exception:  # noqa: BLE001
+        logger.warning("account %s: could not record the pair skip", account.id)
+
+
 async def _scan_auto_pair(
-    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None
+    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None, viability_out: list | None = None
 ) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
@@ -836,7 +857,20 @@ async def _scan_auto_pair(
         except Exception:
             capital = None  # cannot read the exchange's minimums: scan exactly as before
     for pair in auto_pairs(account.market_type):
-        if capital is not None:
+        if capital is not None and viability_out is not None:
+            # SMALL_CAPITAL_PAIRS: judge each pair by the exchange's own minimum order at the customer's leverage cap; a pair the account cannot afford is recorded and left out.
+            try:
+                rules = rules_from_market((client.markets or {}).get(exchange.exchange_symbol(pair, account.market_type)) or {})
+            except Exception:  # noqa: BLE001
+                rules = None
+            cap = small_capital.leverage_cap_for(account.market_type, leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage))
+            v = small_capital.assess(rules, None, capital=capital, leverage_cap=cap)
+            if v.viable is False:
+                viability_out.append((pair, v))
+                if scan_out is not None:
+                    scan_out.setdefault("skipped_capital", []).append(pair)
+                continue
+        elif capital is not None:
             facts = pair_catalog.facts_from_market((client.markets or {}).get(exchange.exchange_symbol(pair, account.market_type)))
             if pair_catalog.capital_supports_market(capital, facts.min_notional, settings.max_notional_multiplier) is False:
                 logger.info("account %s: auto-select skipping %s: %s", account.id, pair, pair_catalog.REASON_INSUFFICIENT_CAPITAL)
@@ -1202,6 +1236,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             )
         if size.quantity <= 0:
             _tlog(telemetry.REJECTED, telemetry.R_SIZE_ZERO_CEILING)
+            _note_small_capital(session, account, venue, settings, price=current_price, capital=effective_capital, reason=small_capital.R_BELOW_MIN_CAPITAL, now=now, is_paper=is_paper)
             return
         quantity = venue.plan_entry_quantity(size.quantity, entry_price=current_price, stop_price=stop_price, side=side)
         if quantity <= 0:
@@ -1210,6 +1245,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 telemetry.REJECTED, telemetry.R_EXCHANGE_FILTERS,
                 wanted_qty=size.quantity, wanted_notional=size.quantity * current_price, capital=effective_capital,
             )
+            _note_small_capital(session, account, venue, settings, price=current_price, capital=effective_capital, reason=small_capital.R_BELOW_FILTERS, now=now, is_paper=is_paper)
             return
         precheck_detail = None
         if account.market_type == "futures" and settings.protection_precheck_mode != "off":
