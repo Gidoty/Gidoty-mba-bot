@@ -4,6 +4,9 @@ import RiskPctField, { acksComplete, riskFieldProblem } from "../components/Risk
 
 import { api } from "../api/client.js";
 import HelpTip from "../components/HelpTip.jsx";
+import BinanceSettingsLine from "../components/BinanceSettingsLine.jsx";
+import InfoHelp from "../components/InfoHelp.jsx";
+import { LEVERAGE_HELP } from "../leverageHelp.js";
 import { FormField, SavedNote, inputClass, primaryButton } from "../components/form.jsx";
 import { Card, CardTitle, ErrorBanner, PageHeader, Pill, ThemeSwitch } from "../components/ui.jsx";
 import { MARKET_TYPES, UPCOMING_PAIRS } from "../constants.js";
@@ -200,15 +203,25 @@ export default function BotSettings() {
           <RiskPctField value={riskPct} onChange={setRiskPct} limit={riskLimit} acks={acks} onAcksChange={setAcks} />
 
           {marketType === "futures" && (
-            <FormField label="Leverage (Futures)" hint={`Whole number from 1 to ${leverageLimit}. The most a position can be worth compared with your trading capital. Applies to new trades only.`}>
-              <select value={maxLeverage} onChange={(e) => setMaxLeverage(e.target.value)} className={inputClass}>
+            <div>
+              <div className="flex items-center gap-1">
+                <label htmlFor="max-leverage" className="text-sm font-medium text-fg">
+                  Leverage (Futures)
+                </label>
+                <InfoHelp label="the leverage setting" help={LEVERAGE_HELP} />
+              </div>
+              <select id="max-leverage" value={maxLeverage} onChange={(e) => setMaxLeverage(e.target.value)} className={inputClass} aria-describedby="max-leverage-hint">
                 {Array.from({ length: leverageLimit }, (_, i) => i + 1).map((n) => (
                   <option key={n} value={String(n)}>
                     {n}x
                   </option>
                 ))}
               </select>
-            </FormField>
+              <span id="max-leverage-hint" className="mt-1 block text-xs text-muted">
+                {`Whole number from 1 to ${leverageLimit}. The most a position can be worth compared with your trading capital. Applies to new trades only.`}
+              </span>
+              <BinanceSettingsLine />
+            </div>
           )}
         </div>
 

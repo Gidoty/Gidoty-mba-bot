@@ -32,6 +32,6 @@ Rollback: set `FUTURES_LEVERAGE_MODE=strict` (or remove the line), restart gate,
 ## NOT verified
 
 * A live Binance reply for leverage and margin mode (above). Whether Binance's symbol-config endpoint is per symbol exactly as ccxt's parser assumes; whether margin mode and leverage can be changed while a position is open (not needed by the bot).
-* Any exact click path on Binance's screens: `docs/customer/leverage_help.md` is generic and marks the rest UNVERIFIED.
-* The dashboard info icons and the margin-mode status are not built; the wording is waiting for review. The help for this setting lives behind the dashboard info icon only.
+* Any exact click path or control name on Binance's screens: the customer text in `docs/customer/leverage_help.md` is generic and the open points are in its reviewer section, not shown to customers.
+* The info icons and the Binance-settings line (B6a-2) are built and show the approved wording; the dialog was not clicked through in a browser. The help for this setting lives behind the dashboard info icon only.
 * The fake exchange proves control flow only.

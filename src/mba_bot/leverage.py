@@ -59,5 +59,21 @@ def effective(binance_leverage: float, cap: int) -> float:
 # Customer-facing refusal text (docs/customer/leverage_help.md has the reviewed wording). Fixed strings: nothing from the exchange is ever put in them.
 MSG_NOT_ISOLATED = (
     "your Binance Futures margin mode on {pair} is not isolated (or could not be read), and this service trades isolated margin only. "
-    "On Binance, open the Futures page for {pair}, find the Margin Mode control and choose Isolated, then try again. MBA Bot never changes it for you."
+    "On Binance, open the Futures page for {pair}, look for the Leverage and Margin Mode settings and choose Isolated, then try again. MBA Bot never changes it for you."
 )
+
+
+# The read-only "what Binance has for your pair" line on the dashboard (docs/customer/leverage_help.md section 4). Fixed strings: nothing from the exchange except the two numbers/words
+# below (the leverage as a number and isolated or cross) ever reaches the customer.
+TXT_PAPER = "Not applicable: your account is in practice mode, so it does not use your Binance settings."
+TXT_SPOT = "Not applicable: leverage and margin mode apply to Futures only."
+TXT_FAILED = "Could not read your Binance settings for this pair right now. Try again in a minute."
+TXT_BUSY = "Still checking your Binance settings. Try again in a few seconds."
+
+
+def describe(pair: str, leverage: float | None, margin_mode: str | None) -> str | None:
+    """'Binance for BTC/USDT: 5x, isolated' / '...: 20x, cross' / '...: 5x, margin mode could not be read'. None when the leverage could not be read (the caller uses TXT_FAILED)."""
+    if isinstance(leverage, bool) or not isinstance(leverage, (int, float)) or leverage != leverage or leverage <= 0:
+        return None
+    mode = margin_mode if margin_mode in ("isolated", "cross") else "margin mode could not be read"
+    return f"Binance for {pair}: {leverage:g}x, {mode}"

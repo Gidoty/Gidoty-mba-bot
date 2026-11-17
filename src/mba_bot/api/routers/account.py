@@ -5,6 +5,7 @@ implementation of the trial/bypass rules.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -48,6 +49,7 @@ from ..schemas import (
     PositionOut,
     StartBotRequest,
     TotalLossResetRequest,
+    BinanceSettingsOut,
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -352,6 +354,66 @@ def update_account(
         # risk_pct above has always been editable under).
         account.allocated_capital = body.allocated_capital
     return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
+
+
+# --- GET /api/account/binance-settings: a read-only look at the leverage and margin mode Binance has for the account's pair ---
+# Cached per account in this process so it cannot be used to hammer Binance: a good answer is reused for 60 seconds, a failed one for 10, and a request that arrives while another for the same
+# account is still being answered gets a fixed "still checking" text without any exchange call. One read (the same function the trader uses), nothing is placed or changed.
+_BS_OK_TTL, _BS_FAIL_TTL, _BS_PENDING_TTL = 60.0, 10.0, 10.0
+_bs_cache: dict[str, tuple[float, "BinanceSettingsOut"]] = {}
+_bs_pending: dict[str, float] = {}
+
+
+def _bs_now() -> float:
+    return time.monotonic()
+
+
+def _bs_not_applicable(text: str) -> "BinanceSettingsOut":
+    return BinanceSettingsOut(status="not_applicable", text=text)
+
+
+@router.get("/binance-settings", response_model=BinanceSettingsOut)
+async def get_binance_settings(
+    customer: Customer = Depends(require_legal_acceptance),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BinanceSettingsOut:
+    account = _require_account(customer)
+    if _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).mode != "live":
+        return _bs_not_applicable(leverage_module.TXT_PAPER)
+    if account.market_type != "futures":
+        return _bs_not_applicable(leverage_module.TXT_SPOT)
+    now = _bs_now()
+    cached = _bs_cache.get(account.id)
+    if cached is not None and cached[0] > now and cached[1].pair == account.pair:
+        return cached[1]
+    if _bs_pending.get(account.id, 0.0) > now:
+        return BinanceSettingsOut(status="unavailable", pair=account.pair, text=leverage_module.TXT_BUSY)
+    failed = BinanceSettingsOut(status="unavailable", pair=account.pair, text=leverage_module.TXT_FAILED)
+    if not settings.encryption_key or account.credential is None:
+        return failed
+    _bs_pending[account.id] = now + _BS_PENDING_TTL
+    result = failed
+    client = None
+    try:
+        api_key = decrypt(account.credential.encrypted_api_key, key=settings.encryption_key)
+        api_secret = decrypt(account.credential.encrypted_api_secret, key=settings.encryption_key)
+        client = exchange.build_exchange_client(exchange="binance", market_type="futures", api_key=api_key, api_secret=api_secret, sandbox=False)
+        leverage, mode = await exchange.fetch_symbol_leverage_and_margin_mode(client, exchange.exchange_symbol(account.pair, "futures"), side="long")
+        text = leverage_module.describe(account.pair, leverage, mode)
+        if text is not None:
+            result = BinanceSettingsOut(status="ok", pair=account.pair, leverage=leverage, margin_mode=mode, text=text)
+    except Exception:  # noqa: BLE001 - never the exchange's text, never a key: a fixed failure string
+        result = failed
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        _bs_pending.pop(account.id, None)
+    _bs_cache[account.id] = (_bs_now() + (_BS_OK_TTL if result.status == "ok" else _BS_FAIL_TTL), result)
+    return result
 
 
 @router.get("/risk-limits")
