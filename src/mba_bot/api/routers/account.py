@@ -6,7 +6,7 @@ implementation of the trial/bypass rules.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -21,7 +21,7 @@ from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
-from ... import account_loss, risk_limits
+from ... import account_loss, daily_limit, risk_limits
 from ...models import ApiCredential, Customer, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -53,6 +53,9 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
+
+
+DAILY_LIMIT_REQUIRED_TEXT = "set your daily loss limit on the Risk tab of Bot Settings before turning on live trading"
 
 
 def _require_account(customer: Customer) -> TradingAccount:
@@ -88,6 +91,34 @@ def _check_risk_setting(db: Session, customer: Customer, risk_pct: float, *, ack
             )
         to_record.append(doc_type)
     return to_record
+
+
+def _day_keys(settings: Settings | None, now: datetime | None = None) -> tuple[str, str]:
+    """(today, tomorrow) as local day keys in the account day time zone (Lagos by default; an invalid name falls back to Lagos here: the trader itself fails closed on it)."""
+    now = now or datetime.now(timezone.utc)
+    tz = account_loss.zone(settings.account_day_timezone if settings else "Africa/Lagos") or account_loss.zone("Africa/Lagos")
+    today = account_loss.local_date(now, tz)
+    return today.isoformat(), (today + timedelta(days=1)).isoformat()
+
+
+def _daily_limit_fields(account: TradingAccount, *, db: Session, settings: Settings | None) -> dict:
+    """The daily loss limit as the screen needs it. Reads only; a pending raise whose day has arrived is shown as the amount in force (the trader promotes it on its first check of the day)."""
+    today, _ = _day_keys(settings)
+    r = daily_limit.resolve(account.daily_loss_limit_usd, account.daily_loss_limit_pending_usd, account.daily_loss_limit_pending_from, today)
+    ref = daily_limit.reference_value(account, db)
+    return dict(
+        daily_loss_limit_usd=r.amount,
+        daily_loss_limit_pending_usd=r.pending_amount,
+        daily_loss_limit_pending_from=r.pending_from,
+        daily_loss_limit_is_default=bool(account.daily_loss_limit_is_default),
+        daily_loss_limit_required=r.amount is None,
+        daily_loss_limit_enforced=bool(settings.account_daily_loss_limit) if settings else False,
+        daily_loss_limit_pct=daily_limit.pct_of(r.amount, ref),
+        daily_loss_limit_suggested_usd=daily_limit.suggested_usd(ref),
+        daily_loss_limit_max_usd=daily_limit.total_stop_level_usd(ref),
+        account_value_reference=ref,
+        one_trade_can_exceed_limit=daily_limit.one_trade_can_exceed(account.risk_pct, account.allocated_capital, r.amount),
+    )
 
 
 def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, settings: Settings | None = None) -> AccountOut:
@@ -159,8 +190,9 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         risk_pct_limit=settings.risk_pct_max if settings else 2.0,
         total_loss_stop_enabled=bool(settings.account_total_loss_stop) if settings else False,
         total_loss_stop_active=account_loss.active_total_stop(db, account.id) is not None,
-        total_loss_stop_threshold_pct=risk_limits.total_loss_threshold(account.risk_pct),
+        total_loss_stop_threshold_pct=risk_limits.total_loss_threshold(),
         total_loss_reference_equity=account.loss_reference_equity,
+        **_daily_limit_fields(account, db=db, settings=settings),
         runtime_status=runtime_status,
         last_scanned_at=account.last_scanned_at,
         last_signal=account.last_signal,
@@ -296,6 +328,12 @@ def update_account(
         # Checked before anything is changed: a number above the limit is refused (never silently lowered), and a number above 2% or from 10% needs its recorded acknowledgment.
         ack_to_record = _check_risk_setting(db, customer, body.risk_pct, ack_high=body.acknowledge_high_risk, ack_very_high=body.acknowledge_very_high_risk, settings=settings)
 
+    if body.daily_loss_limit_usd is not None:
+        # Checked before anything is changed, like the risk setting above: the amount must be above 0 and below the dollar level of the automatic total stop.
+        problem = daily_limit.validate_amount(body.daily_loss_limit_usd, reference_value=daily_limit.reference_value(account, db))
+        if problem is not None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
+
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
     changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
@@ -341,6 +379,10 @@ def update_account(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         for doc_type in ack_to_record:
             record_acceptance(db, customer_id=customer.id, document_type=doc_type, version=risk_limits.ACK_VERSION)
+    if body.daily_loss_limit_usd is not None:
+        # Lowering applies at once, a raise starts at the next midnight Lagos time (daily_limit.set_amount). Safe with a trade open: open trades keep their stops.
+        today, tomorrow = _day_keys(settings)
+        daily_limit.set_amount(account, body.daily_loss_limit_usd, today_key=today, next_day_key=tomorrow)
     if body.max_leverage is not None:
         # Applies to NEW entries only (the bot reads it when it sizes an entry), so it is safe to change with a trade open: that trade is not touched.
         try:
@@ -547,6 +589,9 @@ def enable_live_trading_route(
     # position that only exists in our own simulated ledger.
     _require_no_open_trade(db, account, action="enabling live trading")
 
+    if account.daily_loss_limit_usd is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, DAILY_LIMIT_REQUIRED_TEXT)
+
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
     record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
@@ -593,6 +638,9 @@ def start_bot_route(
         raise HTTPException(status.HTTP_409_CONFLICT, "the bot is already started for this account")
 
     _require_no_open_trade(db, account, action="starting the bot")
+
+    if account.daily_loss_limit_usd is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, DAILY_LIMIT_REQUIRED_TEXT)
 
     account.bot_started_at = start_bot()
     return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)

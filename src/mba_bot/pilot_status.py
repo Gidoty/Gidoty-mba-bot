@@ -29,7 +29,7 @@ EXIT_OK, EXIT_UNREADABLE, EXIT_NO_LIVE = 0, 2, 3
 
 # (environment name, Settings attribute, the value that means "off / not in use"). Only these are ever printed, and only their plain values: nothing secret is in this list.
 SWITCHES = (
-    ("RISK_PCT_MAX", "risk_pct_max", 2.0), ("ACCOUNT_DAILY_LOSS_PCT", "account_daily_loss_pct", 0.0), ("ACCOUNT_DAY_TIMEZONE", "account_day_timezone", None),
+    ("RISK_PCT_MAX", "risk_pct_max", 2.0), ("ACCOUNT_DAILY_LOSS_LIMIT", "account_daily_loss_limit", False), ("ACCOUNT_DAY_TIMEZONE", "account_day_timezone", None),
     ("ACCOUNT_TOTAL_LOSS_STOP", "account_total_loss_stop", False), ("FUTURES_MAX_LEVERAGE", "futures_max_leverage", 0.0), ("FUTURES_LEVERAGE_MODE", "futures_leverage_mode", "strict"),
     ("PROTECTION_PRECHECK_MODE", "protection_precheck_mode", "off"), ("PROTECTION_FAIL_LIMIT_MODE", "protection_fail_limit_mode", "off"), ("STRATEGY_GUARDS_MODE", "strategy_guards_mode", "off"),
     ("NEW_STRATEGY_GUARDS_MODE", "new_strategy_guards_mode", "off"), ("EMA_CLOSED_CANDLE_ONLY", "ema_closed_candle_only", False), ("FOREIGN_ORDER_ALARM", "foreign_order_alarm", "off"),
@@ -93,18 +93,21 @@ def account_screen(session: Session, account: TradingAccount, settings, now: dat
                      f"{' (approximate: first read of the day)' if day.approximate else ''}; change since day start {_num(None if loss is None else -loss)}%")
     # daily pause
     pause = session.execute(select(AccountLossPause).where(AccountLossPause.account_id == account.id).order_by(desc(AccountLossPause.started_at)).limit(1)).scalar_one_or_none()
-    if settings.account_daily_loss_pct <= 0:
-        lines.append("daily pause: off (ACCOUNT_DAILY_LOSS_PCT is 0)")
+    amount = account.daily_loss_limit_usd
+    pend = (f"; pending raise to {account.daily_loss_limit_pending_usd:g} USDT from {account.daily_loss_limit_pending_from}" if account.daily_loss_limit_pending_usd else "")
+    shown = (f"limit {amount:g} USDT{' (service default, customer has not changed it)' if account.daily_loss_limit_is_default else ''}{pend}" if amount else "NO LIMIT SET (a live account takes no new entry while the switch is on)")
+    if not settings.account_daily_loss_limit:
+        lines.append(f"daily pause: off (ACCOUNT_DAILY_LOSS_LIMIT is off); {shown}")
     elif pause is not None and today is not None and pause.day_key == today and (pause.ends_at.replace(tzinfo=timezone.utc) if pause.ends_at.tzinfo is None else pause.ends_at) > now:
-        lines.append(f"daily pause: ACTIVE since {_fmt_time(pause.started_at)} (down {pause.loss_pct:.2f}%, limit {pause.limit_pct:g}%), new entries resume at {_fmt_time(pause.ends_at)}")
+        lines.append(f"daily pause: ACTIVE since {_fmt_time(pause.started_at)} (down {pause.loss_pct:.2f}%, limit {_num(pause.limit_usd)} USDT), new entries resume at {_fmt_time(pause.ends_at)}")
     else:
-        lines.append(f"daily pause: not active (limit {settings.account_daily_loss_pct:g}%, day {today or 'unknown: invalid ACCOUNT_DAY_TIMEZONE'})")
+        lines.append(f"daily pause: not active ({shown}, day {today or 'unknown: invalid ACCOUNT_DAY_TIMEZONE'})")
     # total loss stop
-    threshold = risk_limits.total_loss_threshold(account.risk_pct)
+    threshold = risk_limits.total_loss_threshold()
     stop = account_loss.active_total_stop(session, account.id)
     ref = account.loss_reference_equity
     if not settings.account_total_loss_stop:
-        lines.append(f"total loss stop: off (ACCOUNT_TOTAL_LOSS_STOP is off); would be {threshold:g}% for risk {account.risk_pct:g}%")
+        lines.append(f"total loss stop: off (ACCOUNT_TOTAL_LOSS_STOP is off); would be {threshold:g}% below the reference value")
     elif stop is not None:
         lines.append(f"total loss stop: ACTIVE since {_fmt_time(stop.triggered_at)} (down {stop.loss_pct:.2f}%, limit {stop.threshold_pct:g}%); only the customer's reset on the dashboard releases it")
     else:

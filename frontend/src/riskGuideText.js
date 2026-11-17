@@ -1,6 +1,6 @@
 // What the app tells a customer about risk per trade, leverage and the safety limits. One source for the How-to guide, the Help page and the Landing page, so they cannot disagree.
 // Every number comes from the constants in lib/riskBands.js, which a Python test compares with the code. Plain words, no promise of profit, no advice.
-import { LEVERAGE_DEFAULT, LEVERAGE_MAX, LEVERAGE_MIN, RECOMMENDED_MAX, RISK_CEILING, RISK_MIN, TOTAL_STOP_CAP_PCT, TOTAL_STOP_MIN_PCT, TOTAL_STOP_MULTIPLE, VERY_HIGH_FROM } from "./lib/riskBands.js";
+import { LEVERAGE_DEFAULT, LEVERAGE_MAX, LEVERAGE_MIN, RECOMMENDED_MAX, RISK_CEILING, RISK_MIN, TOTAL_STOP_PCT, VERY_HIGH_FROM } from "./lib/riskBands.js";
 
 // The definition of "risk per trade" and how it differs from leverage. One wording, used by the info icon next to the field, the How-to guide and the Help page.
 export const RISK_DEFINITION = "Risk per trade is the share of your trading capital the bot is willing to lose on one trade if its stop-loss is hit.";
@@ -34,16 +34,16 @@ export const RISK_GUIDE_STEPS = [
     "Before a Futures trade the bot estimates where Binance would liquidate the position. If its stop-loss would sit too close to that level, or beyond it, it does not open the trade and tells you. This is an estimate, so it lowers the risk and does not remove it. A stop-loss can also fill at a worse price in a fast market.",
   ],
   [
-    "Daily loss pause",
-    "If your account falls by the daily loss limit within one day, the bot opens no new trades until the next day starts. Your balance and open positions are counted at their current value. The day runs from midnight to midnight in Lagos time. The limit is the same for every account and does not change with your risk setting, so at a high risk setting one lost trade can already reach it.",
+    "Daily loss limit",
+    "You set your own daily loss limit in US dollars (USDT) on Bot Settings, and live trading cannot start without it. If your account falls by that amount within one day, the bot opens no new trades until the next day starts at midnight Lagos time. Lowering it applies at once; raising it starts at the next midnight Lagos time. It does not change with your risk setting, and an open trade keeps its stop-loss.",
   ],
   [
     "Total loss stop",
-    `If your account falls ${TOTAL_STOP_MIN_PCT}% below its reference value, or ${TOTAL_STOP_MULTIPLE} times your risk per trade if that is more (never more than ${TOTAL_STOP_CAP_PCT}%), the bot opens no new trades until you reset it on Bot Settings. It never resets on its own. The reference value is your balance when the bot first checked, or when you last reset.`,
+    `If your account falls ${TOTAL_STOP_PCT}% or more below its reference value, the bot opens no new trades until you reset it on Bot Settings. This stop is automatic and the same for every account. It is not a setting, and it never resets on its own. The reference value is your balance when the bot first checked, or when you last reset.`,
   ],
   [
     "Open trades and your money",
-    "The loss limits apply to live trading; practice trades are simulated. They only stop new trades. A trade that is already open keeps its stop-loss and exit rules. Do not deposit or withdraw money in the middle of the day: the daily pause and the total loss stop are measured from your balance, so moving money makes them wrong. After you move money, reset the total loss limit on Bot Settings.",
+    "The loss limits apply to live trading; practice trades are simulated. They only stop new trades. A trade that is already open keeps its stop-loss and exit rules. Do not deposit or withdraw money in the middle of the day: the daily limit and the total loss stop are measured from your balance, so moving money makes them wrong. After you move money, reset the total loss stop on Bot Settings.",
   ],
 ];
 

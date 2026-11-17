@@ -44,7 +44,7 @@ def test_the_screen_constants_equal_the_code_constants(js):
     c = js["consts"]
     assert c["RISK_MIN"] == rl.RISK_MIN and c["RISK_CEILING"] == rl.RISK_CEILING == 40.0
     assert c["RECOMMENDED_MAX"] == rl.RISK_RECOMMENDED_MAX and c["VERY_HIGH_FROM"] == rl.RISK_VERY_HIGH_FROM
-    assert c["TOTAL_STOP_MIN_PCT"] == rl.TOTAL_STOP_MIN_PCT and c["TOTAL_STOP_MULTIPLE"] == rl.TOTAL_STOP_MULTIPLE and c["TOTAL_STOP_CAP_PCT"] == rl.TOTAL_STOP_CAP_PCT
+    assert c["TOTAL_STOP_PCT"] == rl.TOTAL_STOP_PCT == 50.0 and "TOTAL_STOP_MULTIPLE" not in c and "TOTAL_STOP_CAP_PCT" not in c
     assert (c["LEVERAGE_MIN"], c["LEVERAGE_MAX"], c["LEVERAGE_DEFAULT"]) == (lv.LEVERAGE_MIN, lv.LEVERAGE_MAX, lv.LEVERAGE_DEFAULT)
 
 
@@ -59,13 +59,13 @@ def test_the_guide_numbers_match_the_code(js):
     lev = _step(js, "Leverage on Futures")
     assert f"{lv.LEVERAGE_MIN}x to {lv.LEVERAGE_MAX}x, {lv.LEVERAGE_DEFAULT}x until you change it" in lev
     total = _step(js, "Total loss stop")
-    assert f"{rl.TOTAL_STOP_MIN_PCT:g}% below" in total and f"{rl.TOTAL_STOP_MULTIPLE:g} times your risk per trade" in total and f"never more than {rl.TOTAL_STOP_CAP_PCT:g}%" in total
+    assert f"{rl.TOTAL_STOP_PCT:g}% or more below its reference value" in total and "times your risk per trade" not in total and "automatic and the same for every account" in total
 
 
 def test_the_total_loss_threshold_the_text_describes_is_the_one_the_code_computes():
-    # "10% or 3 times the risk per trade if that is more, never more than 80%"
+    # "50% or more below its reference value", whatever the risk setting
     for risk in (0.1, 1, 2, 3.33, 5, 10, 20, 26.67, 40):
-        assert rl.total_loss_threshold(risk) == min(80.0, max(10.0, 3.0 * risk))
+        assert rl.total_loss_threshold(risk) == 50.0
 
 
 def test_nothing_says_two_percent_is_the_maximum(js):

@@ -231,8 +231,12 @@ def test_enable_live_trading_rejects_missing_or_false_risk_disclosure():
         _retag_mainnet(client)
         _make_eligible("noriskflag@example.com")
 
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
+
         missing = client.post("/api/account/enable-live-trading", json={})
         assert missing.status_code == 422
+
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
 
         false_flag = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": False})
         assert false_flag.status_code == 422
@@ -252,6 +256,8 @@ def test_enable_live_trading_records_risk_disclosure_acceptance_only_on_success(
         _mark_paid("riskok@example.com")
         _retag_mainnet(client)
         _make_eligible("riskok@example.com")
+
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
 
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 200
@@ -281,6 +287,7 @@ def test_risk_disclosure_acceptance_alone_cannot_activate_live_trading():
     with TestClient(app, base_url="https://testserver") as client:
         _signup_with_account(client, "riskonly@example.com")
         # Deliberately not paid, not eligible, not retagged to mainnet.
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
@@ -307,6 +314,8 @@ def test_payment_alone_still_cannot_activate_live_trading_with_consent_wired_in(
         before = client.get("/api/account").json()
         assert before["mode"] == "paper"  # every gate but the dedicated call itself is now met
 
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
+
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
         # Enabling live trading authorizes going live; it never starts
@@ -324,6 +333,7 @@ def test_testnet_credential_still_blocks_live_trading_even_with_risk_disclosure_
         _mark_paid("stilltestnet@example.com")
         _make_eligible("stilltestnet@example.com")
         # Never retagged to mainnet - credential is still the signup-default testnet tag.
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
         assert "mainnet" in response.json()["detail"].lower()
@@ -335,6 +345,7 @@ def test_downgrading_to_testnet_still_disables_live_trading_with_consent_wired_i
         _mark_paid("downgradeconsent@example.com")
         _retag_mainnet(client)
         _make_eligible("downgradeconsent@example.com")
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
         client.patch("/api/account", json={"allocated_capital": 500})
@@ -380,6 +391,7 @@ def test_legal_acceptance_rows_never_contain_credentials_or_secrets():
         )
         assert created.status_code == 201
         _make_eligible("nosecrets@example.com")
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
 

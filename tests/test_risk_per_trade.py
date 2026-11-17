@@ -78,19 +78,21 @@ def test_the_default_limit_is_two(monkeypatch):
     assert load_settings().risk_pct_max == 2.0 and load_settings().account_total_loss_stop is False
 
 
-def test_total_loss_threshold_scales_and_is_capped():
+def test_total_loss_threshold_is_one_fixed_number_for_every_risk_setting():
     t = rl.total_loss_threshold
-    assert [t(x) for x in (0.1, 1, 2, 3.33, 5, 10, 20, 26.7, 40)] == [10.0, 10.0, 10.0, 10.0, 15.0, 30.0, 60.0, 80.0, 80.0]
-    assert t(float("nan")) == 10.0 and t(0) == 10.0 and t(-1) == 10.0
+    assert rl.TOTAL_STOP_PCT == 50.0
+    assert {t(x) for x in (0.1, 1, 2, 3.33, 5, 10, 20, 26.7, 40, float("nan"), 0, -1, None)} == {50.0}
+    assert t() == 50.0 and not hasattr(rl, "TOTAL_STOP_MULTIPLE") and not hasattr(rl, "TOTAL_STOP_CAP_PCT") and not hasattr(rl, "TOTAL_STOP_MIN_PCT")
 
 
 def test_total_loss_hit_boundaries_and_fail_closed():
     import math
 
     hit = lambda eq, risk=1.0, ref=1000.0: rl.total_loss_hit(reference_equity=ref, equity=eq, risk_pct=risk)
-    assert hit(900.0) is not None and abs(hit(900.0) - 10.0) < 1e-9 and hit(900.01) is None  # at the threshold: a hit
-    assert hit(850.0, risk=5.0) is not None and hit(850.1, risk=5.0) is None  # 15% for a 5% setting
-    assert hit(200.0, risk=40.0) is not None and hit(200.1, risk=40.0) is None  # 80% for 40%
+    assert hit(500.0) is not None and abs(hit(500.0) - 50.0) < 1e-9 and hit(500.01) is None  # at 50 percent: a hit
+    for risk in (0.1, 1.0, 5.0, 40.0):  # the same line for every risk setting
+        assert hit(500.0, risk=risk) is not None and hit(500.1, risk=risk) is None
+    assert hit(900.0) is None and hit(600.0, risk=40.0) is None  # a 10 or 40 percent fall no longer stops anything
     for bad_equity in (float("nan"), None, "x", float("inf")):
         assert math.isnan(hit(bad_equity)) if not isinstance(bad_equity, float) or math.isnan(bad_equity) else hit(bad_equity) is not None  # a bad reading is a hit (nan)
     for bad_ref in (0, -5, None, float("nan"), "x"):
@@ -105,8 +107,8 @@ def test_open_risk_cap_values():
 
 
 EXPECTED_TABLE = {
-    1: (10.0, [2.0, 2.0, 3.0]), 2: (10.0, [2.0, 4.0, 6.0]), 5: (15.0, [5.0, 10.0, 15.0]),
-    10: (30.0, [10.0, 20.0, 30.0]), 20: (60.0, [20.0, 40.0, 60.0]), 40: (80.0, [40.0, 80.0, 100.0]),
+    1: (50.0, [2.0, 2.0, 3.0]), 2: (50.0, [2.0, 4.0, 6.0]), 5: (50.0, [5.0, 10.0, 15.0]),
+    10: (50.0, [10.0, 20.0, 30.0]), 20: (50.0, [20.0, 40.0, 60.0]), 40: (50.0, [40.0, 80.0, 100.0]),
 }
 
 
@@ -117,7 +119,7 @@ def test_the_effective_limits_table_equals_what_the_code_computes_and_the_doc():
         assert [mt.open_risk_cap(2.0, risk, n) for n in (1, 2, 3)] == caps
         row = next(line for line in doc.splitlines() if line.startswith(f"| {risk}% |"))
         cells = [c.strip() for c in row.strip("|").split("|")]
-        assert cells[1] == "4%"  # the daily pause is the same fixed value in every row
+        assert cells[1] == "set by you"  # the daily limit is the customer's own amount in every row
         assert float(cells[2].split("%")[0]) == stop
         assert [float(c.split("%")[0]) for c in cells[3:6]] == caps
 
@@ -240,7 +242,7 @@ def test_the_total_loss_reset_needs_a_confirmation():
         assert client.post("/api/account/total-loss-reset", json={"confirm": False}).status_code == 422
         assert client.post("/api/account/total-loss-reset", json={}).status_code == 422
         r = client.post("/api/account/total-loss-reset", json={"confirm": True})
-        assert r.status_code == 200 and r.json()["total_loss_stop_active"] is False and r.json()["total_loss_stop_threshold_pct"] == 10.0
+        assert r.status_code == 200 and r.json()["total_loss_stop_active"] is False and r.json()["total_loss_stop_threshold_pct"] == 50.0
 
 
 # ------------------------------------------------------------------ text agrees everywhere

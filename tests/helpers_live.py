@@ -103,6 +103,7 @@ def make_account(
     pair: str = "BTC/USDT",
     allocated_capital: float | None = 1000.0,
     notification_target: str | None = "555000111",
+    daily_loss_limit_usd: float | None = 40.0,  # a live account must have one (the switch ACCOUNT_DAILY_LOSS_LIMIT is off unless a test turns it on)
 ) -> str:
     customer = Customer(email=email, password_hash="x", has_paid=True)
     session.add(customer)
@@ -119,6 +120,7 @@ def make_account(
         live_trading_enabled_at=now,
         bot_started_at=start_bot(now=now),
         allocated_capital=allocated_capital,
+        daily_loss_limit_usd=daily_loss_limit_usd,
     )
     session.add(account)
     session.flush()

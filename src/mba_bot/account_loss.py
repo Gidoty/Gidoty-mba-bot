@@ -1,9 +1,8 @@
-"""Account-wide daily loss pause (docs/safety/account_daily_loss.md).
+"""Account-wide daily loss limit (docs/safety/account_daily_loss.md).
 
-A LIVE account stops opening NEW trades for the rest of its local calendar day once its equity is `ACCOUNT_DAILY_LOSS_PCT` percent below the equity it started that
-day with. Equity is the exchange balance plus open positions at mark (realised and unrealised), see `exchange.fetch_account_equity`. Open trades are never touched:
-their stops and exits keep running. The pause ends by itself at the next local midnight and is separate from the per-strategy daily loss guard and from any
-cumulative stop.
+A LIVE account stops opening NEW trades for the rest of its local calendar day once its account value is the customer's dollar limit (`TradingAccount.daily_loss_limit_usd`) or more below
+the value it started that day with. The value is the exchange balance plus open positions at mark (realised and unrealised), see `exchange.fetch_account_equity`. Open trades are never
+touched: their stops and exits keep running. The pause ends by itself at the next local midnight and is separate from the per-strategy daily loss guard and from the total loss stop.
 
 Pure rules (`day_key`, `next_day_start`, `daily_loss_hit`) first, then the small amount of database work. Fail closed: an unreadable equity, a non-finite number or an
 invalid time zone name means "no new entry", never "assume it is fine"."""
@@ -18,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import risk_limits
 from .models import AccountDayEquity, AccountLossPause
 
 logger = logging.getLogger(__name__)
@@ -26,14 +26,28 @@ KIND_DAILY_LOSS = "daily_loss"
 R_ACCOUNT_DAILY_PAUSE = "account_daily_loss_pause"
 R_EQUITY_UNREADABLE = "account_equity_unreadable"
 R_TIMEZONE_INVALID = "account_day_timezone_invalid"
+R_LIMIT_MISSING = "daily_loss_limit_missing"
 
 # The start of a day is the last equity sample before midnight only if it is this recent; otherwise it is the first read of the day (flagged approximate).
 SAMPLE_MAX_AGE = timedelta(hours=1)
 
 CUSTOMER_MESSAGE_PAUSE = (
-    "New trades are paused for the rest of today because your account is down by the daily loss limit since the start of the day. "
-    "Open positions keep their protective stops and exits. Trading resumes at the start of the next day."
+    "New trades are paused until midnight Lagos time because your account is down by your daily loss limit since the start of the day. "
+    "Open positions keep their protective stops and exits."
 )
+CUSTOMER_MESSAGE_LIMIT_MISSING = "No new trade was opened because you have not set a daily loss limit. Set one on the Risk tab of Bot Settings."
+
+
+def pause_message(*, loss_usd, reference_equity=None, equity=None) -> str:
+    """The notification text when the daily limit is hit: the amount lost today, "no new trades until midnight Lagos time", and (when a reference value is known) the total loss so far
+    against it. Numbers and fixed words only."""
+    text = f"MBA Bot: your daily loss limit was reached. You lost {loss_usd:.2f} USDT today. No new trades until midnight Lagos time. Open positions keep their protective stops and exits."
+    if _finite(reference_equity) and reference_equity > 0 and _finite(equity):
+        total = reference_equity - equity
+        text += f" Total loss so far: {total:.2f} USDT against your reference value of {reference_equity:.2f} USDT."
+    return text
+
+
 CUSTOMER_MESSAGE_UNREADABLE = "Could not read your account balance just now, so no new trade was opened. This will retry automatically on the next check."
 CUSTOMER_MESSAGE_TIMEZONE = "No new trade was opened because the service's day-boundary setting is invalid. The operator has been alerted."
 
@@ -74,22 +88,21 @@ def _finite(x) -> bool:
 
 @dataclass(frozen=True)
 class DailyLossHit:
+    loss_usd: float
     loss_pct: float
     start_equity: float
     equity: float
 
 
-def daily_loss_hit(*, start_equity, equity, limit_pct) -> DailyLossHit | None:
-    """None when the day's loss is under the limit or the guard is off (limit_pct <= 0). A hit when equity is `limit_pct` percent or more below the start.
-    A non-finite or non-positive start, or a non-finite equity, is a HIT (fail closed). The comparison tolerates float noise (1e-9)."""
-    if not _finite(limit_pct) or limit_pct <= 0:
-        return None
-    if not (_finite(start_equity) and start_equity > 0 and _finite(equity)):
-        return DailyLossHit(loss_pct=float("nan"), start_equity=float(start_equity) if _finite(start_equity) else float("nan"),
-                            equity=float(equity) if _finite(equity) else float("nan"))
-    loss_pct = (start_equity - equity) / start_equity * 100.0
-    if loss_pct >= limit_pct - 1e-9:
-        return DailyLossHit(loss_pct=loss_pct, start_equity=float(start_equity), equity=float(equity))
+def daily_loss_hit(*, start_equity, equity, limit_usd) -> DailyLossHit | None:
+    """None when today's loss in dollars is under the limit. A hit when the account value is `limit_usd` or more below the day-start value (float noise of 1e-9 tolerated).
+    Fail closed: a missing, non-finite or non-positive limit, a non-finite or non-positive start, or a non-finite equity is a HIT (nan numbers)."""
+    nan = float("nan")
+    if not (_finite(limit_usd) and limit_usd > 0 and _finite(start_equity) and start_equity > 0 and _finite(equity)):
+        return DailyLossHit(loss_usd=nan, loss_pct=nan, start_equity=float(start_equity) if _finite(start_equity) else nan, equity=float(equity) if _finite(equity) else nan)
+    loss = start_equity - equity
+    if loss >= limit_usd - 1e-9:
+        return DailyLossHit(loss_usd=float(loss), loss_pct=loss / start_equity * 100.0, start_equity=float(start_equity), equity=float(equity))
     return None
 
 
@@ -138,7 +151,7 @@ def record_sample(session: Session, account_id: str, equity: float, now: datetim
     return row
 
 
-def write_pause(session: Session, account_id: str, hit: DailyLossHit, *, limit_pct: float, now: datetime, tz: ZoneInfo, tz_name: str) -> AccountLossPause:
+def write_pause(session: Session, account_id: str, hit: DailyLossHit, *, limit_usd: float, now: datetime, tz: ZoneInfo, tz_name: str) -> AccountLossPause:
     """The audit row for today's pause. Idempotent: a second call the same local day returns the existing row."""
     key = day_key(now, tz)
     row = session.execute(
@@ -149,7 +162,8 @@ def write_pause(session: Session, account_id: str, hit: DailyLossHit, *, limit_p
     row = AccountLossPause(
         account_id=account_id, kind=KIND_DAILY_LOSS, day_key=key, started_at=_aware(now), ends_at=next_day_start(now, tz),
         start_equity=hit.start_equity if _finite(hit.start_equity) else 0.0, equity_at_hit=hit.equity if _finite(hit.equity) else 0.0,
-        loss_pct=hit.loss_pct if _finite(hit.loss_pct) else 100.0, limit_pct=float(limit_pct), timezone_name=tz_name[:40],
+        loss_pct=hit.loss_pct if _finite(hit.loss_pct) else 100.0, limit_usd=float(limit_usd) if _finite(limit_usd) else None,
+        limit_pct=(float(limit_usd) / hit.start_equity * 100.0) if _finite(limit_usd) and _finite(hit.start_equity) and hit.start_equity > 0 else 0.0, timezone_name=tz_name[:40],
     )
     session.add(row)
     session.flush()
@@ -162,7 +176,7 @@ def write_pause(session: Session, account_id: str, hit: DailyLossHit, *, limit_p
 KIND_TOTAL_LOSS = "total_loss"
 R_ACCOUNT_TOTAL_STOP = "account_total_loss_stop"
 CUSTOMER_MESSAGE_TOTAL_STOP = (
-    "New trades are stopped because your account is down by the total loss limit from its reference value. Open positions keep their protective stops and exits. "
+    f"New trades are stopped because your account is down by the automatic total loss stop ({risk_limits.TOTAL_STOP_PCT:g}% below its reference value). Open positions keep their protective stops and exits. "
     "New trades start again only after you reset this on your dashboard."
 )
 

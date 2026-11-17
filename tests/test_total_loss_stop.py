@@ -62,7 +62,7 @@ def step(clock, minutes):
 # ------------------------------------------------------------------ off by default
 def test_off_by_default_reads_nothing_and_writes_nothing(db, monkeypatch):
     st = make_settings(max_notional_multiplier=100.0)  # no daily pause, no total stop
-    assert st.account_total_loss_stop is False and st.account_daily_loss_pct == 0.0
+    assert st.account_total_loss_stop is False and st.account_daily_loss_limit is False
     client, clock, aid = rig(monkeypatch, st, market="futures")
 
     async def boom(*a, **k):
@@ -86,8 +86,9 @@ def test_the_reference_is_the_first_healthy_reading_and_does_not_move(db, monkey
     assert account(aid)[0] == 1000.0
 
 
-@pytest.mark.parametrize("risk,threshold", [(0.1, 10.0), (1.0, 10.0), (2.0, 10.0), (5.0, 15.0), (10.0, 30.0), (20.0, 60.0), (40.0, 80.0)])
-def test_the_stop_acts_at_the_scaled_threshold_and_not_before(db, monkeypatch, risk, threshold):
+@pytest.mark.parametrize("risk", [0.1, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
+def test_the_stop_acts_at_fifty_percent_for_every_risk_setting_and_not_before(db, monkeypatch, risk):
+    threshold = 50.0  # risk_limits.TOTAL_STOP_PCT: one number for everyone
     st, client, clock, aid = fut(monkeypatch, risk=risk)
     run_cycle(aid, st)
     client.total_margin_balance = 1000.0 * (1 - (threshold - 0.05) / 100)  # a hair under the limit
@@ -98,14 +99,14 @@ def test_the_stop_acts_at_the_scaled_threshold_and_not_before(db, monkeypatch, r
     step(clock, 10)
     n = FakeNotifier()
     run_cycle(aid, st, n)
-    assert len(stops()) == 1 and abs(stops()[0].threshold_pct - threshold) < 1e-9 and stops()[0].risk_pct == risk and stops()[0].reset_at is None
-    assert len([t for t in n.texts if "total loss limit" in t]) == 1 and "account_total_loss_stop" in reasons()
+    assert len(stops()) == 1 and abs(stops()[0].threshold_pct - threshold) < 1e-9 and stops()[0].reset_at is None
+    assert len([t for t in n.texts if "automatic total loss stop" in t]) == 1 and "account_total_loss_stop" in reasons()
 
 
 def test_it_stops_new_entries_and_never_ends_by_itself(db, monkeypatch):
     st, client, clock, aid = fut(monkeypatch)
     run_cycle(aid, st)
-    client.total_margin_balance = 880.0  # 12% down, limit 10%
+    client.total_margin_balance = 480.0  # 52% down, limit 50%
     client._ohlcv = BULLISH_OHLCV
     step(clock, 5)
     n = FakeNotifier()
@@ -114,7 +115,7 @@ def test_it_stops_new_entries_and_never_ends_by_itself(db, monkeypatch):
     for minutes in (10, 15):
         step(clock, minutes)
         run_cycle(aid, st, n)
-    assert len(stops()) == 1 and len([t for t in n.texts if "total loss limit" in t]) == 1  # one row, one alert
+    assert len(stops()) == 1 and len([t for t in n.texts if "automatic total loss stop" in t]) == 1  # one row, one alert
     client.total_margin_balance = 2000.0  # equity is far above the reference again
     for days in (1, 3, 30):
         clock.instant = NOON + timedelta(days=days)
@@ -125,7 +126,7 @@ def test_it_stops_new_entries_and_never_ends_by_itself(db, monkeypatch):
 def test_the_customers_reset_releases_it_and_takes_a_fresh_reference(db, monkeypatch):
     st, client, clock, aid = fut(monkeypatch)
     run_cycle(aid, st)
-    client.total_margin_balance = 800.0
+    client.total_margin_balance = 400.0
     client._ohlcv = BULLISH_OHLCV
     step(clock, 5)
     run_cycle(aid, st)
@@ -134,9 +135,9 @@ def test_the_customers_reset_releases_it_and_takes_a_fresh_reference(db, monkeyp
         assert account_loss.reset_total_stop(s, s.get(TradingAccount, aid), NOON + timedelta(minutes=6)) is True
     assert account(aid) == (None, None) and stops()[0].reset_at is not None
     step(clock, 10)
-    run_cycle(aid, st)  # new reference from the then-current equity (800), and the entry is allowed
-    assert account(aid)[0] == 800.0 and len(stops()) == 1 and len(all_trades(aid)) == 1
-    client.total_margin_balance = 800.0 * 0.89  # down 11% from the NEW reference: a new stop
+    run_cycle(aid, st)  # new reference from the then-current equity (400), and the entry is allowed
+    assert account(aid)[0] == 400.0 and len(stops()) == 1 and len(all_trades(aid)) == 1
+    client.total_margin_balance = 400.0 * 0.49  # down 51% from the NEW reference: a new stop
     step(clock, 15)
     run_cycle(aid, st)
     assert len(stops()) == 2 and sum(1 for x in stops() if x.reset_at is None) == 1
@@ -162,8 +163,8 @@ def test_a_deposit_and_a_withdrawal_without_a_reset(db, monkeypatch):
     client.total_margin_balance = 1000.0 * 0.95
     step(clock, 10)
     run_cycle(aid, st)
-    assert stops() == []  # a 5% fall below the reference only: the deposit masked 36% of the account (the documented limitation)
-    client.total_margin_balance = 880.0  # a withdrawal looks like a loss and fails safe
+    assert stops() == []  # a 5% fall below the reference only: the deposit masked 37% of the account (the documented limitation)
+    client.total_margin_balance = 480.0  # a withdrawal looks like a loss and fails safe
     step(clock, 15)
     run_cycle(aid, st)
     assert len(stops()) == 1
@@ -194,7 +195,7 @@ def test_an_unreadable_first_reading_sets_no_reference_and_blocks(db, monkeypatc
 def test_the_tick_writes_the_stop_on_an_idle_cycle_without_any_signal(db, monkeypatch):
     st, client, clock, aid = fut(monkeypatch)  # a flat market: no signal tries to enter
     run_cycle(aid, st)
-    client.total_margin_balance = 850.0
+    client.total_margin_balance = 450.0
     step(clock, 5)
     run_cycle(aid, st)
     assert len(stops()) == 1 and all_trades(aid) == []
@@ -207,7 +208,7 @@ def test_an_open_trade_is_untouched_when_the_stop_acts(db, monkeypatch):
     run_cycle(aid, st)
     assert all_trades(aid)[0].status == "open"
     orders = {k: dict(v) for k, v in client.orders.items()}
-    client.free["USDT"] -= 300.0  # a large fall in equity with the trade open
+    client.free["USDT"] -= 600.0  # a large fall in equity with the trade open
     step(clock, 5)
     run_cycle(aid, st)
     assert len(stops()) == 1
@@ -234,24 +235,24 @@ def test_paper_accounts_are_not_affected(db, monkeypatch):
     assert account(aid) == (None, None) and stops() == []
 
 
-# ------------------------------------------------------------------ the daily pause does not scale with risk
+# ------------------------------------------------------------------ the daily limit is the customer's amount, whatever the risk setting
 @pytest.mark.parametrize("risk", [1.0, 10.0, 20.0, 40.0])
-def test_the_daily_limit_is_the_same_for_every_risk_setting(db, monkeypatch, risk):
-    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_pct=4.0, risk_pct_max=40.0)  # total stop off
+def test_the_daily_limit_is_the_customers_amount_for_every_risk_setting(db, monkeypatch, risk):
+    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_limit=True, risk_pct_max=40.0)  # total stop off
     client, clock, aid = rig(monkeypatch, st, market="futures", email=f"r{int(risk)}@example.com")
     client.total_margin_balance = 1000.0
     with session_scope() as s:
         s.get(TradingAccount, aid).risk_pct = risk
     run_cycle(aid, st)
-    client.total_margin_balance = 960.1  # down 3.99%
+    client.total_margin_balance = 960.1  # down 39.9 USDT, the amount is 40
     step(clock, 5)
     run_cycle(aid, st)
     assert rows(AccountLossPause) == []
-    client.total_margin_balance = 960.0  # down exactly 4.0%: the same limit whatever the risk setting
+    client.total_margin_balance = 960.0  # down exactly 40 USDT: the same limit whatever the risk setting
     step(clock, 10)
     run_cycle(aid, st)
     p = rows(AccountLossPause)
-    assert len(p) == 1 and p[0].limit_pct == 4.0
+    assert len(p) == 1 and p[0].limit_usd == 40.0
 
 
 def test_the_daily_code_does_not_know_about_risk_per_trade():
@@ -267,25 +268,25 @@ def test_the_daily_code_does_not_know_about_risk_per_trade():
     assert "risk_pct" not in trader_src and "risk_limits" not in trader_src
 
 
-def test_the_daily_pause_is_unchanged_when_it_is_off_even_with_the_total_stop_on(db, monkeypatch):
-    st, client, clock, aid = fut(monkeypatch, risk=40.0)  # ACCOUNT_DAILY_LOSS_PCT is 0
-    assert st.account_daily_loss_pct == 0.0
+def test_the_daily_limit_is_unchanged_when_it_is_off_even_with_the_total_stop_on(db, monkeypatch):
+    st, client, clock, aid = fut(monkeypatch, risk=40.0)  # ACCOUNT_DAILY_LOSS_LIMIT is off
+    assert st.account_daily_loss_limit is False
     run_cycle(aid, st)
-    client.total_margin_balance = 700.0  # a 30% fall: far below any daily limit, but the total stop for 40% risk is 80%
+    client.total_margin_balance = 700.0  # a 30% fall: well under the total stop (50%) and the daily limit is off
     step(clock, 5)
     run_cycle(aid, st)
     assert rows(AccountDayEquity) == [] and rows(AccountLossPause) == [] and stops() == []
 
 
 def test_both_limits_can_act_in_one_cycle_and_the_daily_state_is_kept(db, monkeypatch):
-    st, client, clock, aid = fut(monkeypatch, risk=1.0, account_daily_loss_pct=4.0)
+    st, client, clock, aid = fut(monkeypatch, risk=1.0, account_daily_loss_limit=True)
     run_cycle(aid, st)
-    client.total_margin_balance = 850.0  # 15% down: past the daily 4% and the total 10%
+    client.total_margin_balance = 450.0  # 55% down: past the daily 40 USDT and the total 50%
     step(clock, 5)
     n = FakeNotifier()
     run_cycle(aid, st, n)
     assert len(rows(AccountLossPause)) == 1 and len(stops()) == 1
-    assert len([t for t in n.texts if "paused for the rest of today" in t]) == 1 and len([t for t in n.texts if "total loss limit" in t]) == 1
+    assert len([t for t in n.texts if "No new trades until midnight Lagos time" in t]) == 1 and len([t for t in n.texts if "automatic total loss stop" in t]) == 1
 
 
 # ------------------------------------------------------------------ migration
@@ -305,7 +306,8 @@ def test_the_migration_is_additive_idempotent_and_reversible(tmp_path, monkeypat
     before = cols()
     assert "account_total_loss_stops" not in eng().get_table_names()
     command.upgrade(cfg, "head")
-    assert cols() == before | {"loss_reference_equity", "loss_reference_at"} and "account_total_loss_stops" in eng().get_table_names()
+    daily = {"daily_loss_limit_usd", "daily_loss_limit_pending_usd", "daily_loss_limit_pending_from", "daily_loss_limit_is_default"}  # the later daily limit migration
+    assert cols() == before | {"loss_reference_equity", "loss_reference_at"} | daily and "account_total_loss_stops" in eng().get_table_names()
     command.upgrade(cfg, "head")
     command.downgrade(cfg, "b9e3d7a2c5f1")
     assert cols() == before and "account_total_loss_stops" not in eng().get_table_names()
@@ -317,4 +319,4 @@ def test_the_head_is_the_new_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["d2a5b9c7e1f4"]  # (the head moved on with PR 2)
+    assert script.get_revision("c1f4a8d2e6b3").down_revision == "b9e3d7a2c5f1" and script.get_heads() == ["e3b6c8a1d5f2"]  # (the head moved on with the daily loss limit)

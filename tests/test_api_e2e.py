@@ -126,6 +126,7 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
 
         # Trying to enable live trading with a testnet-tagged credential
         # on file must be refused.
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         refused = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert refused.status_code == 409
 
@@ -140,6 +141,8 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         assert retag.json()["credential_environment"] == "mainnet"
         assert retag.json()["mode"] == "paper"  # still not enabled yet
 
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
+
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
         # Enabling live trading authorizes going live; it never starts
@@ -148,6 +151,8 @@ def test_signup_onboarding_telegram_link_and_live_bypass():
         assert enabled.json()["mode"] == "paper"
         assert enabled.json()["live_trading_enabled_at"] is not None
         assert enabled.json()["bot_started_at"] is None
+
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
 
         again_enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert again_enabled.status_code == 409
