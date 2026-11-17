@@ -29,8 +29,8 @@ export function howToSections(serverIp) {
     {
       title: "Your settings and account",
       steps: [
-        ["Bot Settings", "Trading capital is the most of your Binance balance, in dollars, that the bot may use. Risk per trade goes from 0.1% up to the limit shown on the screen; we recommend 2% or less. You also choose the pair and the market. Pair, market and pair selection mode cannot be changed while a trade is open. Risk per trade and trading capital can be changed at any time. Appearance sets Auto, Light or Dark."],
-        ["Notifications", "Telegram messages tell you when a trade opens or closes, when a position needs attention, and a daily summary."],
+        ["Bot Settings", "Two tabs, one Save. Trading: pair selection, pair, market and trading capital, in dollars, the most of your Binance balance the bot may use. Risk: risk per trade (we recommend 2% or less), leverage on Futures and your daily loss limit, required before live trading. Pair, market and pair selection mode cannot be changed while a trade is open. Risk per trade and trading capital can be changed at any time."],
+        ["Notifications", "Telegram messages tell you when a trade opens or closes, when a position needs attention, and a daily summary. The Theme control in the top right corner sets Auto, Light or Dark for this browser."],
         ["Account", "Shows your email, your account status and your bot code. Keep the bot code handy: support will ask for it."],
       ],
     },

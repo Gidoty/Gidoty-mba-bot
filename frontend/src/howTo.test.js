@@ -116,3 +116,13 @@ test("the Help page and the Landing page use the same risk text and do not say 2
   assert.match(landing, /never above 40%/);
   assert.ok(!/Set 0\.1% to 2%/.test(landing) && !/at most 2%/.test(landing));
 });
+
+test("Bot Settings has two tabs and the daily loss limit; the theme control is on Notifications, top right, and no longer under Bot Settings", () => {
+  const settings = all.find((x) => x.startsWith("Bot Settings."));
+  assert.match(settings, /Two tabs, one Save/);
+  assert.match(settings, /Trading: pair selection, pair, market and trading capital/);
+  assert.match(settings, /Risk: risk per trade .*leverage on Futures and your daily loss limit, required before live trading/);
+  assert.ok(!/Appearance/.test(all.join(" ")));
+  const notifications = all.find((x) => x.startsWith("Notifications."));
+  assert.match(notifications, /Theme control in the top right corner sets Auto, Light or Dark/);
+});
