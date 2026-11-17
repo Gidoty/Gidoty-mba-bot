@@ -191,7 +191,7 @@ def test_the_head_is_the_fee_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == ["b7f3d5a9c2e4"] and script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"  # (the head moved on with the daily loss limit)
+    assert script.get_heads() == ["d9b5f7c2e4a6"] and script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"  # (the head moved on with the daily loss limit)
 
 
 def test_no_trade_history_read_happens_before_the_protective_stop_on_a_futures_entry(db, monkeypatch):

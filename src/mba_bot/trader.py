@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -189,7 +189,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         if _use_multi(account, settings, is_paper, open_trades):
             # More than one trade, or a PAPER multi-trade account (MAX_OPEN_POSITIONS above 1 and an owner-set pair list). With
             # the defaults (one trade, one pair) this is never true and the single-trade path below runs exactly as before.
-            await _process_multi(session, account, client, open_trades, settings, notifier, is_paper=is_paper, now=now)
+            await _process_multi(session, account, client, open_trades, settings, notifier, is_paper=is_paper, now=now, is_demo=is_demo)
             return
 
         if open_trade is not None and not open_trade.is_paper:
@@ -1083,7 +1083,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             []
             if settings.protection_fail_limit_mode == "off"
             else protection_guard.limit_hits(
-                session, account.id, account.pair, now=now, settings=settings, codes=_LIMIT_CODES
+                session, account.id, pair, now=now, settings=settings, codes=_LIMIT_CODES
             )
         )
         for hit in hits:
@@ -1097,7 +1097,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 _observe_line(
                     account, settings, hit.reason_code, now,
                     "account %s: [observe] %s protection-failure limit reached on %s (%d in %gh, limit %d); entry NOT blocked",
-                    account.id, hit.kind, account.pair, hit.failures, hit.window_hours, hit.limit,
+                    account.id, hit.kind, pair, hit.failures, hit.window_hours, hit.limit,
                 )
             else:
                 _tlog(telemetry.REJECTED, hit.reason_code, mode="enforce", **limit_detail)
@@ -1122,12 +1122,20 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             logger.warning("account %s: live account has no allocated_capital configured, refusing to enter", account.id)
             _tlog(telemetry.REJECTED, telemetry.R_NO_CAPITAL_SET)
             return
-        live_balance = await exchange.fetch_available_quote_balance(client, account.pair)
+        live_balance = await exchange.fetch_available_quote_balance(client, pair)
         # The customer's configured ceiling, never more than what
         # Binance actually shows as free right now - see models.py's
         # allocated_capital docstring and the capital-allocation spec:
         # effective_capital = min(configured_trading_capital, currently_available_balance).
         effective_capital = min(account.allocated_capital, live_balance)
+        open_live = [t for t in list_open_trades(session, account.id) if not t.is_paper] if settings.live_multi_position else []
+        if open_live:
+            # A second or third live trade (LIVE_MULTI_POSITION): the trading capital is shared, so this trade is sized from what the open trades have not already used.
+            cap_for_share = small_capital.leverage_cap_for(account.market_type, leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage))
+            effective_capital = min(effective_capital, live_multi.free_capital(account.allocated_capital, open_live, cap_for_share))
+            if effective_capital <= 0:
+                _tlog(telemetry.REJECTED, live_multi.R_CAPITAL_SHORT, allocated=account.allocated_capital, open_trades=len(open_live))
+                return
         if effective_capital <= 0:
             _tlog(telemetry.REJECTED, telemetry.R_NO_FREE_BALANCE, allocated=account.allocated_capital, free=live_balance)
             return
@@ -1168,12 +1176,13 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         venue = build_venue(
             client,
             market_type=account.market_type,
-            pair=account.pair,
+            pair=pair,
             spot_stop_limit_buffer_pct=settings.spot_stop_limit_buffer_pct,
             entries_allowed=True,  # the ONLY place: assert_trade_only just passed above
         )
         ctx = lifecycle.LiveContext(
-            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo
+            session=session, account=account, venue=venue, settings=settings, notifier=notifier, now=now, is_demo=is_demo,
+            slot_cap=live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position),
         )
         try:
             await venue.prepare()
@@ -1231,7 +1240,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 # required, and the liquidation check below still uses the real Binance leverage. The bot only READS leverage and margin mode.
                 if margin_mode != "isolated":
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode, mode="size_cap")
-                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED, leverage_module.MSG_NOT_ISOLATED.format(pair=account.pair), now=now)
+                    await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED, leverage_module.MSG_NOT_ISOLATED.format(pair=pair), now=now)
                     return
                 cap = leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage)
                 sizing_leverage = leverage_module.effective(leverage, cap)
@@ -1243,13 +1252,13 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 if leverage > settings.futures_max_leverage + 1e-9:
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_LEVERAGE_CEILING, leverage=leverage, ceiling=settings.futures_max_leverage)
                     await _block_entry(notifier, account, settings, telemetry.R_FUTURES_LEVERAGE_CEILING,
-                                       f"your Binance Futures leverage on {account.pair} ({leverage:g}x) is above the limit of {settings.futures_max_leverage:g}x set for this service. "
+                                       f"your Binance Futures leverage on {pair} ({leverage:g}x) is above the limit of {settings.futures_max_leverage:g}x set for this service. "
                                        "Lower it for this pair on Binance. MBA Bot never changes it for you.", now=now)
                     return
                 if margin_mode != "isolated":
                     _tlog(telemetry.REJECTED, telemetry.R_FUTURES_NOT_ISOLATED, margin_mode=margin_mode)
                     await _block_entry(notifier, account, settings, telemetry.R_FUTURES_NOT_ISOLATED,
-                                       f"your Binance Futures margin mode on {account.pair} is not isolated (or could not be read), and this service trades isolated margin only. "
+                                       f"your Binance Futures margin mode on {pair} is not isolated (or could not be read), and this service trades isolated margin only. "
                                        "Switch the pair to isolated margin on Binance. MBA Bot never changes it for you.", now=now)
                     return
             size = apply_margin_ceiling(
@@ -1268,6 +1277,17 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             )
             _note_small_capital(session, account, venue, settings, price=current_price, capital=effective_capital, reason=small_capital.R_BELOW_FILTERS, now=now, is_paper=is_paper)
             return
+        if open_live:
+            # The open risk across the trades is capped: every open trade at its CURRENT stop plus this one must stay within LIVE_TOTAL_RISK_CAP_PCT of the trading capital and within the daily dollar limit.
+            refused = live_multi.check_additional_entry(
+                open_live, new_risk=quantity * size.stop_distance, capital=account.allocated_capital, cap_pct=settings.live_total_risk_cap_pct,
+                daily_limit_usd=account.daily_loss_limit_usd if settings.account_daily_loss_limit else None,
+            )
+            if refused is not None:
+                _tlog(telemetry.REJECTED, refused, open_risk=round(live_multi.total_open_risk(open_live), 4), new_risk=round(quantity * size.stop_distance, 4), open_trades=len(open_live))
+                if protection_guard.should_alert(account.id, pair, f"multi_risk:{refused}", now=now, repeat_hours=6.0):
+                    logger.info("account %s: additional entry on %s refused (%s): open risk %.4f, new %.4f", account.id, pair, refused, live_multi.total_open_risk(open_live), quantity * size.stop_distance)
+                return
         precheck_detail = None
         if account.market_type == "futures" and settings.protection_precheck_mode != "off":
             check = await _precheck_entry(
@@ -1286,7 +1306,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     _observe_line(
                         account, settings, check.reason, now,
                         "account %s: [observe] protection pre-check would refuse %s %s (%s) %s; entry NOT blocked",
-                        account.id, side, account.pair, check.reason, precheck_detail,
+                        account.id, side, pair, check.reason, precheck_detail,
                     )
                 else:
                     _tlog(telemetry.REJECTED, check.reason, **detail)
@@ -1294,14 +1314,14 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                     await _block_entry(notifier, account, settings, check.reason, _precheck_message(account, check, leverage), now=now)
                     return
             elif settings.protection_precheck_mode == "observe" and protection_guard.should_alert(
-                account.id, account.pair, "observe:pass", now=now, repeat_hours=_PASS_LOG_REPEAT_HOURS
+                account.id, pair, "observe:pass", now=now, repeat_hours=_PASS_LOG_REPEAT_HOURS
             ):
                 # Journal record of a PASS (the decision log carries it on the accepted row when telemetry is on), so
                 # observe mode is measurable without telemetry. One line per entry, not per round.
                 logger.info(
                     "account %s: [observe] protection pre-check passes %s %s at %gx: stop %.3f%% of entry, allowed "
                     "%.3f%%, bracket %s (effective maintenance rate %.3f%%), %s margin",
-                    account.id, side, account.pair, leverage, check.stop_distance_frac * 100,
+                    account.id, side, pair, leverage, check.stop_distance_frac * 100,
                     check.max_allowed_stop_frac * 100, check.tier, check.effective_maint_rate * 100, check.margin_basis,
                 )
         # The steps above made several exchange calls: read the kill switch again right before the order.
@@ -1317,6 +1337,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 stop_price=stop_price,
                 risk_text=f"Risk: {risk_amount:.2f} ({risk_pct_used:.2f}% of balance)",
                 strategy_id=strategy_id,
+                pair=pair,
             )
         except kill_switch.EntryPaused as paused:
             await _kill_switch_refuse(notifier, account, settings, paused.decision, _tlog, now=now, stage="in_lifecycle")
@@ -1387,6 +1408,8 @@ def _use_multi(account: TradingAccount, settings: Settings, is_paper: bool, open
     never ignored)."""
     if len(open_trades) > 1:
         return True
+    if not is_paper and live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position) > 1:
+        return True  # LIVE_MULTI_POSITION and the account has more than one slot
     if open_trades and all(t.is_paper for t in open_trades) and any(multi_trade.strategy_of(t) in multi_trade.NEW_STRATEGY_IDS for t in open_trades):
         # A paper trade that rsi_mr_v1 or donchian_breakout_v1 opened is managed by ITS OWN rules, even if its switch was turned off since and even if the account
         # now resolves as LIVE (audit L1; refusing would leave the trade with no exit). It runs on the paper environment, places no order and enters nothing new
@@ -1466,9 +1489,12 @@ def _multi_paper_limits(session, account: TradingAccount, settings: Settings, si
     return size, None
 
 
-async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now) -> None:
+async def _process_multi(session, account, client, open_trades: list[Trade], settings, notifier, *, is_paper: bool, now, is_demo: bool = False) -> None:
     notifier = _SafeNotifier(notifier, account)  # one failed message must not stop the other trades being managed (audit L8)
     live = [t for t in open_trades if not t.is_paper]
+    if (live or not is_paper) and live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position) > 1:
+        await _process_live_multi(session, account, client, live, settings, notifier, now=now, is_demo=is_demo)
+        return
     if live:
         await _process_multi_live(session, account, client, live, settings, notifier, now=now)
         return
@@ -1792,6 +1818,111 @@ async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settin
         + pnl_labels.exit_line(trade.entry_price, ex.price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
         + f"\nStrategy: {rsi_mr.STRATEGY_ID}",
     )
+
+
+async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session):
+    """(signal, price) for one strategy on one pair from closed candles, or None when it has no actionable, fresh signal. Read-only."""
+    allow_short = account.market_type == "futures"
+    symbol = exchange.exchange_symbol(pair, account.market_type)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+
+    def fresh(closed: list, tf_ms: int, label: str) -> bool:
+        age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+        if 0 <= age_ms <= window_ms:
+            return True
+        if protection_guard.should_alert(account.id, pair, f"stale:{label}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: %s signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, label, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return False
+
+    if strategy == donchian.STRATEGY_ID:
+        tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
+        tf_ms = rsi_mr.timeframe_ms(tf)
+        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+        if not raw or not closed:
+            return None
+        sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=allow_short)
+        return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
+    if strategy == rsi_mr.STRATEGY_ID:
+        tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+        tf_ms = rsi_mr.timeframe_ms(tf)
+        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+        if not raw or not closed:
+            return None
+        sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=allow_short)
+        return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
+    candles = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=settings.timeframe, limit=settings.ohlcv_limit))
+    if not candles:
+        return None
+    sig_candles = _ema_signal_candles(candles, settings, now_ms)
+    sig = _ema_generate(sig_candles, settings)
+    if sig.signal == SignalType.NONE or _ema_entry_stale(session, settings, account, sig, sig_candles, pair, now=now, now_ms=now_ms, is_paper=False):
+        return None
+    return sig, candles[-1].close
+
+
+async def _process_live_multi(session, account, client, live_trades: list[Trade], settings, notifier, *, now, is_demo: bool) -> None:
+    """LIVE_MULTI_POSITION and the account has more than one slot (docs/safety/live_multi_position.md). (1) Every open live trade is reconciled against Binance and managed with ITS strategy's rules
+    (EMA: opposite crossover; RSI: target, RSI line, time stop; Donchian: channel exit and the trailing stop), whatever the strategy switches say. (2) At most ONE new entry per cycle, only if a slot is
+    free, on a pair with no open trade, in the priority Donchian, then EMA, then RSI. Every entry goes through `_maybe_enter` (kill switch, daily dollar limit, 50% total stop, guards, pre-entry
+    protection check, leverage cap, risk per trade, protective stop) plus the open-risk cap and the shared capital for a second or third trade."""
+    now_ms = int(now.timestamp() * 1000)
+    for t in live_trades:
+        t, ctx = await _manage_live_trade(session, account, client, t, settings, notifier, now=now, is_demo=is_demo)
+        if t.status != TRADE_OPEN or t.protection_status != PROTECTION_PROTECTED:
+            continue  # closed this cycle, or unhealthy and worked by the reconciler: no strategy decision on unverified protection
+        pair = t.pair or account.pair
+        strategy = multi_trade.strategy_of(t)
+        ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, account.market_type), timeframe=settings.timeframe, limit=settings.ohlcv_limit)
+        candles = candles_from_ohlcv(ohlcv)
+        if not candles:
+            logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
+            continue
+        price = candles[-1].close
+        if strategy == donchian.STRATEGY_ID:
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_donchian_manage(ctx, t, client, settings, now_ms=now_ms, current_price=price)
+        elif strategy == rsi_mr.STRATEGY_ID:
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_rsi_exit(ctx, t, client, settings, now_ms=now_ms)
+        else:
+            signal = _ema_generate(_ema_signal_candles(candles, settings, now_ms), settings)
+            opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
+            await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=price)
+    account.last_error = None
+    account.last_error_at = None
+
+    slots = live_multi.slot_cap(account.live_slots, switch_on=settings.live_multi_position)
+    open_now = [t for t in list_open_trades(session, account.id) if not t.is_paper]
+    if len(open_now) < slots:
+        taken = {t.pair or account.pair for t in open_now}
+        free_pairs = [p for p in live_multi.live_pairs(account) if p not in taken]
+        opted = multi_trade.account_strategies(account)
+        order = (
+            ([donchian.STRATEGY_ID] if (settings.live_donchian and settings.donchian_enabled and donchian.STRATEGY_ID in opted) else [])
+            + [multi_trade.EMA_STRATEGY_ID]
+            + ([rsi_mr.STRATEGY_ID] if (settings.live_rsi_mr and settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted) else [])
+        )
+        entered = False
+        for strategy in order:
+            for pair in free_pairs:
+                got = await _live_strategy_signal(client, account, pair, strategy, settings, now=now, now_ms=now_ms, session=session)
+                if got is None:
+                    continue
+                sig, price = got
+                if strategy == multi_trade.EMA_STRATEGY_ID:
+                    account.last_signal = sig.signal.value
+                    account.last_signal_at = now
+                await _maybe_enter(session, account, client, sig, price, settings, notifier, is_paper=False, now=now, pair=pair, is_demo=is_demo)
+                if len([t for t in list_open_trades(session, account.id) if not t.is_paper]) > len(open_now):
+                    entered = True
+                    break  # one new entry per cycle
+            if entered:
+                break
+    await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
 
 
 async def _process_multi_live(session, account, client, live_trades: list[Trade], settings, notifier, *, now) -> None:

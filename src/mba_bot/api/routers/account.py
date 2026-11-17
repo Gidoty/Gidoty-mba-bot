@@ -21,7 +21,7 @@ from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
-from ... import account_loss, daily_limit, demo as demo_module, risk_limits, small_capital
+from ... import account_loss, daily_limit, demo as demo_module, live_multi, risk_limits, small_capital
 from ...models import ApiCredential, Customer, DemoCredential, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -207,6 +207,9 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         total_loss_reference_equity=account.loss_reference_equity,
         **_daily_limit_fields(account, db=db, settings=settings),
         **_pair_skip_fields(account, db=db, settings=settings),
+        live_slots=live_multi.slot_cap(account.live_slots, switch_on=True) if (settings and settings.live_multi_position) else 1,
+        live_multi_available=bool(settings.live_multi_position) if settings else False,
+        live_pair_count=len(live_multi.live_pairs(account)),
         demo_available=bool(settings.demo_runner) if settings else False,
         demo_has_keys=account.demo_credential is not None,
         demo_enabled_at=account.demo_enabled_at,
@@ -351,6 +354,14 @@ def update_account(
         if problem is not None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
 
+    if body.live_slots is not None:
+        if not settings.live_multi_position:
+            raise HTTPException(status.HTTP_409_CONFLICT, "holding more than one live trade at a time is not available on this service")
+        if body.live_slots > 1 and (body.pair_selection_mode or account.pair_selection_mode) == "auto":
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Switch pair selection to Manual to hold more than one trade at once.")
+    elif settings.live_multi_position and live_multi.slot_cap(account.live_slots, switch_on=True) > 1 and body.pair_selection_mode == "auto":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Set the number of open trades to 1 before switching pair selection to Auto Select.")
+
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
     changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
@@ -400,6 +411,8 @@ def update_account(
         # Lowering applies at once, a raise starts at the next midnight Lagos time (daily_limit.set_amount). Safe with a trade open: open trades keep their stops.
         today, tomorrow = _day_keys(settings)
         daily_limit.set_amount(account, body.daily_loss_limit_usd, today_key=today, next_day_key=tomorrow)
+    if body.live_slots is not None:
+        account.live_slots = body.live_slots  # lowering never closes a trade; it only stops new entries until fewer are open
     if body.max_leverage is not None:
         # Applies to NEW entries only (the bot reads it when it sizes an entry), so it is safe to change with a trade open: that trade is not touched.
         try:

@@ -109,6 +109,7 @@ class LiveContext:
     # Set by establish_protection when it gives up: "structural" | "transient" | "other" (see classify_protection_failure)
     protection_failure_kind: str | None = None
     protection_failure_detail: str | None = None
+    slot_cap: int = 1  # how many non-terminal trades a live account may hold (live_multi.slot_cap; 1 unless LIVE_MULTI_POSITION is on)
     is_demo: bool = False  # DEMO mode: the trade is recorded as a demo trade and every message says DEMO, never LIVE
 
 
@@ -247,6 +248,7 @@ async def open_live_trade(
     stop_price: float,
     risk_text: str,
     strategy_id: str = EMA_STRATEGY_ID,
+    pair: str | None = None,
 ) -> Trade | None:
     """Write-ahead -> entry order -> resolve fill -> protect -> open.
     Returns the Trade (any state) or None if the write-ahead insert lost to
@@ -260,12 +262,16 @@ async def open_live_trade(
     if paused.engaged:
         raise kill_switch.EntryPaused(paused)
     stop = venue.round_stop(stop_price, side=side)
-    # A LIVE account holds at most ONE non-terminal trade, whatever any setting says (multi_trade.slot_cap). The database now only
-    # allows one per account AND pair, so this is the check that keeps the live rule: before any write and before any order.
-    if session.scalars(
-        select(Trade.id).where(Trade.account_id == account.id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))
-    ).first() is not None:
-        logger.warning("account %s: a non-terminal trade already exists, a live account holds one at a time; not entering", account.id)
+    # A LIVE account holds at most ONE non-terminal trade unless LIVE_MULTI_POSITION is on and the account has more slots (live_multi.slot_cap, never above 3). The database allows one per account AND
+    # pair, so this is the check that keeps the slot rule: before any write and before any order.
+    held = session.execute(select(Trade.id, Trade.live_slot).where(Trade.account_id == account.id, Trade.status.in_(NON_TERMINAL_TRADE_STATUSES))).all()
+    cap = max(1, min(3, ctx.slot_cap))
+    if len(held) >= cap:
+        logger.warning("account %s: %d non-terminal trade(s) already exist, the account holds at most %d; not entering", account.id, len(held), ctx.slot_cap)
+        return None
+    taken_slots = {row[1] if row[1] is not None else 0 for row in held}
+    slot = next((n for n in range(cap) if n not in taken_slots), None)
+    if slot is None:
         return None
     trade = Trade(
         account_id=account.id,
@@ -277,9 +283,10 @@ async def open_live_trade(
         quantity=quantity,
         stop_loss_price=stop,
         initial_stop_price=stop,
+        live_slot=slot,
         status=TRADE_PENDING,
         opened_at=ctx.now,
-        pair=account.pair,
+        pair=pair or account.pair,
         protection_status=PROTECTION_PENDING,
         protection_attempt=0,
         exit_attempt=0,

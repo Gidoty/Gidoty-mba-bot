@@ -148,6 +148,8 @@ class TradingAccount(Base):
     # DEMO mode (DEMO_RUNNER, docs/safety/demo_runner.md): set by the customer's explicit action when separate demo keys are on file. Runs the full live path against Binance Futures Demo
     # Trading or Spot Testnet. Never set together with live trading; never mixed with live or paper records (trades.is_demo).
     demo_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # How many live trades the customer lets the bot hold at once (1 to 3; NULL = 1). Read only while LIVE_MULTI_POSITION is on (live_multi.slot_cap).
+    live_slots: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # How much of the customer's available Binance balance the bot may
     # use as its capital base for position sizing - NOT a transfer, the
@@ -292,6 +294,14 @@ PROTECTION_TRIGGERED = "triggered"
 PROTECTION_CANCELLED = "cancelled"
 
 
+def _default_live_slot(context) -> int | None:
+    """A live row inserted without a slot (older code paths, tests) takes slot 0, so the database keeps its one-live-trade rule for it; a paper row has none."""
+    try:
+        return None if context.get_current_parameters().get("is_paper") else 0
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class Trade(Base):
     __tablename__ = "trades"
     __table_args__ = (
@@ -317,12 +327,15 @@ class Trade(Base):
         # The LIVE rule, back in the database (audit B1): at most one non-terminal LIVE trade per account whatever its pair. Without it two
         # scheduler processes could each pass the SELECT in lifecycle.open_live_trade and insert a live trade on a different pair. Paper rows
         # (is_paper true) are outside it, so paper multi-trade is unaffected.
+        # Since LIVE_MULTI_POSITION (migration d9b5f7c2e4a6) the same rule is kept per SLOT: every live trade carries live_slot (0 for the first), and at most one non-terminal live trade may hold a slot. With the
+        # switch off every live trade takes slot 0, which is exactly the old "one non-terminal live trade per account" rule, still enforced by the database.
         Index(
-            "uq_trades_one_live_nonterminal_per_account",
+            "uq_trades_live_slot",
             "account_id",
+            "live_slot",
             unique=True,
-            sqlite_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
-            postgresql_where=text("status NOT IN ('closed', 'void') AND NOT is_paper"),
+            sqlite_where=text("status NOT IN ('closed', 'void') AND NOT is_paper AND live_slot IS NOT NULL"),
+            postgresql_where=text("status NOT IN ('closed', 'void') AND NOT is_paper AND live_slot IS NOT NULL"),
         ),
         Index(
             "uq_trades_one_nonterminal_no_pair",
@@ -342,6 +355,8 @@ class Trade(Base):
     is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     # The stop the trade was opened with. `stop_loss_price` is where the protective stop rests now (a trailing stop moves it); strategies that judge exits from the entry read this one. NULL on older rows.
     initial_stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The slot a LIVE trade holds (0, 1 or 2); NULL for paper. Unique among an account's non-terminal live trades, so the database still limits an account to its slots.
+    live_slot: Mapped[int | None] = mapped_column(Integer, nullable=True, default=_default_live_slot)
 
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)

@@ -253,8 +253,14 @@ def evaluate(session: Session, account, settings: Settings, *, signal, is_paper:
         # The cap on total open risk grows with the account's own risk setting: max(MAX_TOTAL_RISK_PCT, risk x the positions the account may hold), never above 100 (risk_limits.py).
         # A LIVE account holds one position, a paper account up to MAX_OPEN_POSITIONS (at most 3). 0 keeps meaning "no cap".
         slots = 1 if not is_paper else configured_cap(settings.max_open_positions)
+        max_positions = settings.max_open_positions
+        if not is_paper and settings.live_multi_position:
+            # LIVE_MULTI_POSITION: the account's own slots (1 to 3) are the positions it may hold; with the switch off the live account keeps the one slot and MAX_OPEN_POSITIONS exactly as before.
+            from .live_multi import slot_cap as live_slot_cap
+
+            slots = max_positions = live_slot_cap(getattr(account, "live_slots", None), switch_on=True)
         h = portfolio_hit(open_positions=n_open, open_risk_pct=open_risk, new_risk_pct=new_risk,
-                          max_positions=settings.max_open_positions, max_total_risk_pct=open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots))
+                          max_positions=max_positions, max_total_risk_pct=open_risk_cap(settings.max_total_risk_pct, account.risk_pct, slots))
         if h:
             hits.append(h)
 

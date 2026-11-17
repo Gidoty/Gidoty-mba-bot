@@ -184,6 +184,8 @@ class AccountUpdateRequest(BaseModel):
     pair_selection_mode: str | None = None
     # The customer's daily loss limit in USDT (docs/safety/account_daily_loss.md). Omitted = unchanged. Lower applies at once, higher starts at the next midnight Lagos time.
     daily_loss_limit_usd: float | None = Field(default=None, gt=0)
+    # How many live trades the bot may hold at once, 1 to 3 (only while LIVE_MULTI_POSITION is on; otherwise refused). Omitted = unchanged.
+    live_slots: int | None = Field(default=None, ge=1, le=3)
     # Customer leverage setting (Futures; Spot ignores it): a whole number from 1 to 5, never above the global hard limit. The router checks the global limit.
     # Strict int: 3.0, "3" and true are rejected.
     max_leverage: StrictInt | None = Field(default=None, ge=1, le=5)
@@ -334,6 +336,9 @@ class AccountOut(BaseModel):
     pair_skip_message: str | None = None
     pair_skip_min_capital: float | None = None
     # DEMO mode (DEMO_RUNNER): `demo_available` says the service offers it, `demo_has_keys` that demo keys are on file, `demo_enabled_at` that the customer switched it on (then `mode` is "demo").
+    live_slots: int = 1
+    live_multi_available: bool = False
+    live_pair_count: int = 1
     demo_available: bool = False
     demo_has_keys: bool = False
     demo_enabled_at: datetime | None = None

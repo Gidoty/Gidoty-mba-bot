@@ -362,6 +362,10 @@ class Settings:
     # Live Donchian breakout with a trailing stop (docs/safety/live_donchian.md): False = off (default), donchian_breakout_v1 stays paper only. True: an opted-in LIVE (or DEMO) account may take a Donchian
     # entry with the same guards and limits as EMA, and its protective stop is moved only in the favourable direction (new stop placed and verified first, old one cancelled after; a failed move keeps the old stop).
     live_donchian: bool = False
+    # Live multi-position (docs/safety/live_multi_position.md): False = off (default), a live account holds one trade at a time as before. True: an account may hold up to its own `live_slots` (1 to 3) trades,
+    # one per pair, priority Donchian then EMA then RSI, one new entry per cycle, with the open risk capped across the trades (LIVE_TOTAL_RISK_CAP_PCT and the daily dollar limit) and the capital shared.
+    live_multi_position: bool = False
+    live_total_risk_cap_pct: float = 3.0  # the most open risk, as a percent of the trading capital, across all open live trades once a second or third trade is added (0 = no percent cap)
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
     foreign_order_alarm: str = "off"
@@ -586,6 +590,8 @@ def load_settings() -> Settings:
         demo_runner=_env_bool("DEMO_RUNNER", False),
         live_rsi_mr=_env_bool("LIVE_RSI_MR", False),
         live_donchian=_env_bool("LIVE_DONCHIAN", False),
+        live_multi_position=_env_bool("LIVE_MULTI_POSITION", False),
+        live_total_risk_cap_pct=min(100.0, max(0.0, _env_float("LIVE_TOTAL_RISK_CAP_PCT", 3.0))),
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),

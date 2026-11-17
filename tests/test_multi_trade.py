@@ -641,6 +641,7 @@ def live_trades_on_pairs(monkeypatch, n, *, db_settings=None):
     from sqlalchemy import text as _text
     with session_scope() as s:
         s.execute(_text("DROP INDEX IF EXISTS uq_trades_one_live_nonterminal_per_account"))
+        s.execute(_text("DROP INDEX IF EXISTS uq_trades_live_slot"))  # (the per-slot rule that replaced it, B7)
     with session_scope() as s:
         for t in s.query(Trade).filter(Trade.id.in_(ids)).all():
             t.status = "open"
