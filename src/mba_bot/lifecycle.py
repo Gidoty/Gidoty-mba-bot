@@ -343,6 +343,7 @@ async def _after_entry(ctx: LiveContext, trade: Trade, order: venue_mod.OrderInf
         fee_base = order.fee_base
         held = venue.net_from_fee(order.filled, fee_base)  # type: ignore[attr-defined]
     entry_price = order.average or trade.entry_price
+    entry_fee_quote = order.fee_quote  # from the order response only: no extra read between the fill and the protective stop (a Futures entry fee is read at close, in _finalize)
     moved = _cas(
         session,
         trade,
@@ -352,6 +353,7 @@ async def _after_entry(ctx: LiveContext, trade: Trade, order: venue_mod.OrderInf
         entry_price=entry_price,
         quantity=held,
         entry_fee_base=fee_base,
+        entry_fee_quote=entry_fee_quote,
         attention_reason=None,
     )
     if not moved and trade.status not in (TRADE_PROTECTING, TRADE_OPEN):
@@ -550,6 +552,16 @@ async def _protect_or_emergency(
     )
 
 
+async def _fee_from_fills(venue, trade: Trade, *, order_side: str, quantity: float) -> float | None:
+    """The actual commission of a fill in the quote currency from the account's own trade records (docs/safety/fee_capture.md), or None. A read, wrapped so that a failed or odd answer can never
+    change what the trade lifecycle does: the fee is recorded for reporting only."""
+    try:
+        since = int(_aware(trade.opened_at).timestamp() * 1000) - 120_000 if trade.opened_at else 0
+        return await venue.fills_fee_quote(order_side=order_side, since_ms=since, max_quantity=quantity)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
     """Establish the bot-attributable base quantity of a Spot fill from
     exchange-confirmed commission data (see SpotVenue.resolve_entry_fee_base)
@@ -573,6 +585,8 @@ async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
             entry_fee_base=fee_base,
             quantity=venue.net_from_fee(order.filled, fee_base),  # type: ignore[attr-defined]
         )
+        if order.fee_quote is not None:
+            _set(ctx.session, trade, entry_fee_quote=order.fee_quote)
         return True
     return False
 
@@ -628,36 +642,55 @@ async def _clear_attention(ctx: LiveContext, trade: Trade) -> None:
 async def _exit_fills(ctx: LiveContext, trade: Trade) -> list[tuple[float, float]]:
     """(quantity, price) of everything that has already exited this trade,
     from the exchange's own records."""
+    return (await _exit_fills_and_fees(ctx, trade, want_fee=False))[0]
+
+
+async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade, *, want_fee: bool = True) -> tuple[list[tuple[float, float]], float | None]:
+    """_exit_fills plus the actual commission of those fills in the quote currency (None unless every fill's fee is exactly known; docs/safety/fee_capture.md)."""
     venue = ctx.venue
     if venue.market_type == "futures":
         # 2 minutes of slack for clock skew; realized_exit takes newest fills first.
         since = int(_aware(trade.opened_at).timestamp() * 1000) - 120_000 if trade.opened_at else 0
         realized = await venue.realized_exit(side=trade.side, since_ms=since, max_quantity=trade.quantity)  # type: ignore[attr-defined]
-        return [realized] if realized else []
+        fee = None
+        if realized and want_fee:  # the extra trade-history read is only for the final record, never on an exit path
+            fee = await _fee_from_fills(venue, trade, order_side=venue._stop_side(trade.side), quantity=realized[0])  # type: ignore[attr-defined]
+        return ([realized] if realized else []), fee
     fills: list[tuple[float, float]] = []
+    fees: list[float | None] = []
     for n in range(1, (trade.protection_attempt or 0) + 1):
         prot = await venue.get_protection(kind=trade.protective_kind, client_id=client_id(trade, "stop", n))
         if prot is not None and prot.filled > 0:
             fills.append((prot.filled, prot.average or prot.limit_price or trade.stop_loss_price))
+            fees.append(prot.fee_quote)
     for n in range(1, (trade.exit_attempt or 0) + 1):
         order = await venue.find_order(client_id(trade, "exit", n))
         if order is not None and order.filled > 0:
             fills.append((order.filled, order.average or trade.stop_loss_price))
-    return fills
+            fees.append(order.fee_quote)
+    total = None if (not fees or any(f is None for f in fees)) else sum(fees)  # type: ignore[arg-type]
+    return fills, total
 
 
 async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_price: float, protection: str) -> bool:
-    fills = await _exit_fills(ctx, trade)
+    fills, exit_fee_quote = await _exit_fills_and_fees(ctx, trade)
+    extra: dict = {}
+    if ctx.venue.market_type == "futures" and trade.entry_fee_quote is None and fills:
+        # The trade is closed and nothing waits on this read: record the entry commission too (a Futures order response carries none).
+        entry_fee = await _fee_from_fills(ctx.venue, trade, order_side="buy" if trade.side == "long" else "sell", quantity=trade.quantity)
+        if entry_fee is not None:
+            extra["entry_fee_quote"] = entry_fee
     qty = sum(q for q, _ in fills)
     if qty > 0:
         exit_price = sum(q * p for q, p in fills) / qty
     else:
         exit_price, qty = fallback_price, trade.quantity
+        exit_fee_quote = None  # a price assumed from the fallback has no fills behind it, so no fee is claimed
     pnl = _pnl(trade.side, trade.entry_price, exit_price, qty)
     moved = _cas(
         ctx.session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION, TRADE_CLOSING), TRADE_CLOSED,
         exit_price=exit_price, pnl=pnl, closed_at=ctx.now, close_reason=reason,
-        protection_status=protection, attention_reason=None,
+        protection_status=protection, attention_reason=None, exit_fee_quote=exit_fee_quote, **extra,
     )
     return moved
 

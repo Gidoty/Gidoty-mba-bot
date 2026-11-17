@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 from . import leverage as leverage_module
+from . import foreign_orders as foreign_orders_module
 from . import risk_limits as risk_limits_module
 
 load_dotenv()
@@ -348,6 +349,10 @@ class Settings:
     # Total loss stop (docs/safety/risk_per_trade.md), LIVE accounts only. False = off (default). True: new entries stop when an account's equity is down max(10, 3 x its risk %)
     # percent (cap 80) from its reference equity, until the customer resets it on the dashboard. Open trades are never touched.
     account_total_loss_stop: bool = False
+    # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
+    # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
+    foreign_order_alarm: str = "off"
+    foreign_order_check_minutes: float = 15.0
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
@@ -564,6 +569,8 @@ def load_settings() -> Settings:
         futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
         futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),
         account_total_loss_stop=_env_bool("ACCOUNT_TOTAL_LOSS_STOP", False),
+        foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
+        foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),

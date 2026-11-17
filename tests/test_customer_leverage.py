@@ -251,7 +251,7 @@ def test_the_head_is_the_new_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("b9e3d7a2c5f1").down_revision == "a8d2f6c1e3b7" and script.get_heads() == ["c1f4a8d2e6b3"]  # (the head moved on with B1c)
+    assert script.get_revision("b9e3d7a2c5f1").down_revision == "a8d2f6c1e3b7" and script.get_heads() == ["d2a5b9c7e1f4"]  # (the head moved on with PR 2)
 
 
 def test_the_help_file_and_the_code_agree_on_every_message():

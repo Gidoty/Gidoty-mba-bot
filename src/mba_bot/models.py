@@ -370,6 +370,10 @@ class Trade(Base):
     # Spot only: base-asset commission taken from the entry fill. The
     # protected/exitable quantity is filled quantity minus this.
     entry_fee_base: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The ACTUAL commission of the entry and the exit fills, in the quote currency (USDT), from the exchange's own fill records (docs/safety/fee_capture.md). NULL = not captured or not exactly
+    # known (no fee data, or a fee paid in an asset the bot cannot value such as BNB). Paper rows stay NULL. Reporting only: nothing in the trading path reads these.
+    entry_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Counters that make every retry idempotent without storing client ids:
     # the client order id of the Nth protective stop / exit order is a pure
     # function of (trade.id, role, N). The counter is committed BEFORE the

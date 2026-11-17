@@ -403,7 +403,7 @@ def test_the_head_is_the_new_revision_on_top_of_the_opt_in_migration():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["c1f4a8d2e6b3"]  # (the head moved on with B1c)
+    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["d2a5b9c7e1f4"]  # (the head moved on with PR 2)
 
 
 def test_the_pause_row_is_unique_per_account_kind_and_day(db):
