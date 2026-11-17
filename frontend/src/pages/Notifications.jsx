@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client.js";
 import { primaryButton, secondaryButton } from "../components/form.jsx";
-import { Card, CardTitle, ErrorBanner, PageHeader, Pill } from "../components/ui.jsx";
+import { Card, CardTitle, ErrorBanner, PageHeader, Pill, ThemeSwitch } from "../components/ui.jsx";
 import { useAccount } from "../context/AccountContext.jsx";
 
 const MESSAGES = [
@@ -43,7 +43,12 @@ export default function Notifications() {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Notifications" subtitle="Trade alerts and daily summaries." />
+      <PageHeader title="Notifications" subtitle="Trade alerts and daily summaries.">
+        <div className="flex items-center gap-2">
+          <span id="theme-label" className="text-xs font-medium text-muted">Theme</span>
+          <ThemeSwitch labelledBy="theme-label" />
+        </div>
+      </PageHeader>
       <ErrorBanner message={error} />
 
       <Card>

@@ -17,6 +17,7 @@ import Help from "./pages/Help.jsx";
 import Landing from "./pages/Landing.jsx";
 import LegalPage from "./pages/LegalPage.jsx";
 import Login from "./pages/Login.jsx";
+import DailyLimitNotice from "./components/DailyLimitNotice.jsx";
 import Notifications from "./pages/Notifications.jsx";
 import Onboarding from "./pages/Onboarding.jsx";
 import Performance from "./pages/Performance.jsx";
@@ -165,7 +166,10 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
       {Page ? (
         <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} />
       ) : (
-        <DashboardRouter customer={customer} onCustomerChanged={onCustomerChanged} />
+        <>
+          <DailyLimitNotice account={account} />
+          <DashboardRouter customer={customer} onCustomerChanged={onCustomerChanged} />
+        </>
       )}
     </AppShell>
   );

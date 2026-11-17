@@ -132,9 +132,9 @@ export function ThinNotice({ closedCount }) {
 }
 
 // Segmented control. options: [{ value, label }].
-export function Seg({ options, value, onChange, label }) {
+export function Seg({ options, value, onChange, label, labelledBy }) {
   return (
-    <div role="group" aria-label={label} className="inline-flex overflow-hidden rounded-ctl border border-line-strong bg-surface">
+    <div role="group" aria-label={label} aria-labelledby={labelledBy} className="inline-flex overflow-hidden rounded-ctl border border-line-strong bg-surface">
       {options.map((o) => (
         <button
           key={o.value}
@@ -150,11 +150,12 @@ export function Seg({ options, value, onChange, label }) {
   );
 }
 
-export function ThemeSwitch() {
+export function ThemeSwitch({ labelledBy }) {
   const [choice, setChoice] = useThemeChoice();
   return (
     <Seg
       label="Colour theme"
+      labelledBy={labelledBy}
       value={choice}
       onChange={setChoice}
       options={[
