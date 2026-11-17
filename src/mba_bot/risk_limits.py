@@ -5,10 +5,11 @@ One place for the numbers and the bands, the same for every account. Pure functi
   * Range: a customer may choose risk per trade from RISK_MIN (0.1) up to the current RISK_PCT_MAX (default 2.0, code ceiling 40.0, set by env).
   * Bands: up to and including 2 percent is the recommended band, above 2 and below 10 is "high", 10 and above is "very high". A setting above 2 percent needs a recorded acknowledgment, and a setting from
     10 percent up needs a second one (the server checks them; lowering back to 2 or below needs none).
-  * Total loss stop: an account whose equity is down max(10, 3 x risk) percent (never above 80) from its reference equity takes no NEW live entry until the customer resets it.
+  * Total loss stop: an account whose equity is TOTAL_STOP_PCT (50) percent or more below its reference equity takes no NEW live entry until the customer resets it. One fixed number for
+    every account; it is not a setting and does not depend on the risk per trade.
   * Open-risk cap: `multi_trade.open_risk_cap` (max(MAX_TOTAL_RISK_PCT, risk x the positions the account may hold), never above 100; 0 keeps meaning "no cap").
 
-The DAILY loss pause does NOT scale with risk: ACCOUNT_DAILY_LOSS_PCT is one fixed value for every account (account_loss.py is not touched by this module)."""
+The DAILY loss limit is the customer's own dollar amount (daily_limit.py); it must stay below the dollar level of the total stop."""
 from __future__ import annotations
 
 import math
@@ -27,9 +28,7 @@ ACK_HIGH = "risk_ack_high"
 ACK_VERY_HIGH = "risk_ack_very_high"
 ACK_VERSION = "2026-11-17"
 
-TOTAL_STOP_MIN_PCT = 10.0
-TOTAL_STOP_MULTIPLE = 3.0
-TOTAL_STOP_CAP_PCT = 80.0
+TOTAL_STOP_PCT = 50.0  # the automatic total loss stop: percent below the reference value. One named constant, the same for every account.
 
 _EPS = 1e-9
 
@@ -77,17 +76,14 @@ def validate_range(risk_pct, limit: float) -> str | None:
     return None
 
 
-def total_loss_threshold(risk_pct) -> float:
-    """Percent down from the reference equity at which new entries stop: max(10, 3 x risk), never above 80. A non-finite risk gives the cap (most cautious is the
-    smallest threshold, but an unknown risk must not make the stop trigger on noise, so 80 is not used: the base 10 is)."""
-    if not _finite(risk_pct) or risk_pct <= 0:
-        return TOTAL_STOP_MIN_PCT
-    return min(TOTAL_STOP_CAP_PCT, max(TOTAL_STOP_MIN_PCT, TOTAL_STOP_MULTIPLE * float(risk_pct)))
+def total_loss_threshold(risk_pct=None) -> float:
+    """Percent below the reference equity at which new entries stop: TOTAL_STOP_PCT for every account. `risk_pct` is accepted only so older callers keep working; it is ignored."""
+    return TOTAL_STOP_PCT
 
 
-def total_loss_hit(*, reference_equity, equity, risk_pct) -> float | None:
+def total_loss_hit(*, reference_equity, equity, risk_pct=None) -> float | None:
     """The loss in percent if the stop must act, else None. Fail closed: a non-finite or non-positive reference or a non-finite equity is a hit (returns nan)."""
     if not (_finite(reference_equity) and reference_equity > 0 and _finite(equity)):
         return float("nan")
     loss = (reference_equity - equity) / reference_equity * 100.0
-    return loss if loss >= total_loss_threshold(risk_pct) - _EPS else None
+    return loss if loss >= TOTAL_STOP_PCT - _EPS else None

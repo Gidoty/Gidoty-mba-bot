@@ -106,6 +106,7 @@ def test_enable_live_trading_rejected_when_unpaid():
         _make_eligible("unpaid-enable@example.com")
         with session_scope() as session:
             session.query(Customer).filter(Customer.email == "unpaid-enable@example.com").one().has_paid = False
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
@@ -116,6 +117,7 @@ def test_enable_live_trading_rejected_when_not_eligible():
         _mark_paid("noteligible@example.com")
         _retag_mainnet(client)
         # Trial is still running, no bypass accepted.
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
 
@@ -126,6 +128,7 @@ def test_enable_live_trading_rejected_without_mainnet_credential():
         _mark_paid("notagged@example.com")
         _make_eligible("notagged@example.com")
         # Credential defaults to testnet at signup - never retagged.
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
         assert "mainnet" in response.json()["detail"].lower()
@@ -138,6 +141,7 @@ def test_enable_live_trading_rejected_with_open_trade():
         _retag_mainnet(client)
         _make_eligible("openenable@example.com")
         _open_a_trade("openenable@example.com")
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 409
         assert "open trade" in response.json()["detail"].lower()
@@ -152,6 +156,8 @@ def test_enable_live_trading_succeeds_when_every_condition_is_met():
 
         before = client.get("/api/account").json()
         assert before["mode"] == "paper"
+
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
 
         response = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert response.status_code == 200
@@ -176,6 +182,7 @@ def test_enable_live_trading_is_idempotent_not_repeatable():
         _mark_paid("already@example.com")
         _retag_mainnet(client)
         _make_eligible("already@example.com")
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         again = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert again.status_code == 409
@@ -272,6 +279,7 @@ def test_downgrading_credential_to_testnet_disables_live_trading():
         _mark_paid("downgrade@example.com")
         _retag_mainnet(client)
         _make_eligible("downgrade@example.com")
+        client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
         enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
         assert enabled.status_code == 200
         client.patch("/api/account", json={"allocated_capital": 500})

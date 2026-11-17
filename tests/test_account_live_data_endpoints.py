@@ -100,6 +100,7 @@ def _go_live(client: TestClient, email: str) -> None:
     )
     assert retag.status_code == 200
     _make_eligible(email)
+    client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
     enabled = client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True})
     assert enabled.status_code == 200
     # Enabling live trading authorizes going live; it never starts

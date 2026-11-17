@@ -35,7 +35,7 @@ def env(monkeypatch, db, **extra):
 
 
 def live_state(monkeypatch, **over):
-    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_pct=4.0, account_total_loss_stop=True, protection_precheck_mode="off", **over)
+    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_limit=True, account_total_loss_stop=True, protection_precheck_mode="off", **over)
     client, clock, aid = rig(monkeypatch, st, market="futures", email="owner-pilot@example.com")
     client.total_margin_balance = 1000.0
     return st, client, clock, aid
@@ -53,15 +53,15 @@ def test_the_screen_shows_the_state_of_a_live_account(db, monkeypatch):
     client.total_margin_balance = 950.0
     client._ohlcv = BULLISH_OHLCV
     clock.instant = NOON + timedelta(minutes=5)
-    run_cycle(aid, st)  # down 5%: daily pause and not yet the 10% total stop
-    lines, code = screen(monkeypatch, db, ACCOUNT_DAILY_LOSS_PCT=4, ACCOUNT_TOTAL_LOSS_STOP=1, FUTURES_LEVERAGE_MODE="size_cap", PROTECTION_PRECHECK_MODE="enforce")
+    run_cycle(aid, st)  # down 50 USDT: the daily limit (40) acts, the 50% total stop does not
+    lines, code = screen(monkeypatch, db, ACCOUNT_DAILY_LOSS_LIMIT=1, ACCOUNT_TOTAL_LOSS_STOP=1, FUTURES_LEVERAGE_MODE="size_cap", PROTECTION_PRECHECK_MODE="enforce")
     text_ = "\n".join(lines)
     assert code == 0 and f"=== account {aid[:8]} | LIVE | futures | BTC/USDT (manual) ===" in text_
-    assert "switches on:" in text_ and "ACCOUNT_DAILY_LOSS_PCT=4.0" in text_ and "ACCOUNT_TOTAL_LOSS_STOP=True" in text_ and "FUTURES_LEVERAGE_MODE=size_cap" in text_ and "PROTECTION_PRECHECK_MODE=enforce" in text_
+    assert "switches on:" in text_ and "ACCOUNT_DAILY_LOSS_LIMIT=True" in text_ and "ACCOUNT_TOTAL_LOSS_STOP=True" in text_ and "FUTURES_LEVERAGE_MODE=size_cap" in text_ and "PROTECTION_PRECHECK_MODE=enforce" in text_
     assert "kill switch:" in text_
     assert "equity: last sample 950.00" in text_ and "start 1000.00" in text_ and "-5.00%" in text_
-    assert "daily pause: ACTIVE" in text_ and "limit 4%" in text_
-    assert "total loss stop: not active; reference 1000.00" in text_ and "limit 10% below it" in text_
+    assert "daily pause: ACTIVE" in text_ and "limit 40.00 USDT" in text_
+    assert "total loss stop: not active; reference 1000.00" in text_ and "limit 50% below it" in text_
     assert "open trade: none" in text_ and "last signal" in text_ and "last error:" in text_
     assert "account_daily_loss_pause" in text_  # among the last decisions
 
@@ -69,10 +69,10 @@ def test_the_screen_shows_the_state_of_a_live_account(db, monkeypatch):
 def test_the_total_loss_stop_and_the_open_trade_show(db, monkeypatch):
     st, client, clock, aid = live_state(monkeypatch)
     run_cycle(aid, st)
-    client.total_margin_balance = 850.0
+    client.total_margin_balance = 450.0
     clock.instant = NOON + timedelta(minutes=5)
     run_cycle(aid, st)
-    lines, _ = screen(monkeypatch, db, ACCOUNT_DAILY_LOSS_PCT=4, ACCOUNT_TOTAL_LOSS_STOP=1)
+    lines, _ = screen(monkeypatch, db, ACCOUNT_DAILY_LOSS_LIMIT=1, ACCOUNT_TOTAL_LOSS_STOP=1)
     assert "total loss stop: ACTIVE" in "\n".join(lines) and "only the customer's reset on the dashboard releases it" in "\n".join(lines)
 
 

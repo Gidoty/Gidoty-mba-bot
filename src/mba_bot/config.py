@@ -336,9 +336,10 @@ class Settings:
     new_strategy_entry_window_minutes: float = 10.0
     # EMA decides on CLOSED candles only (docs/safety/ema_closed_candle.md). Off = today's behaviour: the still-forming last candle feeds the signal.
     ema_closed_candle_only: bool = False
-    # Account-wide daily loss pause (docs/safety/account_daily_loss.md), LIVE accounts only. 0 = off. New entries stop for the rest of the account's local day once its
-    # equity (exchange balance plus open positions at mark) is this percent below the day-start equity. Open trades keep their stops and exits.
-    account_daily_loss_pct: float = 0.0
+    # Account-wide daily loss limit in dollars, set by the customer (docs/safety/account_daily_loss.md), LIVE accounts only. False = off (default): nothing is enforced. True: no NEW entry for
+    # the rest of the account's local day once its value (exchange balance plus open positions at mark) is the customer's amount below the day-start value; a live account with no amount
+    # set takes no new entry (fail closed). Open trades keep their stops and exits. Replaces the old percent switch ACCOUNT_DAILY_LOSS_PCT, which nothing reads any more.
+    account_daily_loss_limit: bool = False
     account_day_timezone: str = "Africa/Lagos"  # the day boundary (00:00 to 23:59 local); an invalid name blocks new live entries (fail closed)
     # Futures ceiling (docs/safety/account_daily_loss.md). 0 = off. Above 0: a new live Futures entry is refused when the Binance leverage on the pair is higher than this
     # or the margin mode is not isolated (or cannot be read). The bot only READS leverage and margin mode; it never sets either.
@@ -346,8 +347,8 @@ class Settings:
     # strict (default): refuse an entry when the pair's Binance leverage is above FUTURES_MAX_LEVERAGE (above). size_cap: do not refuse; size the position to
     # min(Binance leverage, the account's max_leverage). Needs PROTECTION_PRECHECK_MODE=enforce, otherwise it behaves as strict. See docs/safety/customer_leverage.md.
     futures_leverage_mode: str = "strict"
-    # Total loss stop (docs/safety/risk_per_trade.md), LIVE accounts only. False = off (default). True: new entries stop when an account's equity is down max(10, 3 x its risk %)
-    # percent (cap 80) from its reference equity, until the customer resets it on the dashboard. Open trades are never touched.
+    # Total loss stop (docs/safety/risk_per_trade.md), LIVE accounts only. False = off (default). True: new entries stop when an account's equity is 50 percent or more below its
+    # reference equity (risk_limits.TOTAL_STOP_PCT, the same for every account), until the customer resets it on the dashboard. Open trades are never touched.
     account_total_loss_stop: bool = False
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
@@ -564,7 +565,7 @@ def load_settings() -> Settings:
         new_strategy_guards_mode=parse_strategy_guards_mode(os.environ.get("NEW_STRATEGY_GUARDS_MODE")),
         new_strategy_entry_window_minutes=min(59.0, max(1.0, _env_float("NEW_STRATEGY_ENTRY_WINDOW_MINUTES", 10.0))),
         ema_closed_candle_only=_env_bool("EMA_CLOSED_CANDLE_ONLY", False),
-        account_daily_loss_pct=min(50.0, max(0.0, _env_float("ACCOUNT_DAILY_LOSS_PCT", 0.0))),
+        account_daily_loss_limit=_env_bool("ACCOUNT_DAILY_LOSS_LIMIT", False),
         account_day_timezone=(os.environ.get("ACCOUNT_DAY_TIMEZONE") or "Africa/Lagos").strip() or "Africa/Lagos",
         futures_max_leverage=min(125.0, max(0.0, _env_float("FUTURES_MAX_LEVERAGE", 0.0))),
         futures_leverage_mode=leverage_module.parse_mode(os.environ.get("FUTURES_LEVERAGE_MODE")),

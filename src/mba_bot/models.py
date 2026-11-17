@@ -88,6 +88,13 @@ class TradingAccount(Base):
     # customer's last reset. NULL = not set yet (the next healthy cycle sets it). Numbers and times only.
     loss_reference_equity: Mapped[float | None] = mapped_column(Float, nullable=True)
     loss_reference_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The customer's daily loss limit in USDT (docs/safety/account_daily_loss.md): no NEW entry for the rest of the local day once the account value is this much below the day-start
+    # value. NULL = not set (a live account must set one). Lowering it applies at once; RAISING it is stored as pending and starts on `daily_loss_limit_pending_from` (a local day key,
+    # YYYY-MM-DD, the next midnight in the account day time zone). `daily_loss_limit_is_default` is True while the amount is the one-time default the service gave an existing account.
+    daily_loss_limit_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_loss_limit_pending_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_loss_limit_pending_from: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    daily_loss_limit_is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     notification_channel: Mapped[str] = mapped_column(String(20), nullable=False)
     # Null until the channel is actually linked (e.g. Telegram: the
     # customer has to tap a deep link before we have a chat_id -
@@ -539,7 +546,8 @@ class AccountLossPause(Base):
     start_equity: Mapped[float] = mapped_column(Float, nullable=False)
     equity_at_hit: Mapped[float] = mapped_column(Float, nullable=False)
     loss_pct: Mapped[float] = mapped_column(Float, nullable=False)
-    limit_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    limit_pct: Mapped[float] = mapped_column(Float, nullable=False)  # the limit as a percent of the day-start value (for the dollar limit: limit_usd / start_equity)
+    limit_usd: Mapped[float | None] = mapped_column(Float, nullable=True)  # the dollar amount that was in force when the pause was written (NULL on rows from the old percent rule)
     timezone_name: Mapped[str] = mapped_column(String(40), nullable=False)
 
 

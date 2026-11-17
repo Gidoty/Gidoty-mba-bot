@@ -5,9 +5,7 @@ export const VERY_HIGH_FROM = 10;
 export const RISK_MIN = 0.1;
 // The numbers below mirror src/mba_bot/risk_limits.py and leverage.py; a Python test (tests/test_howto_alignment.py) fails if they drift.
 export const RISK_CEILING = 40; // the highest RISK_PCT_MAX the code allows; the screen shows the value that applies now
-export const TOTAL_STOP_MIN_PCT = 10;
-export const TOTAL_STOP_MULTIPLE = 3;
-export const TOTAL_STOP_CAP_PCT = 80;
+export const TOTAL_STOP_PCT = 50; // the automatic total loss stop: percent below the reference value, the same for every account (risk_limits.TOTAL_STOP_PCT)
 export const LEVERAGE_MIN = 1;
 export const LEVERAGE_MAX = 5;
 export const LEVERAGE_DEFAULT = 3;

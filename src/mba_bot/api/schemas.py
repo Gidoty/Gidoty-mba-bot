@@ -163,6 +163,8 @@ class AccountUpdateRequest(BaseModel):
     # to toggle back into casually.
     allocated_capital: float | None = Field(default=None, gt=0)
     pair_selection_mode: str | None = None
+    # The customer's daily loss limit in USDT (docs/safety/account_daily_loss.md). Omitted = unchanged. Lower applies at once, higher starts at the next midnight Lagos time.
+    daily_loss_limit_usd: float | None = Field(default=None, gt=0)
     # Customer leverage setting (Futures; Spot ignores it): a whole number from 1 to 5, never above the global hard limit. The router checks the global limit.
     # Strict int: 3.0, "3" and true are rejected.
     max_leverage: StrictInt | None = Field(default=None, ge=1, le=5)
@@ -295,6 +297,20 @@ class AccountOut(BaseModel):
     total_loss_stop_active: bool = False
     total_loss_stop_threshold_pct: float = 10.0
     total_loss_reference_equity: float | None = None
+    # The customer's daily loss limit (docs/safety/account_daily_loss.md). `daily_loss_limit_usd` is the amount in force today; a raise is pending until `daily_loss_limit_pending_from`
+    # (a day, YYYY-MM-DD). `daily_loss_limit_is_default` is true while the amount is the one-time default the service gave. The percent is of `account_value_reference` (the total stop's
+    # reference value, else the last stored value, else the trading capital). The amount must be below `daily_loss_limit_max_usd` (the dollar level of the automatic total stop).
+    daily_loss_limit_usd: float | None = None
+    daily_loss_limit_pending_usd: float | None = None
+    daily_loss_limit_pending_from: str | None = None
+    daily_loss_limit_is_default: bool = False
+    daily_loss_limit_required: bool = True
+    daily_loss_limit_enforced: bool = False
+    daily_loss_limit_pct: float | None = None
+    daily_loss_limit_suggested_usd: float | None = None
+    daily_loss_limit_max_usd: float | None = None
+    account_value_reference: float | None = None
+    one_trade_can_exceed_limit: bool = False
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so

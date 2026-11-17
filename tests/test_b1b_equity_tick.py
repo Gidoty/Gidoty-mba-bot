@@ -87,7 +87,7 @@ def test_plain_end_of_cycle_records_a_sample(db, monkeypatch):
 def _open_futures(monkeypatch):
     client, settings, aid = open_protected(monkeypatch, market="futures")
     client.total_margin_balance = 1000.0
-    return client, dataclasses.replace(settings, account_daily_loss_pct=4.0, trade_telemetry=True), aid
+    return client, dataclasses.replace(settings, account_daily_loss_limit=True, trade_telemetry=True), aid
 
 
 def test_unhealthy_open_trade_path_records_a_sample(db, monkeypatch):
@@ -200,7 +200,7 @@ def test_the_warning_is_not_repeated_every_cycle(db, monkeypatch, caplog):
     assert len([r for r in caplog.records if "could not record an equity sample" in r.getMessage()]) == 1
 
 
-def test_idle_auto_cycle_writes_the_pause_when_equity_is_down_four_percent(db, monkeypatch):
+def test_idle_auto_cycle_writes_the_pause_when_equity_is_down_the_dollar_limit(db, monkeypatch):
     st, client, clock, aid = fut(monkeypatch, auto=True)
     run_cycle(aid, st)  # day start 1000
     client.total_margin_balance = 960.0  # down exactly 4.0%
@@ -209,11 +209,11 @@ def test_idle_auto_cycle_writes_the_pause_when_equity_is_down_four_percent(db, m
     run_cycle(aid, st, n)  # still an idle auto cycle: no signal tries to enter
     pauses = rows(AccountLossPause)
     assert len(pauses) == 1 and abs(pauses[0].loss_pct - 4.0) < 1e-6 and all_trades(aid) == [] and client.orders == {}
-    assert len([t for t in n.texts if "paused for the rest of today" in t]) == 1
+    assert len([t for t in n.texts if "No new trades until midnight Lagos time" in t]) == 1
     assert "account_daily_loss_pause" in reasons()
     clock.instant += timedelta(minutes=5)
     run_cycle(aid, st, n)
-    assert len(rows(AccountLossPause)) == 1 and len([t for t in n.texts if "paused for the rest of today" in t]) == 1  # one alert, one row
+    assert len(rows(AccountLossPause)) == 1 and len([t for t in n.texts if "No new trades until midnight Lagos time" in t]) == 1  # one alert, one row
     # the pause then blocks a real signal the same day, and ends at Lagos midnight
     client._ohlcv = BULLISH_OHLCV
     client.total_margin_balance = 1000.0

@@ -1,4 +1,4 @@
-"""Account-wide daily loss pause (ACCOUNT_DAILY_LOSS_PCT) and the Futures leverage ceiling (FUTURES_MAX_LEVERAGE).
+"""Account-wide daily loss limit in dollars (ACCOUNT_DAILY_LOSS_LIMIT and the account's own amount) and the Futures leverage ceiling (FUTURES_MAX_LEVERAGE).
 
 PROVES (fake exchange, scratch SQLite, frozen clock): the Lagos calendar-day boundary; day-start equity persisted and measured against realised plus unrealised
 equity; the pause blocks NEW live entries only, ends by itself at the next local midnight, writes one audit row and one alert; every unreadable input fails
@@ -25,12 +25,13 @@ from sqlalchemy import create_engine, inspect
 from mba_bot import account_loss as al
 from mba_bot import exchange
 from mba_bot.db import init_db, session_scope
-from mba_bot.models import AccountDayEquity, AccountLossPause, DecisionLog
+from mba_bot.models import AccountDayEquity, AccountLossPause, DecisionLog, TradingAccount
 
 U = timezone.utc
 ROOT = Path(__file__).resolve().parent.parent
 LAGOS = al.zone("Africa/Lagos")
 NOON = datetime(2027, 3, 10, 12, 0, tzinfo=U)  # 13:00 in Lagos, the same calendar day
+LIMIT_USD = 40.0
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def db(tmp_path):
 
 
 def live_settings(**over):
-    return make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_pct=4.0, **over)
+    return make_settings(max_notional_multiplier=100.0, trade_telemetry=True, account_daily_loss_limit=True, **over)
 
 
 def rig(monkeypatch, settings, *, market="spot", at=NOON, balance=1000.0, email="live@example.com", **client_kw):
@@ -48,7 +49,10 @@ def rig(monkeypatch, settings, *, market="spot", at=NOON, balance=1000.0, email=
     clock = Clock()
     clock.install(monkeypatch)
     clock.instant = at
-    return client, clock, new_account(settings, market_type=market, email=email)
+    aid = new_account(settings, market_type=market, email=email)
+    with session_scope() as s:
+        s.get(TradingAccount, aid).daily_loss_limit_usd = LIMIT_USD  # the customer's amount: 4% of the 1000 USDT these tests start with
+    return client, clock, aid
 
 
 def rows(model):
@@ -75,12 +79,13 @@ def test_the_day_boundary_is_lagos_midnight_not_utc_midnight():
 
 
 @pytest.mark.parametrize("start,equity,limit,hit", [
-    (1000, 960, 4, True), (1000, 960.01, 4, False), (1000, 959, 4, True), (1000, 1100, 4, False), (1000, 960, 0, False), (1000, 0, 4, True),
-    (0, 100, 4, True), (-5, 100, 4, True), (float("nan"), 100, 4, True), (1000, float("nan"), 4, True), (1000, float("-inf"), 4, True),
-    (1000, None, 4, True), (None, 1000, 4, True),
+    (1000, 960, 40, True), (1000, 960.01, 40, False), (1000, 959, 40, True), (1000, 1100, 40, False), (1000, 0, 40, True),
+    (0, 100, 40, True), (-5, 100, 40, True), (float("nan"), 100, 40, True), (1000, float("nan"), 40, True), (1000, float("-inf"), 40, True),
+    (1000, None, 40, True), (None, 1000, 40, True),
+    (1000, 960, 0, True), (1000, 960, -5, True), (1000, 960, None, True), (1000, 960, float("nan"), True),  # no usable amount: fail closed
 ])
-def test_daily_loss_rule(start, equity, limit, hit):
-    assert (al.daily_loss_hit(start_equity=start, equity=equity, limit_pct=limit) is not None) is hit
+def test_daily_loss_rule(start, equity, limit, hit):  # the amount is in USDT (40 on a 1000 start is the old 4%)
+    assert (al.daily_loss_hit(start_equity=start, equity=equity, limit_usd=limit) is not None) is hit
 
 
 def test_an_invalid_time_zone_name_is_none():
@@ -104,8 +109,8 @@ def test_a_new_day_starts_from_a_recent_sample_else_from_the_first_read(db):
 
 # ------------------------------------------------------------------ the pause in the real cycle
 def test_default_off_reads_nothing_and_writes_nothing(db, monkeypatch):
-    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True)  # ACCOUNT_DAILY_LOSS_PCT defaults to 0
-    assert st.account_daily_loss_pct == 0.0
+    st = make_settings(max_notional_multiplier=100.0, trade_telemetry=True)  # ACCOUNT_DAILY_LOSS_LIMIT defaults to off
+    assert st.account_daily_loss_limit is False
     client, _, aid = rig(monkeypatch, st)
     client._ohlcv = BULLISH_OHLCV
 
@@ -139,15 +144,16 @@ def test_a_loss_at_the_limit_blocks_the_new_entry_writes_one_audit_row_and_sends
     run_cycle(aid, st, n)
     assert all_trades(aid) == [] and live_orders(client) == []  # no order was sent
     pauses = rows(AccountLossPause)
-    assert len(pauses) == 1 and pauses[0].kind == "daily_loss" and pauses[0].limit_pct == 4.0 and abs(pauses[0].loss_pct - 4.0) < 1e-6
+    assert len(pauses) == 1 and pauses[0].kind == "daily_loss" and pauses[0].limit_usd == 40.0 and abs(pauses[0].limit_pct - 4.0) < 1e-6 and abs(pauses[0].loss_pct - 4.0) < 1e-6
     assert pauses[0].ends_at.replace(tzinfo=U) == datetime(2027, 3, 10, 23, 0, tzinfo=U)  # the next Lagos midnight
     assert pauses[0].start_equity == 1000.0 and pauses[0].equity_at_hit == 960.0 and pauses[0].timezone_name == "Africa/Lagos"
     assert "account_daily_loss_pause" in reasons()
-    assert len([t for t in n.texts if "paused for the rest of today" in t]) == 1
+    assert len([t for t in n.texts if "No new trades until midnight Lagos time" in t]) == 1
+    assert any("You lost 40.00 USDT today" in t for t in n.texts)  # the amount lost today, in the notification
     for i in range(3):  # later polls the same day: still blocked, no second row, no second alert
         clock.instant += timedelta(minutes=5)
         run_cycle(aid, st, n)
-    assert len(rows(AccountLossPause)) == 1 and len([t for t in n.texts if "paused for the rest of today" in t]) == 1 and all_trades(aid) == []
+    assert len(rows(AccountLossPause)) == 1 and len([t for t in n.texts if "No new trades until midnight Lagos time" in t]) == 1 and all_trades(aid) == []
 
 
 def test_just_under_the_limit_does_not_block(db, monkeypatch):
@@ -360,20 +366,23 @@ def test_spot_is_never_subject_to_the_futures_ceiling(db, monkeypatch):
 def test_settings_defaults_and_clamps(monkeypatch):
     from mba_bot.config import load_settings
 
-    for k in ("ACCOUNT_DAILY_LOSS_PCT", "ACCOUNT_DAY_TIMEZONE", "FUTURES_MAX_LEVERAGE"):
+    for k in ("ACCOUNT_DAILY_LOSS_LIMIT", "ACCOUNT_DAILY_LOSS_PCT", "ACCOUNT_DAY_TIMEZONE", "FUTURES_MAX_LEVERAGE"):
         monkeypatch.delenv(k, raising=False)
     s = load_settings()
-    assert (s.account_daily_loss_pct, s.account_day_timezone, s.futures_max_leverage) == (0.0, "Africa/Lagos", 0.0)
+    assert (s.account_daily_loss_limit, s.account_day_timezone, s.futures_max_leverage) == (False, "Africa/Lagos", 0.0)
     fields = {f.name: f.default for f in dataclasses.fields(type(s))}
-    assert fields["account_daily_loss_pct"] == 0.0 and fields["futures_max_leverage"] == 0.0 and fields["account_day_timezone"] == "Africa/Lagos"
-    monkeypatch.setenv("ACCOUNT_DAILY_LOSS_PCT", "4")
+    assert fields["account_daily_loss_limit"] is False and fields["futures_max_leverage"] == 0.0 and fields["account_day_timezone"] == "Africa/Lagos"
+    monkeypatch.setenv("ACCOUNT_DAILY_LOSS_LIMIT", "true")
     monkeypatch.setenv("FUTURES_MAX_LEVERAGE", "5")
     s = load_settings()
-    assert (s.account_daily_loss_pct, s.futures_max_leverage) == (4.0, 5.0)
+    assert (s.account_daily_loss_limit, s.futures_max_leverage) == (True, 5.0)
+    monkeypatch.setenv("ACCOUNT_DAILY_LOSS_PCT", "4")  # the old percent variable is ignored: it neither turns the limit on nor exists as a setting
+    monkeypatch.delenv("ACCOUNT_DAILY_LOSS_LIMIT")
+    assert load_settings().account_daily_loss_limit is False and not hasattr(load_settings(), "account_daily_loss_pct")
     monkeypatch.setenv("ACCOUNT_DAILY_LOSS_PCT", "-3")
     monkeypatch.setenv("FUTURES_MAX_LEVERAGE", "9999")
     s = load_settings()
-    assert (s.account_daily_loss_pct, s.futures_max_leverage) == (0.0, 125.0)
+    assert s.futures_max_leverage == 125.0
 
 
 # ------------------------------------------------------------------ migration
@@ -403,17 +412,17 @@ def test_the_head_is_the_new_revision_on_top_of_the_opt_in_migration():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["d2a5b9c7e1f4"]  # (the head moved on with PR 2)
+    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["e3b6c8a1d5f2"]  # (the head moved on with the daily loss limit)
 
 
 def test_the_pause_row_is_unique_per_account_kind_and_day(db):
     from sqlalchemy.exc import IntegrityError
 
     aid = new_account(make_settings())
-    hit = al.DailyLossHit(4.0, 1000.0, 960.0)
+    hit = al.DailyLossHit(40.0, 4.0, 1000.0, 960.0)
     with session_scope() as s:
-        al.write_pause(s, aid, hit, limit_pct=4.0, now=NOON, tz=LAGOS, tz_name="Africa/Lagos")
-        again = al.write_pause(s, aid, hit, limit_pct=4.0, now=NOON, tz=LAGOS, tz_name="Africa/Lagos")
+        al.write_pause(s, aid, hit, limit_usd=40.0, now=NOON, tz=LAGOS, tz_name="Africa/Lagos")
+        again = al.write_pause(s, aid, hit, limit_usd=40.0, now=NOON, tz=LAGOS, tz_name="Africa/Lagos")
         assert again.day_key == "2027-03-10"  # idempotent
     with pytest.raises(IntegrityError):
         with session_scope() as s:
@@ -425,7 +434,7 @@ def test_the_owner_steps_use_the_safe_order_and_name_the_rollback():
     steps = text[text.index("## Owner steps"):]
     order = ["restart_gate", "Stop the service", "Back up", "alembic upgrade head", "Deploy the code", "Start the service"]
     pos = [steps.index(k) for k in order]
-    assert pos == sorted(pos) and "Rollback" in steps and "a8d2f6c1e3b7" in steps and "NOT verified" in text
+    assert pos == sorted(pos) and "Rollback" in steps and "a8d2f6c1e3b7" in steps and "e3b6c8a1d5f2" in steps and "NOT verified" in text
     env = (ROOT / ".env.example").read_text()
-    for k in ("ACCOUNT_DAILY_LOSS_PCT", "ACCOUNT_DAY_TIMEZONE", "FUTURES_MAX_LEVERAGE"):
+    for k in ("ACCOUNT_DAILY_LOSS_LIMIT", "ACCOUNT_DAY_TIMEZONE", "FUTURES_MAX_LEVERAGE"):
         assert f"# {k}=" in env

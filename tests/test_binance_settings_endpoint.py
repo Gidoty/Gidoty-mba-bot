@@ -86,6 +86,7 @@ def go_live(client, email):
     assert client.put("/api/account/credentials", json={"api_key": SECRET_KEY, "api_secret": SECRET_SECRET, "environment": "mainnet"}).status_code == 200
     with session_scope() as s:
         s.query(Customer).filter(Customer.email == email).one().account.trial_ends_at = datetime.now(timezone.utc) - timedelta(days=1)
+    client.patch("/api/account", json={"daily_loss_limit_usd": 5})  # required before live trading (the Risk tab)
     assert client.post("/api/account/enable-live-trading", json={"accept_risk_disclosure": True}).status_code == 200
     assert client.patch("/api/account", json={"allocated_capital": 500}).status_code == 200
     started = client.post("/api/account/start-bot", json={"confirm": True})

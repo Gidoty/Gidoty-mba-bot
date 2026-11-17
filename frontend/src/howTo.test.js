@@ -9,7 +9,7 @@ const all = sections.flatMap((s) => s.steps.map(([title, body]) => `${title}. ${
 
 test("the walk-through follows the order a new customer meets the app", () => {
   const titles = sections.flatMap((s) => s.steps.map(([t]) => t));
-  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Dashboard", "Positions", "Trade History", "Performance", "Bot Settings", "Notifications", "Account", "Risk per trade", "Choosing your risk", "Leverage on Futures", "Risk and leverage compared", "The liquidation check", "Daily loss pause", "Total loss stop", "Open trades and your money", "Enable live trading", "Set your capital and start the bot", "Stopping"];
+  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Dashboard", "Positions", "Trade History", "Performance", "Bot Settings", "Notifications", "Account", "Risk per trade", "Choosing your risk", "Leverage on Futures", "Risk and leverage compared", "The liquidation check", "Daily loss limit", "Total loss stop", "Open trades and your money", "Enable live trading", "Set your capital and start the bot", "Stopping"];
   assert.deepEqual(titles, order);
 });
 
@@ -89,15 +89,18 @@ test("leverage: 1x to 5x, 3x by default, dashboard only, the smaller number, not
   assert.match(lev, /isolated margin only/);
 });
 
-test("the safety limits are described as they work: new trades only, daily pause on Lagos time, total loss stop reset by the customer, liquidation check can refuse", () => {
-  const daily = all.find((x) => x.startsWith("Daily loss pause."));
+test("the safety limits are described as they work: new trades only, daily loss limit on Lagos time, total loss stop reset by the customer, liquidation check can refuse", () => {
+  const daily = all.find((x) => x.startsWith("Daily loss limit."));
   assert.match(daily, /opens no new trades until the next day starts/);
-  assert.match(daily, /midnight to midnight in Lagos time/);
-  assert.match(daily, /same for every account and does not change with your risk setting/);
+  assert.match(daily, /midnight Lagos time/);
+  assert.match(daily, /You set your own daily loss limit in US dollars \(USDT\)/);
+  assert.match(daily, /Lowering it applies at once; raising it starts at the next midnight Lagos time/);
+  assert.match(daily, /does not change with your risk setting/);
   const total = all.find((x) => x.startsWith("Total loss stop."));
-  assert.match(total, /10% below its reference value, or 3 times your risk per trade if that is more \(never more than 80%\)/);
+  assert.match(total, /50% or more below its reference value/);
   assert.match(total, /until you reset it on Bot Settings/);
   assert.match(total, /never resets on its own/);
+  assert.match(total, /automatic and the same for every account/);
   assert.match(all.find((x) => x.startsWith("The liquidation check.")), /does not open the trade and tells you/);
   const money = all.find((x) => x.startsWith("Open trades and your money."));
   assert.match(money, /Do not deposit or withdraw money in the middle of the day/);

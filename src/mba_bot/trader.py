@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -383,7 +383,7 @@ async def _live_equity(session, account: TradingAccount, client) -> tuple[float 
 
 @dataclass
 class _LossCheck:
-    state: str  # off | ok | paused | paused_new | unreadable | bad_timezone
+    state: str  # off | ok | paused | paused_new | unreadable | bad_timezone | no_limit
     reason: str = ""
     pause: object | None = None
     approximate: bool = False
@@ -407,8 +407,8 @@ class _TotalCheck:
 
 
 async def _account_total_stop_check(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, *, now: datetime) -> _TotalCheck:
-    """The total loss stop (ACCOUNT_TOTAL_LOSS_STOP, docs/safety/risk_per_trade.md) for one LIVE account: new entries stop when equity is down max(10, 3 x the account's risk %)
-    percent (cap 80) from its reference equity, until the customer resets it. Shares the cycle's one equity reading. Never touches a trade. Fail closed: an unreadable equity
+    """The total loss stop (ACCOUNT_TOTAL_LOSS_STOP, docs/safety/risk_per_trade.md) for one LIVE account: new entries stop when equity is 50 percent or more (risk_limits.TOTAL_STOP_PCT)
+    below its reference equity, until the customer resets it. Shares the cycle's one equity reading. Never touches a trade. Fail closed: an unreadable equity
     is reported, not assumed fine. The reference is the first healthy reading after the stop is switched on or after the customer's last reset."""
     if not settings.account_total_loss_stop:
         return _TotalCheck("off")
@@ -423,10 +423,10 @@ async def _account_total_stop_check(session, account: TradingAccount, client, se
         account.loss_reference_equity = equity
         account.loss_reference_at = now
         return _TotalCheck("ok")
-    loss = risk_limits_module.total_loss_hit(reference_equity=ref, equity=equity, risk_pct=account.risk_pct)
+    loss = risk_limits_module.total_loss_hit(reference_equity=ref, equity=equity)
     if loss is None:
         return _TotalCheck("ok")
-    threshold = risk_limits_module.total_loss_threshold(account.risk_pct)
+    threshold = risk_limits_module.total_loss_threshold()
     stop = account_loss.write_total_stop(session, account.id, reference_equity=ref, equity=equity, loss_pct=loss, threshold_pct=threshold, risk_pct=account.risk_pct, now=now)
     logger.warning("account %s: total loss stop: down %.2f%% from the reference equity, limit %.2f%%; no new entries until the customer resets it", account.id, stop.loss_pct, threshold)
     account.last_error = account_loss.CUSTOMER_MESSAGE_TOTAL_STOP
@@ -440,12 +440,15 @@ async def _account_loss_check(session, account: TradingAccount, client, settings
 
     Reads equity once per cycle (cached for the cycle), records the sample, and writes the pause (audit row plus one alert) the first time the limit is crossed.
     It never touches a trade. Fail closed: an invalid zone or an unreadable equity is reported, not assumed fine."""
-    limit = settings.account_daily_loss_pct
-    if limit <= 0:
+    if not settings.account_daily_loss_limit:
         return _LossCheck("off")
     tz = account_loss.zone(settings.account_day_timezone)
     if tz is None:
         return _LossCheck("bad_timezone")
+    daily_limit_module.apply_pending(account, account_loss.day_key(now, tz))  # a raise the customer made earlier starts only now, at the first check of its day
+    limit = account.daily_loss_limit_usd
+    if not (isinstance(limit, (int, float)) and limit > 0):
+        return _LossCheck("no_limit")  # a live account with no amount takes no new entry (fail closed)
     existing = account_loss.active_pause(session, account.id, now, tz)
     equity, reason = await _cycle_equity_read(session, account, client, now)
     if equity is None:
@@ -453,14 +456,14 @@ async def _account_loss_check(session, account: TradingAccount, client, settings
     row = account_loss.record_sample(session, account.id, equity, now, tz)  # keeps sampling during a pause so the next day can start from it
     if existing is not None:
         return _LossCheck("paused", "", existing, bool(row.approximate))
-    hit = account_loss.daily_loss_hit(start_equity=row.start_equity, equity=equity, limit_pct=limit)
+    hit = account_loss.daily_loss_hit(start_equity=row.start_equity, equity=equity, limit_usd=limit)
     if hit is None:
         return _LossCheck("ok", "", None, bool(row.approximate))
-    pause = account_loss.write_pause(session, account.id, hit, limit_pct=limit, now=now, tz=tz, tz_name=settings.account_day_timezone)
-    logger.warning("account %s: daily loss pause (%s) loss %.2f%% limit %g%%; no new entries until %s", account.id, pause.day_key, pause.loss_pct, limit, pause.ends_at.isoformat())
+    pause = account_loss.write_pause(session, account.id, hit, limit_usd=limit, now=now, tz=tz, tz_name=settings.account_day_timezone)
+    logger.warning("account %s: daily loss pause (%s) loss %.2f USDT limit %g USDT; no new entries until %s", account.id, pause.day_key, hit.loss_usd, limit, pause.ends_at.isoformat())
     account.last_error = account_loss.CUSTOMER_MESSAGE_PAUSE
     account.last_error_at = now
-    await _notify_safe(notifier, account, f"MBA Bot: {account_loss.CUSTOMER_MESSAGE_PAUSE} (down {pause.loss_pct:.1f}% today, limit {limit:g}%)")
+    await _notify_safe(notifier, account, account_loss.pause_message(loss_usd=hit.loss_usd, reference_equity=account.loss_reference_equity, equity=equity))
     return _LossCheck("paused_new", "", pause, bool(row.approximate))
 
 
@@ -468,7 +471,7 @@ async def _account_equity_tick(session, account: TradingAccount, client, setting
     """Runs once at the end of every cycle of a LIVE account that has a client, whatever path the cycle took (idle scan, withdrawal block, no market data, multi
     path, open-trade path): records the equity sample and writes the daily loss pause the moment the limit is crossed. It never raises, never places or cancels an
     order and never touches a trade. A failed read logs one warning (once an hour per account) and the cycle carries on."""
-    if settings.account_daily_loss_pct <= 0 and not settings.account_total_loss_stop:
+    if not settings.account_daily_loss_limit and not settings.account_total_loss_stop:
         return
     try:
         check = await _account_loss_check(session, account, client, settings, notifier, now=now)
@@ -477,7 +480,7 @@ async def _account_equity_tick(session, account: TradingAccount, client, setting
             stop = total.stop
             telemetry.log_decision(
                 session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.REJECTED, reason=account_loss.R_ACCOUNT_TOTAL_STOP, is_paper=False, now=now,
-                detail=dict(loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct, risk_pct=stop.risk_pct, source="cycle_tick"),
+                detail=dict(loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct, source="cycle_tick"),
             )
         elif total.state == "unreadable" and check.state == "off":
             if protection_guard.should_alert(account.id, "-", "equity_sample_failed", now=now, repeat_hours=1.0):
@@ -486,9 +489,9 @@ async def _account_equity_tick(session, account: TradingAccount, client, setting
             pause = check.pause
             telemetry.log_decision(
                 session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.REJECTED, reason=account_loss.R_ACCOUNT_DAILY_PAUSE, is_paper=False, now=now,
-                detail=dict(loss_pct=round(pause.loss_pct, 3), limit_pct=settings.account_daily_loss_pct, day=pause.day_key, source="cycle_tick", approximate_start=check.approximate),
+                detail=dict(loss_pct=round(pause.loss_pct, 3), limit_usd=pause.limit_usd, day=pause.day_key, source="cycle_tick", approximate_start=check.approximate),
             )
-        elif check.state in ("unreadable", "bad_timezone") or (check.state == "paused" and check.reason):
+        elif check.state in ("unreadable", "bad_timezone", "no_limit") or (check.state == "paused" and check.reason):
             if protection_guard.should_alert(account.id, "-", "equity_sample_failed", now=now, repeat_hours=1.0):
                 logger.warning("account %s: could not record an equity sample this cycle (%s)", account.id, check.reason or check.state)
     except Exception:  # noqa: BLE001
@@ -497,13 +500,13 @@ async def _account_equity_tick(session, account: TradingAccount, client, setting
 
 async def _account_loss_blocks(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, tlog, *, now: datetime) -> bool:
     """True when a NEW live entry must not be opened because of the account-wide daily loss pause (docs/safety/account_daily_loss.md). Fail closed: an invalid time
-    zone or an unreadable equity also blocks. Off (ACCOUNT_DAILY_LOSS_PCT = 0) never blocks and reads nothing. Open trades are not touched by any of this."""
+    zone or an unreadable equity also blocks. Off (ACCOUNT_DAILY_LOSS_LIMIT unset) never blocks and reads nothing. Open trades are not touched by any of this."""
     check = await _account_loss_check(session, account, client, settings, notifier, now=now)
     if check.state in ("off", "ok"):
         total = await _account_total_stop_check(session, account, client, settings, notifier, now=now)
         if total.state in ("stopped", "stopped_new"):
             stop = total.stop
-            tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_TOTAL_STOP, loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct, risk_pct=stop.risk_pct)
+            tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_TOTAL_STOP, loss_pct=round(stop.loss_pct, 3), threshold_pct=stop.threshold_pct)
             account.last_error = account_loss.CUSTOMER_MESSAGE_TOTAL_STOP
             account.last_error_at = now
             return True
@@ -512,6 +515,10 @@ async def _account_loss_blocks(session, account: TradingAccount, client, setting
             await _block_entry(notifier, account, settings, account_loss.R_EQUITY_UNREADABLE, account_loss.CUSTOMER_MESSAGE_UNREADABLE, now=now)
             return True
         return False
+    if check.state == "no_limit":
+        tlog(telemetry.REJECTED, account_loss.R_LIMIT_MISSING)
+        await _block_entry(notifier, account, settings, account_loss.R_LIMIT_MISSING, account_loss.CUSTOMER_MESSAGE_LIMIT_MISSING, now=now)
+        return True
     if check.state == "bad_timezone":
         tlog(telemetry.REJECTED, account_loss.R_TIMEZONE_INVALID)
         await _block_entry(notifier, account, settings, account_loss.R_TIMEZONE_INVALID, account_loss.CUSTOMER_MESSAGE_TIMEZONE, now=now)
@@ -521,7 +528,7 @@ async def _account_loss_blocks(session, account: TradingAccount, client, setting
         await _block_entry(notifier, account, settings, account_loss.R_EQUITY_UNREADABLE, account_loss.CUSTOMER_MESSAGE_UNREADABLE, now=now)
         return True
     pause = check.pause
-    tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_DAILY_PAUSE, loss_pct=round(pause.loss_pct, 3), limit_pct=pause.limit_pct, day=pause.day_key,
+    tlog(telemetry.REJECTED, account_loss.R_ACCOUNT_DAILY_PAUSE, loss_pct=round(pause.loss_pct, 3), limit_usd=pause.limit_usd, day=pause.day_key,
          approximate_start=check.approximate, ends_at=pause.ends_at.isoformat())
     account.last_error = account_loss.CUSTOMER_MESSAGE_PAUSE
     account.last_error_at = now
