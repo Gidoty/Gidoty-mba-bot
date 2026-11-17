@@ -1,5 +1,9 @@
+import { useId } from "react";
+
 import { ACK_TEXT, BAND_INFO, acknowledgmentsFor, riskBand, riskProblem } from "../lib/riskBands.js";
+import { RISK_PER_TRADE_HELP } from "../riskGuideText.js";
 import { inputClass } from "./form.jsx";
+import InfoHelp from "./InfoHelp.jsx";
 
 // Risk per trade: a number input from 0.1 up to the limit the server reports, the band the value is in (label, icon and colour, never colour alone), and the
 // acknowledgments a value above 2% (and from 10%) needs. The server refuses a value without them; this only asks.
@@ -21,17 +25,24 @@ export function riskFieldProblem(value, limit) {
 }
 
 export default function RiskPctField({ value, onChange, limit, acks, onAcksChange, label = "Risk per trade (%)", describedBy }) {
+  const inputId = useId();
+  const hintId = `${inputId}-hint`;
   const band = riskBand(value);
   const info = BAND_INFO[band];
   const needed = acknowledgmentsFor(value);
   const problem = value === "" ? null : riskProblem(value, limit);
   return (
     <div>
-      <label className="block">
-        <span className="text-sm font-medium text-fg">{label}</span>
-        <input type="number" min="0.1" max={limit} step="0.1" value={value} onChange={(e) => onChange(e.target.value)} className={inputClass} aria-describedby={describedBy} />
-        <span className="mt-1 block text-xs text-muted">From 0.1% up to {limit}%. We recommend 2% or less. The bot sizes every trade from this number and a stop-loss.</span>
-      </label>
+      <div className="flex items-center gap-1">
+        <label htmlFor={inputId} className="text-sm font-medium text-fg">
+          {label}
+        </label>
+        <InfoHelp label="risk per trade" help={RISK_PER_TRADE_HELP} />
+      </div>
+      <input id={inputId} type="number" min="0.1" max={limit} step="0.1" value={value} onChange={(e) => onChange(e.target.value)} className={inputClass} aria-describedby={describedBy ? `${hintId} ${describedBy}` : hintId} />
+      <span id={hintId} className="mt-1 block text-xs text-muted">
+        From 0.1% up to {limit}%. We recommend 2% or less. It is the most a stop-loss hit may lose, as a share of your trading capital, not the size of the trade.
+      </span>
       {problem && <p role="alert" className="mt-2 text-sm font-medium text-neg">{problem}</p>}
       {!problem && band !== "invalid" && (
         <div role="status" className={`mt-2 flex gap-2 rounded-ctl border border-line border-l-4 px-3 py-2 text-sm font-medium ${TONE_CLASS[info.tone]}`} data-band={band}>

@@ -163,7 +163,7 @@ export default function BotSettings() {
       </Card>
 
       <form onSubmit={save} className="rounded-card border border-line bg-surface p-4">
-        <CardTitle right={<HelpTip text="You can change your pair, market, risk, or pair selection mode at any time. Switching any of them is blocked while a trade is open, so nothing gets left unmanaged." />}>
+        <CardTitle right={<HelpTip text="You can change your risk per trade, leverage and trading capital at any time; they apply to new trades only. Your pair, market and pair selection mode cannot be changed while a trade is open, so nothing gets left unmanaged." />}>
           Trading settings
         </CardTitle>
 
@@ -220,7 +220,7 @@ export default function BotSettings() {
               <span id="max-leverage-hint" className="mt-1 block text-xs text-muted">
                 {`Whole number from 1 to ${leverageLimit}. The most a position can be worth compared with your trading capital. Applies to new trades only.`}
               </span>
-              <BinanceSettingsLine />
+              <BinanceSettingsLine autoSelect={account.pair_selection_mode === "auto"} />
             </div>
           )}
         </div>
