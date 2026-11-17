@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -2083,6 +2083,9 @@ async def _maybe_send_daily_summary(session, account, notifier, *, now, settings
 
     total_pnl = sum(t.pnl or 0.0 for t in closed_today)
     quote = exchange.quote_currency(account.pair)
+    if settings is not None and settings.reporting_v2:
+        await notifier.send(account.notification_target, reporting.daily_summary_text(today, closed_today, quote))  # modes kept apart; "net" only with every fee known
+        return
     await notifier.send(
         account.notification_target,
         pnl_labels.daily_summary(

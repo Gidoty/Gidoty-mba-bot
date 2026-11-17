@@ -207,6 +207,7 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         total_loss_reference_equity=account.loss_reference_equity,
         **_daily_limit_fields(account, db=db, settings=settings),
         **_pair_skip_fields(account, db=db, settings=settings),
+        reports_available=bool(settings.reporting_v2) if settings else False,
         live_slots=live_multi.slot_cap(account.live_slots, switch_on=True) if (settings and settings.live_multi_position) else 1,
         live_multi_available=bool(settings.live_multi_position) if settings else False,
         live_pair_count=len(live_multi.live_pairs(account)),

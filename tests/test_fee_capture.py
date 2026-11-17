@@ -151,7 +151,7 @@ def test_paper_trades_leave_the_columns_null(db, monkeypatch):
 
 
 def test_nothing_in_the_trading_path_reads_the_fee_columns():
-    allowed = {"models.py", "lifecycle.py", "pilot_status.py", "paper_export.py"}
+    allowed = {"models.py", "lifecycle.py", "pilot_status.py", "paper_export.py", "reporting.py"}  # reporting.py (B2) only READS them to build reports; no trading code imports the numbers
     for path in (ROOT / "src" / "mba_bot").rglob("*.py"):
         if path.name in allowed or "alembic" in str(path):
             continue

@@ -365,6 +365,9 @@ class Settings:
     # Live multi-position (docs/safety/live_multi_position.md): False = off (default), a live account holds one trade at a time as before. True: an account may hold up to its own `live_slots` (1 to 3) trades,
     # one per pair, priority Donchian then EMA then RSI, one new entry per cycle, with the open risk capped across the trades (LIVE_TOTAL_RISK_CAP_PCT and the daily dollar limit) and the capital shared.
     live_multi_position: bool = False
+    # Reporting (docs/safety/reporting.md): False = off (default), the existing summaries and screens are unchanged. True: GET /api/reports/summary and the Performance report, and a daily Telegram summary that keeps
+    # live, demo and practice apart and says "net" only when the real fees of every trade are known.
+    reporting_v2: bool = False
     live_total_risk_cap_pct: float = 3.0  # the most open risk, as a percent of the trading capital, across all open live trades once a second or third trade is added (0 = no percent cap)
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
@@ -591,6 +594,7 @@ def load_settings() -> Settings:
         live_rsi_mr=_env_bool("LIVE_RSI_MR", False),
         live_donchian=_env_bool("LIVE_DONCHIAN", False),
         live_multi_position=_env_bool("LIVE_MULTI_POSITION", False),
+        reporting_v2=_env_bool("REPORTING_V2", False),
         live_total_risk_cap_pct=min(100.0, max(0.0, _env_float("LIVE_TOTAL_RISK_CAP_PCT", 3.0))),
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),

@@ -336,6 +336,7 @@ class AccountOut(BaseModel):
     pair_skip_message: str | None = None
     pair_skip_min_capital: float | None = None
     # DEMO mode (DEMO_RUNNER): `demo_available` says the service offers it, `demo_has_keys` that demo keys are on file, `demo_enabled_at` that the customer switched it on (then `mode` is "demo").
+    reports_available: bool = False
     live_slots: int = 1
     live_multi_available: bool = False
     live_pair_count: int = 1

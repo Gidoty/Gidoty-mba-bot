@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import BarChart from "../components/charts/BarChart.jsx";
 import EquityChart from "../components/charts/EquityChart.jsx";
+import ReportPanel from "../components/ReportPanel.jsx";
 import SplitBar from "../components/charts/SplitBar.jsx";
 import useTrades from "../components/dashboard/useTrades.js";
 import { Card, CardTitle, EmptyState, ErrorBanner, LoadingBlock, PageHeader, Pill, PnlText, Seg, StatTile, ThinNotice, UnprovenNotice } from "../components/ui.jsx";
@@ -123,6 +124,7 @@ export default function Performance() {
           </Card>
         </>
       )}
+      <ReportPanel account={account} />
     </div>
   );
 }
