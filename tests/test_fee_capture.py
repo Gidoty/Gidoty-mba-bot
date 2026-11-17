@@ -100,12 +100,13 @@ def test_a_futures_entry_and_exit_take_the_fee_from_the_account_trade_records(db
     run_cycle(aid, st)
     t = the_trade(aid)
     assert t.status == "open"
-    entry_fills = [f for f in client.fills if f["side"] == "buy"]
-    assert entry_fills and t.entry_fee_quote == pytest.approx(sum(f["fee"]["cost"] for f in entry_fills))
+    assert t.entry_fee_quote is None  # not read while the trade is being protected; captured at close
     client._ohlcv, client.price = BEARISH_OHLCV, BEAR_PRICE
     run_cycle(aid, st)
     t = the_trade(aid)
     assert t.status == "closed"
+    entry_fills = [f for f in client.fills if f["side"] == "buy"]
+    assert entry_fills and t.entry_fee_quote == pytest.approx(sum(f["fee"]["cost"] for f in entry_fills))
     exit_fills = [f for f in client.fills if f["side"] == "sell"]
     assert exit_fills and t.exit_fee_quote == pytest.approx(sum(f["fee"]["cost"] for f in exit_fills))
 
@@ -191,3 +192,30 @@ def test_the_head_is_the_fee_revision():
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     assert script.get_heads() == ["d2a5b9c7e1f4"] and script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"
+
+
+def test_no_trade_history_read_happens_before_the_protective_stop_on_a_futures_entry(db, monkeypatch):
+    """Protection first: nothing for reporting may sit between the fill and the stop (a slow trade-history read would delay the stop)."""
+    st = make_settings(max_notional_multiplier=100.0, protection_precheck_mode="off")
+    client = futures_client()
+    install(monkeypatch, client)
+    aid = new_account(st, market_type="futures")
+    run_cycle(aid, st)
+    assert the_trade(aid).status == "open"
+    names = [c[0] for c in client.calls]
+    orders = [i for i, c in enumerate(client.calls) if c[0] == "create_order"]
+    assert len(orders) >= 2, client.calls  # the entry and the protective stop
+    stop = next(i for i in orders[1:] if "stopLossPrice" in client.calls[i][6])  # the protective stop carries stopLossPrice
+    assert "fetch_my_trades" not in names[: stop + 1]
+    assert "fetch_my_trades" not in names  # and none at all while the trade is open
+
+
+def test_the_exit_paths_do_not_read_trade_history_either(db, monkeypatch):
+    """Only the final record (_finalize) reads the account's trades for fees; _exit_fills, used while a close is in progress, must not."""
+    import inspect
+
+    from mba_bot import lifecycle
+
+    src = inspect.getsource(lifecycle._exit_fills)
+    assert "want_fee=False" in src
+    assert "fetch_my_trades" not in inspect.getsource(lifecycle._after_entry) and "_fee_from_fills" not in inspect.getsource(lifecycle._after_entry)

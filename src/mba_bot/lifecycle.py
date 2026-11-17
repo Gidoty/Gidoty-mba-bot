@@ -343,9 +343,7 @@ async def _after_entry(ctx: LiveContext, trade: Trade, order: venue_mod.OrderInf
         fee_base = order.fee_base
         held = venue.net_from_fee(order.filled, fee_base)  # type: ignore[attr-defined]
     entry_price = order.average or trade.entry_price
-    entry_fee_quote = order.fee_quote
-    if entry_fee_quote is None and venue.market_type == "futures":
-        entry_fee_quote = await _fee_from_fills(venue, trade, order_side="buy" if trade.side == "long" else "sell", quantity=order.filled)
+    entry_fee_quote = order.fee_quote  # from the order response only: no extra read between the fill and the protective stop (a Futures entry fee is read at close, in _finalize)
     moved = _cas(
         session,
         trade,
@@ -644,10 +642,10 @@ async def _clear_attention(ctx: LiveContext, trade: Trade) -> None:
 async def _exit_fills(ctx: LiveContext, trade: Trade) -> list[tuple[float, float]]:
     """(quantity, price) of everything that has already exited this trade,
     from the exchange's own records."""
-    return (await _exit_fills_and_fees(ctx, trade))[0]
+    return (await _exit_fills_and_fees(ctx, trade, want_fee=False))[0]
 
 
-async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade) -> tuple[list[tuple[float, float]], float | None]:
+async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade, *, want_fee: bool = True) -> tuple[list[tuple[float, float]], float | None]:
     """_exit_fills plus the actual commission of those fills in the quote currency (None unless every fill's fee is exactly known; docs/safety/fee_capture.md)."""
     venue = ctx.venue
     if venue.market_type == "futures":
@@ -655,7 +653,7 @@ async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade) -> tuple[list[tup
         since = int(_aware(trade.opened_at).timestamp() * 1000) - 120_000 if trade.opened_at else 0
         realized = await venue.realized_exit(side=trade.side, since_ms=since, max_quantity=trade.quantity)  # type: ignore[attr-defined]
         fee = None
-        if realized:
+        if realized and want_fee:  # the extra trade-history read is only for the final record, never on an exit path
             fee = await _fee_from_fills(venue, trade, order_side=venue._stop_side(trade.side), quantity=realized[0])  # type: ignore[attr-defined]
         return ([realized] if realized else []), fee
     fills: list[tuple[float, float]] = []
@@ -676,6 +674,12 @@ async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade) -> tuple[list[tup
 
 async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_price: float, protection: str) -> bool:
     fills, exit_fee_quote = await _exit_fills_and_fees(ctx, trade)
+    extra: dict = {}
+    if ctx.venue.market_type == "futures" and trade.entry_fee_quote is None and fills:
+        # The trade is closed and nothing waits on this read: record the entry commission too (a Futures order response carries none).
+        entry_fee = await _fee_from_fills(ctx.venue, trade, order_side="buy" if trade.side == "long" else "sell", quantity=trade.quantity)
+        if entry_fee is not None:
+            extra["entry_fee_quote"] = entry_fee
     qty = sum(q for q, _ in fills)
     if qty > 0:
         exit_price = sum(q * p for q, p in fills) / qty
@@ -686,7 +690,7 @@ async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_pri
     moved = _cas(
         ctx.session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION, TRADE_CLOSING), TRADE_CLOSED,
         exit_price=exit_price, pnl=pnl, closed_at=ctx.now, close_reason=reason,
-        protection_status=protection, attention_reason=None, exit_fee_quote=exit_fee_quote,
+        protection_status=protection, attention_reason=None, exit_fee_quote=exit_fee_quote, **extra,
     )
     return moved
 

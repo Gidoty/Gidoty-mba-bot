@@ -31,8 +31,14 @@ It does not cancel, close, modify or block anything. Entries, stops and exits be
 3. Set `FOREIGN_ORDER_ALARM=alert`, restart, watch one account for a day.
 4. Rollback: remove the line (or set `off`) and restart. No data to undo.
 
+## Cost per check (counted from the code; request weights are from memory of Binance's documentation, UNVERIFIED)
+Reads run one after another at the end of the account's cycle, once per interval. Universe = the account pair, its manual pairs and its open trade pairs (4 manual pairs by default, 10 with Futures expansion).
+* Spot: 1 `fetch_open_orders` per pair. About 4 to 5 calls per check by default. Weight about 6 per call (about 24 to 30 per check).
+* Futures: 2 reads per pair (regular and conditional open orders) plus 1 `fetch_positions`. About 9 to 11 calls per check by default, about 21 to 23 with Futures expansion. Weight about 1 per order read and 5 for positions (about 13 to 15 by default).
+At the 15-minute default that is a small share of Binance's per-minute limit, but this was not measured.
+
 ## NOT verified
-* Request-weight cost per account on real Binance. It is one open-orders read per pair, plus one positions read on Futures. Not measured.
-* How Binance reports the client id on orders placed by its own web or app. Foreign orders are assumed to lack the `mba` prefix.
+* Request-weight cost per account on real Binance (counts above come from the code, the weights from memory). The reads are sequential, so a slow Binance response delays the end of that account's cycle by the sum of the call latencies. Not measured.
+* The client-id prefix rule. An order placed in Binance's own app or web gets a generated client id; the alarm assumes it does not start with `mba`. A manual order that does start with `mba`, or a bot order with a changed id, would be misjudged. Not observed.
 * Behaviour with more than a handful of manual pairs.
 * Tests use the fake exchange. They prove control flow, not Binance behaviour.
