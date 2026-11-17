@@ -9,7 +9,7 @@ const all = sections.flatMap((s) => s.steps.map(([title, body]) => `${title}. ${
 
 test("the walk-through follows the order a new customer meets the app", () => {
   const titles = sections.flatMap((s) => s.steps.map(([t]) => t));
-  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Dashboard", "Positions", "Trade History", "Performance", "Bot Settings", "Notifications", "Account", "Enable live trading", "Set your capital and start the bot", "Stopping"];
+  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Dashboard", "Positions", "Trade History", "Performance", "Bot Settings", "Notifications", "Account", "Risk per trade", "Leverage on Futures", "The liquidation check", "Daily loss pause", "Total loss stop", "Open trades and your money", "Enable live trading", "Set your capital and start the bot", "Stopping"];
   assert.deepEqual(titles, order);
 });
 
@@ -51,4 +51,50 @@ test("replacing the key and enabling live trading are both refused while a trade
   assert.match(all.find((s) => s.startsWith("Stopping")), /cannot be done while a trade is open/);
   assert.match(all.find((s) => s.startsWith("Enable live trading")), /cannot be done while a practice trade is open/);
   assert.match(all.find((s) => s.startsWith("Set your capital and start the bot")), /Start Bot cannot be pressed while a practice trade is open/); // account.py line 449
+});
+
+test("risk per trade: up to 40%, recommended 2% or less, the red band from 10%, the two ticks; no line says 2% is the maximum", () => {
+  const risk = all.find((x) => x.startsWith("Risk per trade."));
+  assert.match(risk, /from 0\.1% up to 40% at most/);
+  assert.match(risk, /We recommend 2% or less/);
+  assert.match(risk, /Above 2% the screen warns you and asks you to tick a box/);
+  assert.match(risk, /From 10% it turns red and asks for a second, stronger tick/);
+  const text = all.join(" ");
+  for (const old of [/at most 2%/i, /maximum[^.]{0,40}2%/i, /capped at 2%/i, /between 0\.1% and 2%/i, /0\.1% to 2%/i, /2% maximum/i, /up to 2%/i, /hard cap/i]) {
+    assert.ok(!old.test(text), String(old));
+  }
+});
+
+test("leverage: 1x to 5x, 3x by default, dashboard only, the smaller number, nothing changed on Binance, isolated margin", () => {
+  const lev = all.find((x) => x.startsWith("Leverage on Futures."));
+  assert.match(lev, /1x to 5x, 3x until you change it/);
+  assert.match(lev, /on the dashboard only/);
+  assert.match(lev, /smaller of the two/);
+  assert.match(lev, /never changes anything on Binance/);
+  assert.match(lev, /isolated margin only/);
+});
+
+test("the safety limits are described as they work: new trades only, daily pause on Lagos time, total loss stop reset by the customer, liquidation check can refuse", () => {
+  const daily = all.find((x) => x.startsWith("Daily loss pause."));
+  assert.match(daily, /opens no new trades until the next day starts/);
+  assert.match(daily, /midnight to midnight in Lagos time/);
+  assert.match(daily, /same for every account and does not change with your risk setting/);
+  const total = all.find((x) => x.startsWith("Total loss stop."));
+  assert.match(total, /10% below its reference value, or 3 times your risk per trade if that is more \(never more than 80%\)/);
+  assert.match(total, /until you reset it on Bot Settings/);
+  assert.match(total, /never resets on its own/);
+  assert.match(all.find((x) => x.startsWith("The liquidation check.")), /does not open the trade and tells you/);
+  const money = all.find((x) => x.startsWith("Open trades and your money."));
+  assert.match(money, /Do not deposit or withdraw money in the middle of the day/);
+  assert.match(money, /only stop new trades/);
+});
+
+test("the Help page and the Landing page use the same risk text and do not say 2% is the maximum", async () => {
+  const { RISK_HELP_TOPICS } = await import("./riskGuideText.js");
+  assert.equal(RISK_HELP_TOPICS.length, 4);
+  assert.ok(RISK_HELP_TOPICS[0].body.includes("up to 40% at most"));
+  const fs = await import("node:fs");
+  const landing = fs.readFileSync(new URL("./pages/Landing.jsx", import.meta.url), "utf8");
+  assert.match(landing, /never above 40%/);
+  assert.ok(!/Set 0\.1% to 2%/.test(landing) && !/at most 2%/.test(landing));
 });

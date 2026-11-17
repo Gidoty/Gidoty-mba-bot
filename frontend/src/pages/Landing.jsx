@@ -13,7 +13,9 @@ const STEPS = [
 
 const CONTROLS = [
   ["Pair and market", "Choose the pair and spot or USD-M futures."],
-  ["Risk per trade", "Choose your own, from 0.1% of your balance. We recommend 2% or less. Every trade sizes itself from that and a stop-loss."],
+  ["Risk per trade", "Choose your own, from 0.1% of your balance; the settings screen shows the highest value allowed (never above 40%). We recommend 2% or less. Every trade sizes itself from that and a stop-loss."],
+  ["Leverage (Futures)", "Choose 1x to 5x. The bot uses the smaller of your setting and Binance's number for the pair, and never changes anything on Binance."],
+  ["Safety limits", "A daily loss pause, a total loss stop and a liquidation check can stop the bot from opening new trades. They lower risk; they do not remove it."],
   ["Trading capital", "Set a ceiling on how much of your balance the bot may use."],
   ["Your Binance key", "Trade-only, with withdrawals off. Your funds stay in your own Binance account."],
 ];

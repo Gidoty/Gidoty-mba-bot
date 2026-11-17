@@ -1,6 +1,8 @@
 // "How to use this bot": a walk through the whole app in the order a new customer meets it.
 // Plain words, short steps, no promise of profit. Every statement here describes a screen or a
 // rule the app already has; if a screen changes, change the matching step.
+import { RISK_GUIDE_STEPS } from "./riskGuideText.js";
+
 export function howToSections(serverIp) {
   return [
     {
@@ -27,10 +29,14 @@ export function howToSections(serverIp) {
     {
       title: "Your settings and account",
       steps: [
-        ["Bot Settings", "Trading capital is the most of your Binance balance, in dollars, that the bot may use. Risk per trade starts at 0.1%; we recommend 2% or less. You also choose the pair and the market. Pair, market and pair selection mode cannot be changed while a trade is open. Risk per trade and trading capital can be changed at any time. Appearance sets Auto, Light or Dark."],
+        ["Bot Settings", "Trading capital is the most of your Binance balance, in dollars, that the bot may use. Risk per trade goes from 0.1% up to the limit shown on the screen; we recommend 2% or less. You also choose the pair and the market. Pair, market and pair selection mode cannot be changed while a trade is open. Risk per trade and trading capital can be changed at any time. Appearance sets Auto, Light or Dark."],
         ["Notifications", "Telegram messages tell you when a trade opens or closes, when a position needs attention, and a daily summary."],
         ["Account", "Shows your email, your account status and your bot code. Keep the bot code handy: support will ask for it."],
       ],
+    },
+    {
+      title: "Risk and safety limits",
+      steps: RISK_GUIDE_STEPS,
     },
     {
       title: "Going live",
