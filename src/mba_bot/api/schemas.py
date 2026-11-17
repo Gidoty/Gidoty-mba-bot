@@ -183,6 +183,16 @@ class AccountUpdateRequest(BaseModel):
         return v if v is None else _validate_choice(v, PAIR_SELECTION_MODES, "pair_selection_mode")
 
 
+class BinanceSettingsOut(BaseModel):
+    """What Binance currently has for the account's pair, read-only. `text` is always one of a few fixed customer-safe strings (see leverage.py); the two values are numbers and words only."""
+
+    status: str  # "ok" | "not_applicable" | "unavailable"
+    pair: str | None = None
+    leverage: float | None = None
+    margin_mode: str | None = None  # "isolated" | "cross" | None
+    text: str
+
+
 class TotalLossResetRequest(BaseModel):
     """The customer's confirmation that new trades may start again after a total loss stop (or that the reference value should be taken afresh)."""
 
