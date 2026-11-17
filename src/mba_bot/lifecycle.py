@@ -246,6 +246,7 @@ async def open_live_trade(
     signal_price: float,
     stop_price: float,
     risk_text: str,
+    strategy_id: str = EMA_STRATEGY_ID,
 ) -> Trade | None:
     """Write-ahead -> entry order -> resolve fill -> protect -> open.
     Returns the Trade (any state) or None if the write-ahead insert lost to
@@ -271,7 +272,7 @@ async def open_live_trade(
         side=side,
         is_paper=False,
         is_demo=ctx.is_demo,
-        strategy_id=EMA_STRATEGY_ID,
+        strategy_id=strategy_id,
         entry_price=signal_price,
         quantity=quantity,
         stop_loss_price=stop,
@@ -534,7 +535,7 @@ async def _protect_or_emergency(
                 ctx,
                 f"[{_mode_tag(ctx)}] Entered {trade.side.upper()} {_pair(ctx, trade)}\n"
                 f"Entry: {trade.entry_price:.4f}  Qty: {trade.quantity:.6f}  Stop: {trade.stop_loss_price:.4f} "
-                f"(resting at Binance)\n{risk_text}".rstrip(),
+                f"(resting at Binance)\n{risk_text}".rstrip() + (f"\nStrategy: {trade.strategy_id}" if trade.strategy_id and trade.strategy_id != EMA_STRATEGY_ID else ""),
             )
         return trade
     if outcome == "executed":
@@ -854,6 +855,9 @@ async def _record_exit(
             "stop_loss": "stop-loss",
             "stop_limit_gap": "stop-loss",
             "crossover_exit": "crossover exit",
+            "profit_target": "profit target",
+            "rsi_exit": "RSI back to 50",
+            "time_stop": "time stop",
         }.get(reason, "closed")
         await _notify(
             ctx,

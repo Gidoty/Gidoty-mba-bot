@@ -220,10 +220,14 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             signal = _ema_generate(sig_candles, settings)
             account.last_signal = signal.signal.value
             account.last_signal_at = now
-            opposite_cross = (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
-                open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
-            )
+            rsi_trade = multi_trade.strategy_of(open_trade) == rsi_mr.STRATEGY_ID
+            opposite_cross = not rsi_trade and (
+                (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
+                    open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
+            )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            if rsi_trade and open_trade.status == TRADE_OPEN:
+                await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms)
             await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
             return
 
@@ -324,6 +328,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 await _maybe_enter(
                     session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
                 )
+            if not is_paper and settings.live_rsi_mr:
+                await _live_rsi_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # lowest priority: only if EMA took no entry
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
@@ -982,8 +988,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
             return
         side = signal.side
     elif is_rsi:
-        # rsi_mr_v1 is PAPER ONLY IN CODE: a live account never runs it, whatever RSI_MR_PAPER_ONLY or any other setting says.
-        if (not is_paper or not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account)
+        # rsi_mr_v1 is paper only unless LIVE_RSI_MR is on (default off): then an opted-in LIVE or DEMO account may enter, with every guard an EMA entry has (docs/safety/live_rsi.md).
+        if ((not is_paper and not settings.live_rsi_mr) or not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account)
                 or signal.side not in ("long", "short")):
             return
         if signal.side == "short" and account.market_type != "futures":
@@ -1300,7 +1306,8 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
                 quantity=quantity,
                 signal_price=current_price,
                 stop_price=stop_price,
-                risk_text=f"Risk: {risk_amount:.2f} ({account.risk_pct:.2f}% of balance)",
+                risk_text=f"Risk: {risk_amount:.2f} ({risk_pct_used:.2f}% of balance)",
+                strategy_id=strategy_id,
             )
         except kill_switch.EntryPaused as paused:
             await _kill_switch_refuse(notifier, account, settings, paused.decision, _tlog, now=now, stage="in_lifecycle")
@@ -1651,6 +1658,51 @@ async def _manage_donchian_trade(session, account, trade: Trade, closed: list, s
 def _rsi_params(settings: Settings) -> rsi_mr.RsiParams:
     return rsi_mr.RsiParams(adx_max=settings.rsi_mr_adx_max, stop_atr=settings.rsi_mr_stop_atr, target_atr=settings.rsi_mr_target_atr,
                             time_stop_candles=settings.rsi_mr_time_stop_candles)
+
+
+async def _live_rsi_entry(session, account, client, settings: Settings, notifier, *, now, now_ms: int, is_demo: bool) -> None:
+    """LIVE_RSI_MR only (default off). Looks for an RSI mean-reversion entry on the account's pair from CLOSED candles, only if the account is opted in (extra_strategies) and EMA took no entry this
+    cycle (one live slot, EMA first). The entry itself goes through `_maybe_enter` exactly like an EMA entry: kill switch, daily dollar limit and 50% total stop, strategy guards (enforce) and fee guard,
+    pre-entry protection check, leverage cap, risk per trade (the smaller of the account's and RSI_MR_RISK_PCT), the protective stop placed and verified right after the fill."""
+    if not settings.rsi_mr_enabled or rsi_mr.STRATEGY_ID not in multi_trade.account_strategies(account):
+        return
+    if list_open_trades(session, account.id):
+        return  # a trade is open (EMA just opened one, or one was already running): one live slot
+    tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    pair = account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    raw = candles_from_ohlcv(ohlcv)
+    closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
+    if not raw or not closed:
+        return
+    sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=account.market_type == "futures")
+    if not sig.side:
+        return
+    age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+    window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
+    if not 0 <= age_ms <= window_ms:  # the signal candle must be the latest closed one and closed within the window (audit M5)
+        if protection_guard.should_alert(account.id, pair, f"stale:{rsi_mr.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
+            logger.info("account %s: rsi_mr_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
+        return
+    await _maybe_enter(session, account, client, sig, raw[-1].close, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
+
+
+async def _live_rsi_exit(ctx, trade: Trade, client, settings: Settings, *, now_ms: int) -> None:
+    """A live rsi_mr_v1 trade is exited by ITS rules (profit target, RSI back to 50, time stop) from the closed candles after it opened, through `lifecycle.execute_exit` (the only live exit path).
+    The stop is the exchange-side stop placed at entry (and the software backstop in monitor_trade); a stop touch found here is left to them. Runs whenever such a trade is open, whatever the switch says."""
+    tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
+    tf_ms = rsi_mr.timeframe_ms(tf)
+    pair = trade.pair or ctx.account.pair
+    ohlcv = await client.fetch_ohlcv(exchange.exchange_symbol(pair, ctx.account.market_type), timeframe=tf, limit=settings.ohlcv_limit)
+    closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
+    if not closed:
+        return
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    ex = rsi_mr.exit_check(side=trade.side, entry=trade.entry_price, stop=trade.stop_loss_price, opened_ms=int(opened.timestamp() * 1000), closed=closed, tf_ms=tf_ms, p=_rsi_params(settings))
+    if ex is None or ex.reason == rsi_mr.EXIT_STOP:
+        return
+    await lifecycle.execute_exit(ctx, trade, reason=ex.reason, price_hint=ex.price)
 
 
 async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settings: Settings, notifier, *, p: rsi_mr.RsiParams, tf_ms: int, now) -> None:

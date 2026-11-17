@@ -356,6 +356,9 @@ class Settings:
     # Demo runner (docs/safety/demo_runner.md): False = off (default), no demo endpoint is reachable and no account can resolve to DEMO. True: a customer who enters separate demo keys and
     # confirms can run the full live path against Binance Futures Demo Trading / Spot Testnet, labelled DEMO everywhere and kept apart from live and paper records.
     demo_runner: bool = False
+    # Live RSI mean reversion (docs/safety/live_rsi.md): False = off (default), rsi_mr_v1 stays paper only. True: a LIVE (or DEMO) account that is opted in to rsi_mr_v1 (extra_strategies) may take an RSI entry when
+    # RSI_MR_ENABLED is on and NEW_STRATEGY_GUARDS_MODE=enforce, with the same guards, sizing, protective stop and limits as an EMA entry. One live slot: EMA has priority, RSI only if EMA took no entry.
+    live_rsi_mr: bool = False
     # Foreign-order alarm (docs/safety/foreign_orders.md): "off" (default) or "alert". Tells the customer when their Binance account holds an open order or position the bot did not open. Read-only: it
     # never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES (5 to 240).
     foreign_order_alarm: str = "off"
@@ -578,6 +581,7 @@ def load_settings() -> Settings:
         account_total_loss_stop=_env_bool("ACCOUNT_TOTAL_LOSS_STOP", False),
         small_capital_pairs=_env_bool("SMALL_CAPITAL_PAIRS", False),
         demo_runner=_env_bool("DEMO_RUNNER", False),
+        live_rsi_mr=_env_bool("LIVE_RSI_MR", False),
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
