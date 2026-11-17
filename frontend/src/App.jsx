@@ -18,6 +18,7 @@ import Landing from "./pages/Landing.jsx";
 import LegalPage from "./pages/LegalPage.jsx";
 import Login from "./pages/Login.jsx";
 import DailyLimitNotice from "./components/DailyLimitNotice.jsx";
+import PairSkipNotice from "./components/PairSkipNotice.jsx";
 import Notifications from "./pages/Notifications.jsx";
 import Onboarding from "./pages/Onboarding.jsx";
 import Performance from "./pages/Performance.jsx";
@@ -168,6 +169,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
       ) : (
         <>
           <DailyLimitNotice account={account} />
+          <PairSkipNotice account={account} />
           <DashboardRouter customer={customer} onCustomerChanged={onCustomerChanged} />
         </>
       )}

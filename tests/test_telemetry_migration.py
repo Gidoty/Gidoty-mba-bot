@@ -59,6 +59,6 @@ def test_downgrade_removes_them_and_is_repeatable(tmp_path):
 def test_the_migration_chain_has_exactly_one_head_and_it_follows_the_production_head():
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     # The kill switch migration (e5b9c2d7f1a4) now sits on top of the telemetry one; this migration itself is unchanged.
-    assert script.get_heads() == ["e3b6c8a1d5f2"]  # billing, strategy pauses and the multi-trade foundation now sit on top of the kill switch
+    assert script.get_heads() == ["f4c7d9b2a6e1"]  # billing, strategy pauses and the multi-trade foundation now sit on top of the kill switch
     assert script.get_revision("e5b9c2d7f1a4").down_revision == "d4a8f1c3e6b2"
     assert MIG.down_revision == "c7d2e5f8a1b3"

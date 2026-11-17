@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, StrictInt, field_validator
+from pydantic import BaseModel, EmailStr, Field, StrictInt, field_validator, model_serializer
 
 from ..config import ALL_KNOWN_PAIRS, SUPPORTED_MARKET_TYPES, SUPPORTED_NOTIFICATION_CHANNELS
 
@@ -311,6 +311,9 @@ class AccountOut(BaseModel):
     daily_loss_limit_max_usd: float | None = None
     account_value_reference: float | None = None
     one_trade_can_exceed_limit: bool = False
+    # SMALL_CAPITAL_PAIRS: set while the bot has recently skipped the account's own pair because its capital cannot meet the pair's smallest order (a plain text and the capital needed).
+    pair_skip_message: str | None = None
+    pair_skip_min_capital: float | None = None
 
     # Persisted runtime state (trader.py writes these every scheduler
     # cycle - see models.py) plus a server-computed summary of them, so
@@ -442,6 +445,16 @@ class PairOut(BaseModel):
     available: bool
     # Customer-facing reason when `available` is False; None otherwise.
     reason: str | None = None
+    # SMALL_CAPITAL_PAIRS: the trading capital this pair's smallest order needs at the customer's leverage cap (set only when the pair is unavailable for being too small).
+    min_capital: float | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_min_capital(self, handler):
+        """With SMALL_CAPITAL_PAIRS off the answer is byte for byte what it always was: the new key appears only when it has a value."""
+        data = handler(self)
+        if data.get("min_capital") is None:
+            data.pop("min_capital", None)
+        return data
 
 
 class PairsOut(BaseModel):

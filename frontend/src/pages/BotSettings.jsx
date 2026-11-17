@@ -6,6 +6,7 @@ import { api } from "../api/client.js";
 import BinanceSettingsLine from "../components/BinanceSettingsLine.jsx";
 import DailyLossLimitField from "../components/DailyLossLimitField.jsx";
 import HelpTip from "../components/HelpTip.jsx";
+import PairSkipNotice from "../components/PairSkipNotice.jsx";
 import InfoHelp from "../components/InfoHelp.jsx";
 import SettingsTabs, { tabPanelProps } from "../components/SettingsTabs.jsx";
 import { LEVERAGE_HELP } from "../leverageHelp.js";
@@ -175,6 +176,7 @@ export default function BotSettings() {
           <CardTitle right={<HelpTip text="You can change your risk per trade, leverage and trading capital at any time; they apply to new trades only. Your pair, market and pair selection mode cannot be changed while a trade is open, so nothing gets left unmanaged." />}>
             Trading
           </CardTitle>
+          <div className="mb-3"><PairSkipNotice account={account} /></div>
           {problems.trading && <p role="alert" className="mb-3 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm font-medium text-fg">{problems.trading}</p>}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 shell:grid-cols-3">
             <FormField label="Pair selection">

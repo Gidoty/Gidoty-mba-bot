@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from ... import pair_catalog
+from ... import leverage as leverage_module, pair_catalog, small_capital
 from ...config import SUPPORTED_MARKET_TYPES, Settings, manual_pairs
 from ...models import Customer
 from ..deps import get_current_customer, get_pair_facts, get_settings
@@ -34,7 +34,14 @@ async def list_pairs(
     capital = account.allocated_capital if account is not None else None
     out = []
     for pair in pairs:
-        if check:
+        if check and settings.small_capital_pairs and account is not None:
+            # The customer's own leverage cap, not the service ceiling, decides; the reason says how much capital the pair needs.
+            cap = small_capital.leverage_cap_for(market_type, leverage_module.account_cap(account.max_leverage, settings.futures_max_leverage))
+            st = pair_catalog.assess_pair(pair, facts.get(pair), allocated_capital=capital, max_notional_multiplier=cap)
+            need = pair_catalog.min_capital_needed(facts[pair].min_notional, cap) if (not st.available and st.reason == pair_catalog.REASON_INSUFFICIENT_CAPITAL and facts.get(pair)) else None
+            reason = st.reason if need is None else f"Too small for your trading capital: needs about {need:.2f} USDT at your {cap:g}x leverage limit."
+            out.append(PairOut(pair=pair, available=st.available, reason=reason, min_capital=need))
+        elif check:
             st = pair_catalog.assess_pair(
                 pair, facts.get(pair), allocated_capital=capital, max_notional_multiplier=settings.max_notional_multiplier
             )
