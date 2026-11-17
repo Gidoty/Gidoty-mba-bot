@@ -495,11 +495,13 @@ class FakeBinance:
         self._check_symbol(symbol)
         self._fault("fetch_open_orders", None, "before")
         want_conditional = bool(params.get("trigger"))
-        return [
+        own = [
             self._view(o)
             for o in self.orders.values()
             if o["status"] == "open" and (o["conditional"] == want_conditional if self.market_type == "futures" else True)
         ]
+        # open orders on the account that the bot did not place (a test sets them): same shape as ccxt's, no bot prefix
+        return own + [dict(o) for o in getattr(self, "foreign_orders", []) if bool(o.get("trigger")) == want_conditional]
 
     async def cancel_order(self, id, symbol=None, params=None):
         params = params or {}

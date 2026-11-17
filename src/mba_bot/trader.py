@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from . import account_loss, donchian, exchange, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import account_loss, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -334,6 +334,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             # (the exchange is probably unreachable and the cycle's own error handling has already run).
             if not effective_is_paper and sys.exc_info()[0] is None:
                 await _account_equity_tick(session, account, client, settings, notifier, now=now)
+                await _foreign_order_check(session, account, client, settings, notifier, now=now)
         finally:
             _cycle_equity.pop(account.id, None)
             await client.close()
@@ -525,6 +526,49 @@ async def _account_loss_blocks(session, account: TradingAccount, client, setting
     account.last_error = account_loss.CUSTOMER_MESSAGE_PAUSE
     account.last_error_at = now
     return True
+
+
+_foreign_last: dict[str, float] = {}  # account id -> monotonic time of the last foreign-order look (this process only)
+
+
+def _foreign_now() -> float:
+    import time as _time
+
+    return _time.monotonic()
+
+
+async def _foreign_order_check(session, account: TradingAccount, client, settings: Settings, notifier: Notifier, *, now: datetime) -> None:
+    """The foreign-order alarm (docs/safety/foreign_orders.md) for one LIVE account at the end of a normal cycle. Off by default. Read-only: it only reads the account's open orders and positions, tells the
+    customer once per distinct set of findings per 24 hours, and never cancels, closes or changes anything. At most one look per account every FOREIGN_ORDER_CHECK_MINUTES. Never raises."""
+    if settings.foreign_order_alarm != foreign_orders.MODE_ALERT:
+        return
+    try:
+        started = _foreign_now()
+        last = _foreign_last.get(account.id)
+        if last is not None and started - last < settings.foreign_order_check_minutes * 60.0:
+            return
+        _foreign_last[account.id] = started
+        session.flush()
+        trades = [t for t in list_open_trades(session, account.id) if not t.is_paper]
+        pairs = {t.pair or account.pair for t in trades}
+        universe = {account.pair, *pairs, *manual_pairs(account.market_type, futures_expansion=settings.futures_pair_expansion)}
+        symbols = sorted(exchange.exchange_symbol(p, account.market_type) for p in universe)
+        orders, positions, failed = await foreign_orders.read_account_state(client, account.market_type, symbols)
+        findings = foreign_orders.find_foreign(orders, positions, pairs)
+        if failed and not findings:
+            if protection_guard.should_alert(account.id, "-", "foreign_read_failed", now=now, repeat_hours=1.0):
+                logger.warning("account %s: foreign-order check could not read %d part(s) of the account this time", account.id, failed)
+            return
+        if not findings:
+            return
+        fp = foreign_orders.fingerprint(findings)
+        if protection_guard.should_alert(account.id, "-", f"foreign:{fp}", now=now, repeat_hours=24.0):
+            logger.warning("account %s: foreign-order alarm: %d open order(s) or position(s) the bot did not open (%s); not touched", account.id, len(findings), ", ".join(sorted({f.symbol for f in findings})))
+            telemetry.log_decision(session, settings, account, stage=telemetry.STAGE_ENTRY, outcome=telemetry.OBSERVED, reason=foreign_orders.R_FOREIGN, is_paper=False, now=now,
+                                   detail=dict(orders=sum(1 for f in findings if f.kind == "order"), positions=sum(1 for f in findings if f.kind == "position"), symbols=sorted({f.symbol for f in findings})[:6]))
+            await _notify_safe(notifier, account, foreign_orders.message(findings))
+    except Exception:  # noqa: BLE001
+        logger.warning("account %s: foreign-order check failed this cycle", account.id)
 
 
 async def _notify_safe(notifier: Notifier, account: TradingAccount, message: str) -> None:

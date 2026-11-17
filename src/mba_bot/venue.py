@@ -103,6 +103,9 @@ class OrderInfo:
     average: float | None
     fee_base: float  # commission taken in the BASE asset (Spot buys)
     fee_known: bool  # False if the response carried no fee information at all
+    # The commission of the fills in the QUOTE currency (USDT), from the exchange's own fee records. None when it cannot be stated exactly: no fee information, or a fee charged in an asset
+    # the bot cannot value (BNB). Recorded for reporting only; nothing in the trading path reads it.
+    fee_quote: float | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -132,6 +135,7 @@ class ProtectionOrder:
     average: float | None
     stop_price: float | None
     limit_price: float | None
+    fee_quote: float | None = None  # as OrderInfo.fee_quote, for a protective order that executed
 
     @property
     def is_resting(self) -> bool:
@@ -230,7 +234,30 @@ def rules_from_market(market: dict) -> MarketRules:
     )
 
 
-def order_from_ccxt(order: Any, *, base: str | None = None) -> OrderInfo:
+def fee_quote_of(fee_entries, *, base: str | None, quote: str | None, price: float | None) -> float | None:
+    """Total commission in the quote currency from ccxt fee entries ({"currency", "cost"}), or None if it cannot be stated exactly: no entries, a cost that is not a finite number, a fee in the
+    base asset with no usable price, or a fee in any other asset (for example BNB), which the bot cannot value. A zero cost adds nothing whatever its currency."""
+    entries = [e for e in (fee_entries or []) if isinstance(e, dict)]
+    if not entries:
+        return None
+    total = 0.0
+    for entry in entries:
+        cost = _f(entry.get("cost"))
+        if cost is None or cost != cost or cost in (float("inf"), float("-inf")):
+            return None
+        if cost == 0:
+            continue
+        currency = entry.get("currency")
+        if quote is not None and currency == quote:
+            total += cost
+        elif base is not None and currency == base and price is not None and price > 0:
+            total += cost * price
+        else:
+            return None
+    return total
+
+
+def order_from_ccxt(order: Any, *, base: str | None = None, quote: str | None = None) -> OrderInfo:
     if not isinstance(order, dict):
         raise ValueError("unexpected order shape")
     filled = _f(order.get("filled")) or 0.0
@@ -279,6 +306,7 @@ def order_from_ccxt(order: Any, *, base: str | None = None) -> OrderInfo:
         average=average,
         fee_base=fee_base,
         fee_known=fee_known,
+        fee_quote=fee_quote_of(chosen, base=base, quote=quote, price=average),
     )
 
 
@@ -301,10 +329,34 @@ class Venue:
         self.entries_allowed = entries_allowed
         self.symbol = exchange.exchange_symbol(pair, self.market_type)
         self.base = pair.split("/", 1)[0]
+        self.quote = pair.split("/", 1)[1].split(":")[0] if "/" in pair else None
         self.market: dict | None = None
         self.rules: MarketRules | None = None
 
     # -- setup / capability -------------------------------------------------
+
+    async def fills_fee_quote(self, *, order_side: str, since_ms: int, max_quantity: float) -> float | None:
+        """Read-only. The commission, in the quote currency, of the account's own fills on this symbol on `order_side` ("buy" or "sell") since `since_ms`, newest first, up to `max_quantity`.
+        None unless the answer is exact: the fills must cover the quantity and every fee must be convertible (see fee_quote_of). Used only to RECORD actual costs after a fill; never raises into
+        the caller's decision (the caller catches), never places or changes anything."""
+        trades = await self.client.fetch_my_trades(self.symbol, since_ms)
+        fills = [t for t in (trades or []) if isinstance(t, dict) and t.get("side") == order_side]
+        fills.sort(key=lambda t: t.get("timestamp") or 0, reverse=True)
+        covered, total = 0.0, 0.0
+        for t in fills:
+            amount = _f(t.get("amount")) or 0.0
+            price = _f(t.get("price"))
+            if amount <= 0 or not price or covered >= max_quantity - 1e-12:
+                continue
+            fee = t.get("fees") if isinstance(t.get("fees"), list) and t.get("fees") else ([t.get("fee")] if isinstance(t.get("fee"), dict) else [])
+            part = fee_quote_of(fee, base=self.base, quote=self.quote, price=price)
+            if part is None:
+                return None
+            take = min(amount, max_quantity - covered)
+            total += part * (take / amount)
+            covered += take
+        # covered must reach the order quantity within a rounding tolerance of 1 part in 1000 (this is a coverage check, not a fee rate)
+        return total if covered > 0 and max_quantity - covered <= max_quantity / 1000 else None
 
     async def prepare(self, *, managing: bool = False) -> None:
         """Load markets and verify everything a live entry on this symbol
@@ -357,7 +409,7 @@ class Venue:
         raw = await self.client.create_order(
             self.symbol, "market", order_side, quantity, None, {"clientOrderId": client_id}
         )
-        return order_from_ccxt(raw, base=self.base)
+        return order_from_ccxt(raw, base=self.base, quote=self.quote)
 
     async def find_order(self, client_id: str) -> OrderInfo | None:
         """The regular order with this client id, or None if Binance has no
@@ -367,7 +419,7 @@ class Venue:
             raw = await self.client.fetch_order(client_id, self.symbol, {"clientOrderId": client_id})
         except ccxt_async.OrderNotFound:
             return None
-        return order_from_ccxt(raw, base=self.base)
+        return order_from_ccxt(raw, base=self.base, quote=self.quote)
 
     async def await_final(self, client_id: str, *, attempts: int, delay: float) -> OrderInfo | None:
         """Poll a regular order until it is terminal or attempts run out;
@@ -595,7 +647,7 @@ class SpotVenue(Venue):
         return self._protection_from(raw, client_id=client_id, stop_price=trigger, limit_price=limit)
 
     def _protection_from(self, raw, *, client_id, stop_price, limit_price, kind=None):
-        info = order_from_ccxt(raw, base=self.base)
+        info = order_from_ccxt(raw, base=self.base, quote=self.quote)
         if info.status == "open":
             state = "partial" if info.filled > 0 else "open"
         elif info.status == "closed":
@@ -611,6 +663,7 @@ class SpotVenue(Venue):
             average=info.average,
             stop_price=stop_price,
             limit_price=limit_price,
+            fee_quote=info.fee_quote,
         )
 
     async def get_protection(self, *, kind, client_id):
@@ -635,7 +688,7 @@ class SpotVenue(Venue):
         if qty <= 0:
             raise ProtectionUnavailable("nothing to sell above the lot step")
         raw = await self.client.create_order(self.symbol, "market", "sell", qty, None, {"clientOrderId": client_id})
-        return order_from_ccxt(raw, base=self.base)
+        return order_from_ccxt(raw, base=self.base, quote=self.quote)
 
     async def exposure(self) -> float:
         balance = await self.client.fetch_balance()
@@ -820,7 +873,7 @@ class FuturesVenue(Venue):
             None,
             {"reduceOnly": True, "clientOrderId": client_id},
         )
-        return order_from_ccxt(raw, base=self.base)
+        return order_from_ccxt(raw, base=self.base, quote=self.quote)
 
     async def realized_exit(self, *, side: str, since_ms: int, max_quantity: float) -> tuple[float, float] | None:
         """(quantity, vwap) of exit-side fills since `since_ms`, capped at
