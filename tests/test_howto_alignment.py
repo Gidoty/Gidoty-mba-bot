@@ -112,11 +112,10 @@ def test_the_acknowledgments_are_not_tied_to_the_legal_page_versions():
     assert "risk_ack" not in body and "risk_disclosure" not in body
 
 
-# ------------------------------------------------------------------ the legal draft exists, is marked, and the live pages are untouched
-def test_the_legal_draft_is_marked_and_has_the_required_topics():
-    text = (ROOT / "docs" / "legal" / "DRAFT_risk_disclosure_changes.md").read_text()
-    assert text.splitlines()[0].startswith("# DRAFT") and "not legal advice" in text.lower() and "for review by the owner and his lawyer" in text.lower()
-    for topic in ("risk per trade", "total loss stop", "size cap", "practice", "no guarantee", "isolated", "daily loss", "version bump"):
-        assert topic in text.lower(), topic
-    for bad in ("MBA_BOT_FINAL_QA_QC_AUDIT", "handoff", "stack-audit"):
-        assert bad.lower() not in text.lower(), bad
+# ------------------------------------------------------------------ no legal draft in the public repo
+def test_no_legal_draft_wording_is_kept_in_the_public_repository():
+    """Drafts of legal wording live in the private handoff repo. The earlier engineering draft was removed from here once those drafts superseded it; this keeps a draft from coming back."""
+    legal = ROOT / "docs" / "legal"
+    assert not legal.exists() or not [p for p in legal.rglob("*") if p.is_file() and "draft" in p.name.lower()]
+    for text in (ROOT / "docs").rglob("*.md"):
+        assert not text.read_text(errors="ignore").lstrip().upper().startswith("# DRAFT: PROPOSED CHANGES TO THE TRADING RISK DISCLOSURE"), text
