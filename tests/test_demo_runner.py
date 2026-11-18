@@ -106,6 +106,21 @@ def test_demo_resolves_only_with_the_explicit_flag_and_never_next_to_live():
     assert _mode(live_trading_enabled_at=now, has_mainnet_credential=True, bot_started_at=now) == TradingMode.LIVE  # live is exactly as before
 
 
+def test_demo_is_refused_when_live_trading_is_enabled_even_with_demo_on_keys_on_file_and_the_bot_not_started(db):
+    """The two live conditions are checked on their own: live_trading_enabled_at alone (bot_started_at empty) already refuses DEMO, and so does bot_started_at alone."""
+    st = demo_settings()
+    base = demo_account(st)  # demo switched on, demo keys on file, no live flags
+    with session_scope() as s:
+        a = s.get(TradingAccount, base)
+        assert demo_module.available(a, st) is True and a.bot_started_at is None  # the control: everything else in place
+        a.live_trading_enabled_at = datetime.now(timezone.utc)  # live authorised, Start Bot NOT pressed
+        assert a.demo_enabled_at is not None and a.demo_credential is not None and a.bot_started_at is None
+        assert demo_module.available(a, st) is False
+        a.live_trading_enabled_at = None
+        a.bot_started_at = datetime.now(timezone.utc)  # the other flag alone
+        assert demo_module.available(a, st) is False
+
+
 def test_available_needs_the_switch_the_action_the_keys_and_no_live(db):
     st = demo_settings()
     ok = demo_account(st)
