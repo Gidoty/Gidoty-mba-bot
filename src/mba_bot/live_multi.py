@@ -84,3 +84,21 @@ def live_pairs(account) -> list[str]:
     from .multi_trade import trading_pairs
 
     return trading_pairs(account)
+
+
+MSG_SLOTS_OFF = "holding more than one live trade at a time is not available on this service"
+MSG_SLOTS_AUTO = "Auto Select trades one pair at a time. Switch pair selection to Manual to hold more than one trade at once."
+MSG_AUTO_SLOTS = "Auto Select trades one pair at a time. Set the number of open trades to 1 before switching pair selection to Auto Select."
+
+
+def slots_refusal(*, new_slots, new_selection_mode, current_slots, current_selection_mode, switch_on: bool):
+    """The ONE rule for the slot setting, used by the account API (which refuses with it) and by the setup advisor (which reports it): (http status, plain text) or None.
+    `new_slots` and `new_selection_mode` are what this request sets (None = not in the request); the current values are what the account has now."""
+    if new_slots is not None:
+        if not switch_on:
+            return 409, MSG_SLOTS_OFF
+        if new_slots > 1 and (new_selection_mode or current_selection_mode) == "auto":
+            return 422, MSG_SLOTS_AUTO
+    elif switch_on and slot_cap(current_slots, switch_on=True) > 1 and new_selection_mode == "auto":
+        return 422, MSG_AUTO_SLOTS
+    return None

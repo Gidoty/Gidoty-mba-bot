@@ -206,6 +206,33 @@ class AccountUpdateRequest(BaseModel):
         return v if v is None else _validate_choice(v, PAIR_SELECTION_MODES, "pair_selection_mode")
 
 
+class AdviceRequest(BaseModel):
+    """What the customer is about to save, for the setup advisor. Deliberately loose: a number the account API would refuse is answered with a 'not possible' note, not an error here."""
+
+    risk_pct: float | None = None
+    allocated_capital: float | None = None
+    daily_loss_limit_usd: float | None = None
+    live_slots: int | None = None
+    max_leverage: int | None = None
+    pair: str | None = None
+    market_type: str | None = None
+    pair_selection_mode: str | None = None
+    acknowledge_high_risk: bool = False
+    acknowledge_very_high_risk: bool = False
+
+
+class AdviceNote(BaseModel):
+    id: str
+    severity: str  # "not_possible" | "warning" | "tip"
+    text: str
+    action: str | None = None
+    tab: str  # "trading" | "risk"
+
+
+class AdviceOut(BaseModel):
+    notes: list[AdviceNote]
+
+
 class BinanceSettingsOut(BaseModel):
     """What Binance currently has for the account's pair, read-only. `text` is always one of a few fixed customer-safe strings (see leverage.py); the two values are numbers and words only."""
 
