@@ -17,9 +17,10 @@ const label = (route) => NAV_ITEMS.find((i) => i.route === route)?.label || rout
 
 // Wraps every signed-in page: sidebar from 900 px, a top bar and bottom tab bar
 // below that, a theme switch, and one content width. Pages render only their own content.
-export default function AppShell({ route, onLogout, botCode, children }) {
+export default function AppShell({ route, onLogout, botCode, showAdmin = false, children }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const wide = WIDE_ROUTES.has(route);
+  const wide = WIDE_ROUTES.has(route) || route === "admin";
+  const items = showAdmin ? [...NAV_ITEMS, { route: "admin", label: "Admin" }] : NAV_ITEMS; // the Admin link exists only when /api/admin/me says the customer is an admin
 
   // Lets the floating help button sit above the tab bar on a phone (see index.css).
   useEffect(() => {
@@ -34,7 +35,7 @@ export default function AppShell({ route, onLogout, botCode, children }) {
           <BrandLogo />
         </button>
         <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto">
-          {NAV_ITEMS.map((item) => (
+          {items.map((item) => (
             <SideLink key={item.route} item={item} active={route === item.route} />
           ))}
         </nav>
@@ -70,7 +71,7 @@ export default function AppShell({ route, onLogout, botCode, children }) {
         <TabLink route="more" text="More" active={!TAB_ROUTES.includes(route)} onClick={() => setMoreOpen(true)} />
       </nav>
 
-      {moreOpen && <MoreSheet route={route} onClose={() => setMoreOpen(false)} onLogout={onLogout} />}
+      {moreOpen && <MoreSheet items={items} route={route} onClose={() => setMoreOpen(false)} onLogout={onLogout} />}
     </div>
   );
 }
@@ -106,7 +107,7 @@ function TabLink({ route, text, active, onClick }) {
 }
 
 // Everything that has no tab: the other pages, the legal documents, the theme and log out.
-function MoreSheet({ route, onClose, onLogout }) {
+function MoreSheet({ items, route, onClose, onLogout }) {
   const closeRef = useRef(null);
   useEffect(() => {
     closeRef.current?.focus();
@@ -119,7 +120,7 @@ function MoreSheet({ route, onClose, onLogout }) {
     navigate(r);
     onClose();
   };
-  const rest = NAV_ITEMS.filter((i) => !TAB_ROUTES.includes(i.route));
+  const rest = items.filter((i) => !TAB_ROUTES.includes(i.route));
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-black/50" onClick={onClose}>

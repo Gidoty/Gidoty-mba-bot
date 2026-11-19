@@ -423,7 +423,7 @@ def test_no_code_reads_customer_has_paid_outside_the_entitlement_layer():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent / "src" / "mba_bot"
-    allowed = {root / "models.py", root / "billing" / "entitlement.py", root / "api" / "routers" / "billing.py"}
+    allowed = {root / "models.py", root / "billing" / "entitlement.py", root / "api" / "routers" / "billing.py", root / "admin_service.py"}  # admin_service.py reads the flag only as an INPUT it hands to is_entitled (admin dashboard counts), see tests/test_admin_dashboard.py
     offenders = []
     for path in root.rglob("*.py"):
         if path in allowed:

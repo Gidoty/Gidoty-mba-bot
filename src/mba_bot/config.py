@@ -430,6 +430,9 @@ class Settings:
     # Wording of profit figures ("before fees", "simulated"); OFF = every message and screen exactly as before. See pnl_labels.py.
     pnl_labels: bool = False
     # Subscription billing, Stage 0 (billing/entitlement.py). OFF = is_entitled() is exactly Customer.has_paid and nothing else changes.
+    # Admin dashboard (docs/security/admin_dashboard.md): False = off (default), the admin routes are not mounted (404). ADMIN_EMAILS is the only list of admins (never a database column).
+    admin_dashboard_enabled: bool = False
+    admin_emails: tuple = ()
     subscription_billing_enabled: bool = False
     # Days a subscription stays entitled after its paid period ends (owner decision D2: 5). Malformed or negative counts as the default or 0.
     subscription_grace_days: int = 5
@@ -648,6 +651,8 @@ def load_settings() -> Settings:
         donchian_slippage_bps=min(250.0, max(0.0, _env_float("DONCHIAN_SLIPPAGE_BPS", 5.0))),
         owner_alert_chat_id=(os.environ.get("OWNER_ALERT_CHAT_ID") or os.environ.get("BILLING_ALERT_CHAT_ID") or None),
         pnl_labels=_env_bool("PNL_LABELS", False),
+        admin_dashboard_enabled=_env_bool("ADMIN_DASHBOARD_ENABLED", False),
+        admin_emails=tuple(sorted({e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS") or "").split(",") if e.strip()})),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         subscription_grace_days=_grace_days_from_env(),
         paystack_plan_code=os.environ.get("PAYSTACK_PLAN_CODE") or None,
