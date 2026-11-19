@@ -455,6 +455,31 @@ class PaymentInitOut(BaseModel):
     authorization_url: str
 
 
+class BillingCardOptionOut(BaseModel):
+    available: bool  # Paystack is configured (key and plan): the checkout route would not answer 503
+    can_start: bool  # the checkout route would accept this customer now (no subscription, grace, or expired)
+    amount_minor: int  # PAYSTACK_PLAN_AMOUNT, in the smallest currency unit
+    currency: str
+
+
+class BillingCryptoOptionOut(BaseModel):
+    available: bool  # NOWPAYMENTS_ENABLED and configured
+    can_start: bool
+    price_usd: str  # NOWPAYMENTS_PRICE_USD as a decimal string with two places
+
+
+class BillingOptionsOut(BaseModel):
+    """What the Activate screen and the subscription card need, from the server settings. Fixed fields only: no payment reference, no provider link, no key, no e-mail."""
+
+    state: str  # none | active | grace | cancelled | expired | legacy_lifetime
+    provider: str | None  # paystack | nowpayments | manual, from the subscription row, or None
+    period_end: datetime | None
+    grace_end: datetime | None
+    grace_days: int
+    card: BillingCardOptionOut
+    crypto: BillingCryptoOptionOut
+
+
 class BalanceOut(BaseModel):
     """Live Binance balance, fetched on demand - never persisted, never
     available until an account is actually LIVE. `available_balance` is

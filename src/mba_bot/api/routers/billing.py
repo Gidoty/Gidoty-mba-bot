@@ -30,12 +30,13 @@ from ...billing import subscriptions as sub_billing
 from ...config import Settings
 from ...models import Customer, PaymentEvent, PaymentReference
 from ..deps import get_current_customer, get_db, get_settings
-from ..schemas import PaymentInitOut
+from ..schemas import BillingCardOptionOut, BillingCryptoOptionOut, BillingOptionsOut, PaymentInitOut
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 _PAYSTACK_API = "https://api.paystack.co"
+LIFETIME_NOT_SOLD = "Lifetime access is not sold while monthly subscriptions are available. Choose a monthly subscription instead."
 
 
 def _require_paystack_configured(settings: Settings) -> None:
@@ -49,6 +50,9 @@ def initialize_payment(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> PaymentInitOut:
+    if settings.subscription_billing_enabled and not customer.has_paid:
+        # Stage 4: while subscriptions are on, lifetime access is no longer sold to anyone who does not already have it. A customer who already has it falls through to the answer below, unchanged.
+        raise HTTPException(status.HTTP_409_CONFLICT, LIFETIME_NOT_SOLD)
     _require_paystack_configured(settings)
     if customer.has_paid:
         raise HTTPException(status.HTTP_409_CONFLICT, "this customer already has lifetime access")
@@ -161,6 +165,46 @@ async def nowpayments_ipn(request: Request, db: Session = Depends(get_db), setti
     except Exception:  # noqa: BLE001 - never silent, never a 500 with a body
         logger.error("nowpayments ipn handler failed")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
+
+
+@router.get("/options", response_model=BillingOptionsOut)
+def billing_options(
+    customer: Customer = Depends(get_current_customer),
+    settings: Settings = Depends(get_settings),
+) -> BillingOptionsOut:
+    """What the Activate screen offers this customer (designs/03 Stage 4). Read only; 404 while SUBSCRIPTION_BILLING_ENABLED is off (the screen then shows exactly what it always showed). Prices come
+    from the server settings (PAYSTACK_PLAN_AMOUNT, NOWPAYMENTS_PRICE_USD); the state from the one entitlement rule; whether a channel can start from the same rules the checkout routes apply. Nothing is
+    written and nothing secret is returned."""
+    if not settings.subscription_billing_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from ...billing import paystack_sub as ps
+    from ...billing.entitlement import EntitlementState, _aware, entitlement_state, grace_end
+
+    now = datetime.now(timezone.utc)
+    state = entitlement_state(customer, settings=settings, now=now)
+    sub = customer.subscription
+    end = _aware(sub.current_period_end) if sub is not None else None
+    gend = grace_end(sub, settings.subscription_grace_days) if sub is not None and end is not None else None
+    card_configured = bool(settings.paystack_secret_key and settings.paystack_plan_code and settings.paystack_plan_amount > 0)
+    try:
+        now_pay.require_configured(settings)
+        crypto_configured = bool(settings.nowpayments_enabled)
+    except now_pay.NotConfigured:
+        crypto_configured = False
+    price = f"{Decimal(now_pay.price_cents(settings)) / 100:.2f}"  # the setting is already sanitised in config (malformed, zero or negative counts as 10)
+    return BillingOptionsOut(
+        state=state.value,
+        provider=sub.provider if sub is not None else None,
+        period_end=end,
+        grace_end=gend,
+        grace_days=max(0, int(settings.subscription_grace_days)),
+        card=BillingCardOptionOut(available=card_configured, can_start=card_configured and state in (EntitlementState.NONE, EntitlementState.GRACE, EntitlementState.EXPIRED),
+                                  amount_minor=int(settings.paystack_plan_amount), currency=ps.PLAN_CURRENCY),
+        crypto=BillingCryptoOptionOut(available=crypto_configured, can_start=crypto_configured and now_pay.checkout_refusal(customer, settings, now) is None, price_usd=price),
+    )
 
 
 @router.get("/notice")

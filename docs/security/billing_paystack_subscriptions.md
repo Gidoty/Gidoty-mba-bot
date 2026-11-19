@@ -130,3 +130,26 @@ Proposed owner test (NOT run, needs the owner's yes): an hourly TEST plan, a tes
 * New setting use: `BILLING_ALERT_CHAT_ID` (owner alerts) and, for customer messages, the existing `TELEGRAM_BOT_TOKEN`.
 * The frontend (served from Vercel) now calls `GET /api/billing/notice` on every authenticated page. A frontend built from this change that meets a backend without the route simply shows nothing (the call is caught).
 * Terms: Section 11 gained one sentence ("Where access is sold as a subscription, cancelling stops the next charge, and your access continues until the end of the period you have already paid for"). `TERMS_VERSION` was NOT bumped (a bump forces every customer to accept again before using the account routes). That is a decision for the owner.
+
+---
+
+# Stage 4: the new-customer Activate screen offers a monthly subscription (SUBSCRIPTION_BILLING_ENABLED)
+
+Everything below happens ONLY while `SUBSCRIPTION_BILLING_ENABLED` is on. With it off (the default) the Activate screen, the lifetime route and every other billing answer are exactly what they were; the new route answers 404 and the screen falls back to the old block (a test pins the old answers, and the frontend pins that a 404 shows the old Activate button).
+
+## What is built
+* **`GET /api/billing/options`** (logged-in customer, read only, nothing written, 404 while off). Returns fixed fields only: `state` (`none`, `active`, `grace`, `cancelled`, `expired`, `legacy_lifetime`, from the one entitlement rule), `provider` (`paystack`, `nowpayments` or `manual`), `period_end`, `grace_end`, `grace_days`, and for each channel `available`, `can_start` and the price: `card` (`amount_minor` from `PAYSTACK_PLAN_AMOUNT`, currency NGN) and `crypto` (`price_usd` from `NOWPAYMENTS_PRICE_USD`). No payment reference, no provider link, no key, no e-mail. The screen formats these numbers; it holds no price.
+* **Card** is `available` when the Paystack key, the plan code and a plan amount are set. **Crypto** is `available` only when `NOWPAYMENTS_ENABLED` is on AND the NOWPayments key, currency and IPN URL are set (so no button that would answer 503). `can_start` follows the checkout routes' own rules: card from no subscription, grace or expired; crypto from `nowpayments.checkout_refusal`.
+* **The lifetime route** `POST /api/billing/initialize` is refused with 409 ("Lifetime access is not sold while monthly subscriptions are available...") for a customer who is not already `has_paid`, before Paystack is configured or called, and writes nothing. A customer who already has `has_paid` gets the old answer ("this customer already has lifetime access"), unchanged.
+* **Legacy lifetime customers** (`has_paid`, no subscription row) are never written to by anything in this stage: the options route is read only, the routes they could call answer as before, and the screen shows nothing new to them (their dashboards do not include the Activate block).
+* **Screens.** The Activate block on a new (or expired) customer's dashboard becomes a subscription offer: "Pay by card" (calls `POST /api/billing/subscription/initialize`), "Pay with USDT" (calls `POST /api/billing/crypto/initialize`, shown only when the server says crypto is available), each with the price from the server; under the card button "Paystack adds its own fee at checkout, so the amount you are charged is a little more than the price shown."; and the cancel wording from Terms section 11, word for word (a frontend test fails if the sentence drifts from `legalContent.js`). A subscriber sees a state card on the dashboard: active (renews or ends on a date), payment overdue (the grace period and its end date, with the same pay buttons) and cancelled (access continues to the end of the period). An expired subscriber sees the offer with "Your subscription has ended". The existing billing banner (renewal failed, card expiring, ends soon, cancelled) is untouched and keeps its own reminder text.
+* No migration, no new setting.
+
+## Not built, still blocked
+* The Terms version bump (a separate owner and lawyer decision; the cancel sentence is already in section 11 without a bump).
+* Lawyer review of the customer-facing text.
+* A renewal observed in LIVE mode (observed only in test mode so far) and the manual retry link after a failed renewal (UNVERIFIED).
+* Both providers' live-mode behaviour (UNVERIFIED), Cloudflare skip rules and their test (owner steps, see the private cutover runbook).
+
+## Rollback
+Unset `SUBSCRIPTION_BILLING_ENABLED` (restart): the old Activate block and the lifetime route return. Do this only before any customer subscribes, or decide first how those subscribers are treated (they would be judged by `has_paid`, which is false). Safer after the first subscriber: stop new checkouts by removing `PAYSTACK_PLAN_CODE` (checkout then answers 503) and, for crypto, `NOWPAYMENTS_ENABLED`.

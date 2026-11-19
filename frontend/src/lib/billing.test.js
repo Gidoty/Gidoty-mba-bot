@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, FEE_NOTE, channels, dateText, formatMinor, formatUsd, screenKind, stateView } from "./billing.js";
+
+const options = (over = {}) => ({
+  state: "none", provider: null, period_end: null, grace_end: null, grace_days: 5,
+  card: { available: true, can_start: true, amount_minor: 1500000, currency: "NGN" },
+  crypto: { available: true, can_start: true, price_usd: "10.00" },
+  ...over,
+});
+
+test("prices are formatted from the numbers the server sends", () => {
+  assert.equal(formatMinor(1500000, "NGN"), "NGN 15,000.00");
+  assert.equal(formatMinor(1234567, "NGN"), "NGN 12,345.67");
+  assert.equal(formatMinor(5, "NGN"), "NGN 0.05");
+  assert.equal(formatMinor(100000000, "NGN"), "NGN 1,000,000.00");
+  assert.equal(formatMinor("x", "NGN"), null);
+  assert.equal(formatMinor(-1, "NGN"), null);
+  assert.equal(formatMinor(100, ""), null);
+  assert.equal(formatUsd("10.00"), "USD 10.00");
+  assert.equal(formatUsd("7.5"), "USD 7.50");
+  assert.equal(formatUsd("0"), null);
+  assert.equal(formatUsd(undefined), null);
+});
+
+test("no price is written in the screen helpers: a different server price gives a different text", () => {
+  const a = channels(options());
+  const b = channels(options({ card: { available: true, can_start: true, amount_minor: 2000000, currency: "NGN" }, crypto: { available: true, can_start: true, price_usd: "12.00" } }));
+  assert.equal(a[0].price, "NGN 15,000.00");
+  assert.equal(b[0].price, "NGN 20,000.00");
+  assert.equal(b[1].price, "USD 12.00");
+  const source = readFileSync(new URL("./billing.js", import.meta.url), "utf8");
+  assert.ok(!/15,?000|135,?000|1500000|\b10\.00\b/.test(source), "billing.js must not contain a price");
+});
+
+test("only channels the server says are available and may start are offered, card first", () => {
+  assert.deepEqual(channels(options()).map((c) => c.kind), ["card", "crypto"]);
+  assert.deepEqual(channels(options({ crypto: { available: false, can_start: false, price_usd: "10.00" } })).map((c) => c.kind), ["card"]);
+  assert.deepEqual(channels(options({ card: { available: false, can_start: false, amount_minor: 1, currency: "NGN" } })).map((c) => c.kind), ["crypto"]);
+  assert.deepEqual(channels(options({ crypto: { available: true, can_start: false, price_usd: "10.00" } })).map((c) => c.kind), ["card"]);
+  assert.deepEqual(channels(options({ card: { available: true, can_start: false, amount_minor: 1, currency: "NGN" }, crypto: { available: false, can_start: false, price_usd: "1" } })), []);
+  assert.deepEqual(channels(null), []);
+  assert.deepEqual(channels({}), []);
+});
+
+test("the card channel carries the fee note and calls the subscription route, crypto calls the crypto route", () => {
+  const [card, crypto] = channels(options());
+  assert.equal(card.note, FEE_NOTE);
+  assert.match(FEE_NOTE, /Paystack adds its own fee at checkout/);
+  assert.equal(card.path, "/billing/subscription/initialize");
+  assert.equal(crypto.path, "/billing/crypto/initialize");
+  assert.equal(crypto.note, null);
+  assert.deepEqual(CHECKOUT_PATH, { card: "/billing/subscription/initialize", crypto: "/billing/crypto/initialize" });
+  assert.ok(!Object.values(CHECKOUT_PATH).includes("/billing/initialize")); // the lifetime route is never called by the new screen
+});
+
+test("the cancel wording is the Terms of Service wording, word for word", () => {
+  const terms = readFileSync(new URL("../legalContent.js", import.meta.url), "utf8");
+  assert.ok(terms.includes(CANCEL_WORDING), "the sentence must appear in section 11 of the Terms");
+});
+
+test("subscription states: active, grace, cancelled, with dates; none and lifetime have no card", () => {
+  const end = "2026-12-05T10:00:00Z";
+  assert.deepEqual(stateView(options({ state: "active", provider: "paystack", period_end: end })), { kind: "active", title: "Subscription active", body: "Your card renews on 5 Dec 2026." });
+  assert.match(stateView(options({ state: "active", provider: "nowpayments", period_end: end })).body, /paid period ends on 5 Dec 2026. Renew before then/);
+  const g = stateView(options({ state: "grace", period_end: end, grace_end: "2026-12-10T10:00:00Z", grace_days: 5 }));
+  assert.equal(g.kind, "grace");
+  assert.match(g.body, /5-day grace period, until 10 Dec 2026/);
+  assert.match(stateView(options({ state: "cancelled", period_end: end })).body, /will not renew. Your access continues until 5 Dec 2026/);
+  for (const state of ["none", "expired", "legacy_lifetime", "weird"]) assert.equal(stateView(options({ state })), null);
+  assert.equal(stateView(null), null);
+  assert.match(EXPIRED_NOTE, /has ended/);
+  assert.equal(dateText("not a date"), null);
+});
+
+test("which screen: the old one when there are no options, nothing for lifetime customers, the offer for new or expired", () => {
+  assert.equal(screenKind(null), "off");
+  assert.equal(screenKind(undefined), "off");
+  assert.equal(screenKind(options({ state: "legacy_lifetime" })), "legacy");
+  assert.equal(screenKind(options({ state: "none" })), "offer");
+  assert.equal(screenKind(options({ state: "expired" })), "offer");
+  for (const s of ["active", "grace", "cancelled"]) assert.equal(screenKind(options({ state: s })), "status");
+});
