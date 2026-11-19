@@ -25,3 +25,16 @@ Backup, restart gate (exit 0 means no live trade is open, which also satisfies t
 
 ## NOT verified
 Binance's shared-margin behaviour across several Futures positions (each fake has its own balance); the liquidation interaction of cross positions (isolated margin only is allowed, per pair); the effect of several simultaneous stops on rate limits; profit.
+
+## Choosing the extra pairs (customer pair list)
+
+While `LIVE_MULTI_POSITION` is on and the account has more than one open trade, the customer chooses the extra pairs on the Trading tab (`pair_list` on `PATCH /api/account`). The list is stored in the same
+`pair_list` column the bot already reads (`live_multi.live_pairs`: main pair first, then the list, at most 3, no duplicates). With the switch off the request is refused (409) and the two new account fields
+(`live_pair_list`, `live_open_risk_cap_pct`) are `null`, as before.
+
+The server refuses, and changes nothing, when: more than slots minus 1 pairs are sent; a pair is repeated or is the main pair; a pair is not one the service offers for the market (and, with the Futures
+pair catalog on, not listed or too small for the capital: the same check a single pair uses; with `SMALL_CAPITAL_PAIRS` on, the small-capital minimum too); pair selection is Auto Select; the account has one
+open trade; or a pair that has an open trade would be dropped. Lowering the slots in the same request is read first, so the list is checked against the new number.
+
+The open-risk cap (`LIVE_TOTAL_RISK_CAP_PCT`) is shown read only. It is a service setting; no request can change it. Whether the owner should be able to set it per customer is an open question for the owner
+(see the pull request); it is not built.
