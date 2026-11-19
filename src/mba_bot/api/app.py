@@ -120,6 +120,10 @@ def create_app() -> FastAPI:
     app.include_router(billing.router)
     app.include_router(pairs.router)
     app.include_router(reports.router)
+    if settings.admin_dashboard_enabled:  # off (default): the admin routes do not exist (404)
+        from .routers import admin as admin_router
+
+        app.include_router(admin_router.router)
 
     @app.get("/api/health")
     def health() -> dict:

@@ -20,6 +20,7 @@ import Login from "./pages/Login.jsx";
 import DailyLimitNotice from "./components/DailyLimitNotice.jsx";
 import DemoBanner from "./components/DemoBanner.jsx";
 import AdviceSummary from "./components/AdviceSummary.jsx";
+import Admin, { useAdminMe } from "./pages/Admin.jsx";
 import PairSkipNotice from "./components/PairSkipNotice.jsx";
 import Notifications from "./pages/Notifications.jsx";
 import Onboarding from "./pages/Onboarding.jsx";
@@ -133,6 +134,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
   const { account, refreshAccount } = useAccount();
   const [autoCreate, setAutoCreate] = useState("idle"); // idle | creating | done
   const attempted = useRef(false);
+  const adminMe = useAdminMe(); // 404 while the admin dashboard is off (the link and the page stay hidden), 200 {is_admin} otherwise
 
   useEffect(() => {
     if (account !== null || attempted.current) return;
@@ -159,11 +161,15 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
 
   const needsTelegram = account.notification_channel === "telegram" && !account.notification_target;
 
-  const Page = NAV_PAGES[route];
+  const isAdmin = adminMe.me?.is_admin === true;
+  if (route === "admin" && adminMe.me === undefined) {
+    return <div className="flex min-h-screen items-center justify-center text-muted">Loading...</div>;
+  }
+  const Page = route === "admin" ? (isAdmin ? Admin : undefined) : NAV_PAGES[route];
   const activeRoute = Page ? route : "dashboard";
 
   return (
-    <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code}>
+    <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code} showAdmin={isAdmin}>
       {needsTelegram && route !== "notifications" && <TelegramLinkBanner />}
       <BillingNoticeBanner />
       <DemoBanner account={account} />
