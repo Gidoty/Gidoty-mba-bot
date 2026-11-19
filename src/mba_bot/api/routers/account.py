@@ -211,6 +211,8 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         live_slots=live_multi.slot_cap(account.live_slots, switch_on=True) if (settings and settings.live_multi_position) else 1,
         live_multi_available=bool(settings.live_multi_position) if settings else False,
         live_pair_count=len(live_multi.live_pairs(account)),
+        live_pair_list=[p for p in (account.pair_list or "").split(",") if p.strip()] if (settings and settings.live_multi_position) else None,
+        live_open_risk_cap_pct=settings.live_total_risk_cap_pct if (settings and settings.live_multi_position) else None,
         demo_available=bool(settings.demo_runner) if settings else False,
         demo_has_keys=account.demo_credential is not None,
         demo_enabled_at=account.demo_enabled_at,
@@ -224,6 +226,41 @@ def _to_account_out(account: TradingAccount, *, has_paid: bool, db: Session, set
         credential_blocked=account.withdrawal_blocked_at is not None,
         credential_block_message=exchange.WITHDRAWAL_BLOCK_MESSAGE if account.withdrawal_blocked_at is not None else None,
     )
+
+
+def _pair_list_problem(body: AccountUpdateRequest, account: TradingAccount, db: Session, *, settings: Settings, facts: dict | None) -> tuple[int, str] | None:
+    """The rules for the customer's extra live pairs, checked before anything is changed: (http status, plain text) or None. The pair-by-pair availability is the same check a single pair uses
+    (`_pair_selection_problem`), plus the small-capital check when that switch is on."""
+    if not settings.live_multi_position:
+        return 409, "choosing extra pairs is not available on this service"
+    pairs = body.pair_list or []
+    mode = body.pair_selection_mode or account.pair_selection_mode
+    slots = live_multi.slot_cap(body.live_slots if body.live_slots is not None else account.live_slots, switch_on=True)
+    market = body.market_type or account.market_type
+    primary = body.pair or account.pair
+    capital = body.allocated_capital if body.allocated_capital is not None else account.allocated_capital
+    if pairs and mode == "auto":
+        return 422, "Auto Select trades one pair at a time. Switch pair selection to Manual to choose extra pairs."
+    if pairs and slots < 2:
+        return 422, "Set the number of open trades to 2 or 3 before choosing extra pairs."
+    if len(pairs) > slots - 1:
+        return 422, f"With {slots} open trades you can choose at most {slots - 1} extra pair(s)."
+    if primary in pairs:
+        return 422, f"{primary} is already your main pair. Choose a different pair."
+    for p in pairs:
+        problem = _pair_selection_problem(p, market, allocated_capital=capital, settings=settings, facts=facts)
+        if problem is not None:
+            return 422, problem
+        if settings.small_capital_pairs and market == "futures" and facts is not None and facts.get(p) is not None:
+            cap = leverage_module.account_cap(body.max_leverage if body.max_leverage is not None else account.max_leverage, settings.futures_max_leverage)
+            v = small_capital.assess(type("R", (), {"min_notional": facts[p].min_notional, "market_min_qty": 0, "step": 0})(), None, capital=capital, leverage_cap=small_capital.leverage_cap_for(market, cap))
+            if v.viable is False:
+                return 422, small_capital.message(p, v)
+    kept = {primary, *pairs}
+    for t in list_open_trades(db, account.id):
+        if t.pair not in kept:
+            return 409, f"You have an open trade on {t.pair}. Keep {t.pair} in your pair list until it is closed."
+    return None
 
 
 def _require_no_open_trade(db: Session, account: TradingAccount, *, action: str) -> None:
@@ -363,6 +400,11 @@ def update_account(
     elif settings.live_multi_position and live_multi.slot_cap(account.live_slots, switch_on=True) > 1 and body.pair_selection_mode == "auto":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Set the number of open trades to 1 before switching pair selection to Auto Select.")
 
+    if body.pair_list is not None:
+        refusal = _pair_list_problem(body, account, db, settings=settings, facts=facts)
+        if refusal is not None:
+            raise HTTPException(refusal[0], refusal[1])
+
     changing_pair = body.pair is not None and body.pair != account.pair
     changing_market = body.market_type is not None and body.market_type != account.market_type
     changing_selection_mode = body.pair_selection_mode is not None and body.pair_selection_mode != account.pair_selection_mode
@@ -412,6 +454,8 @@ def update_account(
         # Lowering applies at once, a raise starts at the next midnight Lagos time (daily_limit.set_amount). Safe with a trade open: open trades keep their stops.
         today, tomorrow = _day_keys(settings)
         daily_limit.set_amount(account, body.daily_loss_limit_usd, today_key=today, next_day_key=tomorrow)
+    if body.pair_list is not None:
+        account.pair_list = ",".join(body.pair_list) or None  # the same owner-set column the bot already reads; at most 2 pairs of at most 9 characters fit its 80
     if body.live_slots is not None:
         account.live_slots = body.live_slots  # lowering never closes a trade; it only stops new entries until fewer are open
     if body.max_leverage is not None:

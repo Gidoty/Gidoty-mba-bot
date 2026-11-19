@@ -17,6 +17,7 @@ import { usd } from "../lib/format.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { TABS, limitProblem, tabForMessage } from "../lib/lossLimit.js";
 import { riskBand } from "../lib/riskBands.js";
+import { capText, listToSave, maxExtraPairs, sameList, toggleExtra } from "../lib/livePairs.js";
 import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 
 // Bot Settings: two tabs on one page, one Save for both. Trading: pair selection, pair, market and trading capital. Risk: risk per trade (with its acknowledgments), leverage and the
@@ -35,6 +36,7 @@ export default function BotSettings() {
   const leverageLimit = account.max_leverage_limit || 5;
   const [maxLeverage, setMaxLeverage] = useState(String(account.max_leverage || 3));
   const [liveSlots, setLiveSlots] = useState(String(account.live_slots || 1));
+  const [extraPairs, setExtraPairs] = useState(account.live_pair_list || []);
   const [capitalInput, setCapitalInput] = useState(account.allocated_capital != null ? String(account.allocated_capital) : "");
   // The saved baseline is the amount the customer last chose: a raise that waits for midnight counts as saved, so the form is not "unsaved" after a raise.
   const savedLimit = account.daily_loss_limit_pending_usd != null ? String(account.daily_loss_limit_pending_usd) : account.daily_loss_limit_usd != null ? String(account.daily_loss_limit_usd) : "";
@@ -58,7 +60,9 @@ export default function BotSettings() {
 
   const savedCapital = account.allocated_capital != null ? String(account.allocated_capital) : "";
   const slotsDirty = account.live_multi_available && liveSlots !== String(account.live_slots || 1);
-  const tradingDirty = pair !== account.pair || marketType !== account.market_type || pairSelectionMode !== account.pair_selection_mode || capitalInput !== savedCapital || slotsDirty;
+  const extraToSave = account.live_multi_available ? listToSave(extraPairs, { slots: Number(liveSlots), primary: pair }) : [];
+  const extraDirty = account.live_multi_available && !sameList(extraToSave, account.live_pair_list || []);
+  const tradingDirty = extraDirty || pair !== account.pair || marketType !== account.market_type || pairSelectionMode !== account.pair_selection_mode || capitalInput !== savedCapital || slotsDirty;
   const riskDirty = riskPct !== String(account.risk_pct) || (marketType === "futures" && maxLeverage !== String(account.max_leverage || 3)) || limitInput !== savedLimit;
   const dirty = tradingDirty || riskDirty;
 
@@ -78,7 +82,7 @@ export default function BotSettings() {
   }
   const limitFieldProblem = limitInput !== savedLimit ? limitProblem(limitInput, account.daily_loss_limit_max_usd) : null;
   // A message shown on a tab goes away as soon as the customer edits anything again.
-  const editKey = [pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, JSON.stringify(acks)].join("|");
+  const editKey = [pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, extraPairs.join(","), JSON.stringify(acks)].join("|");
   useEffect(() => {
     setProblems({ trading: null, risk: null });
   }, [editKey]);
@@ -124,6 +128,7 @@ export default function BotSettings() {
         max_leverage: marketType === "futures" ? Number(maxLeverage) : undefined,
         allocated_capital: capitalInput !== savedCapital ? Number(capitalInput) : undefined,
         live_slots: slotsDirty ? Number(liveSlots) : undefined,
+        pair_list: extraDirty ? extraToSave : undefined,
         daily_loss_limit_usd: limitInput !== savedLimit ? Number(limitInput) : undefined,
       });
       await reloadAccount();
@@ -249,6 +254,29 @@ export default function BotSettings() {
                 The most trades the bot may hold at the same time, one per pair, 1 to 3. More than one needs Manual pair selection, and the bot only trades the pairs set for your account (you have {account.live_pair_count || 1}). The daily loss limit and the automatic total stop cover all your trades together. Lowering it never closes a trade.
               </span>
             </div>
+          )}
+          {account.live_multi_available && Number(liveSlots) > 1 && (
+            <fieldset className="mt-4 max-w-md">
+              <legend className="text-sm font-medium text-fg">Extra pairs to trade</legend>
+              <span className="mt-1 block text-xs text-muted">
+                The bot trades your main pair first, then these, one trade per pair. Choose up to {maxExtraPairs(liveSlots)}. Needs Manual pair selection. A pair with an open trade cannot be removed until that trade closes.
+              </span>
+              <div className="mt-2 grid gap-1">
+                {pairList.filter((p) => p.pair !== pair).map((p) => {
+                  const checked = extraPairs.includes(p.pair);
+                  const full = !checked && listToSave(extraPairs, { slots: Number(liveSlots), primary: pair }).length >= maxExtraPairs(liveSlots);
+                  return (
+                    <label key={p.pair} className="flex min-h-[44px] items-center gap-2 text-sm text-fg">
+                      <input type="checkbox" className="h-4 w-4" checked={checked} disabled={(!p.available && !checked) || full} onChange={() => setExtraPairs((l) => toggleExtra(l, p.pair, { slots: Number(liveSlots), primary: pair }))} />
+                      <span>{optionLabel(p)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {capText({ capPct: account.live_open_risk_cap_pct, riskPct: Number(riskPct), slots: Number(liveSlots), capital: capitalInput !== "" ? Number(capitalInput) : account.allocated_capital }) && (
+                <p className="mt-2 text-xs text-muted">{capText({ capPct: account.live_open_risk_cap_pct, riskPct: Number(riskPct), slots: Number(liveSlots), capital: capitalInput !== "" ? Number(capitalInput) : account.allocated_capital })}</p>
+              )}
+            </fieldset>
           )}
         </div>
 

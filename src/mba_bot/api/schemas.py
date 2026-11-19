@@ -186,6 +186,8 @@ class AccountUpdateRequest(BaseModel):
     daily_loss_limit_usd: float | None = Field(default=None, gt=0)
     # How many live trades the bot may hold at once, 1 to 3 (only while LIVE_MULTI_POSITION is on; otherwise refused). Omitted = unchanged.
     live_slots: int | None = Field(default=None, ge=1, le=3)
+    # The EXTRA pairs for a live account holding more than one trade (the bot trades `pair` first, then these). At most 2, no duplicates, [] clears. Only while LIVE_MULTI_POSITION is on; the router checks the rest.
+    pair_list: list[str] | None = Field(default=None, max_length=2)
     # Customer leverage setting (Futures; Spot ignores it): a whole number from 1 to 5, never above the global hard limit. The router checks the global limit.
     # Strict int: 3.0, "3" and true are rejected.
     max_leverage: StrictInt | None = Field(default=None, ge=1, le=5)
@@ -204,6 +206,16 @@ class AccountUpdateRequest(BaseModel):
     @classmethod
     def _valid_pair_selection_mode(cls, v: str | None) -> str | None:
         return v if v is None else _validate_choice(v, PAIR_SELECTION_MODES, "pair_selection_mode")
+
+    @field_validator("pair_list")
+    @classmethod
+    def _valid_pair_list(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        cleaned = [_validate_choice(p.strip().upper() if isinstance(p, str) else p, ALL_KNOWN_PAIRS, "pair") for p in v]
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("each pair can be chosen once")
+        return cleaned
 
 
 class BinanceSettingsOut(BaseModel):
@@ -340,6 +352,9 @@ class AccountOut(BaseModel):
     live_slots: int = 1
     live_multi_available: bool = False
     live_pair_count: int = 1
+    # Only while LIVE_MULTI_POSITION is on (otherwise None, as today): the extra pairs the customer chose, and the read-only open-risk cap in percent of the trading capital.
+    live_pair_list: list[str] | None = None
+    live_open_risk_cap_pct: float | None = None
     demo_available: bool = False
     demo_has_keys: bool = False
     demo_enabled_at: datetime | None = None
