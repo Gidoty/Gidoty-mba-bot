@@ -16,7 +16,7 @@ export function tabPanelProps(id, active) {
 
 const MARK_TEXT = { error: "needs attention", changed: "unsaved changes" };
 
-export default function SettingsTabs({ tabs, active, onChange, marks = {}, label = "Settings sections" }) {
+export default function SettingsTabs({ tabs, active, onChange, marks = {}, label = "Settings sections", right = null }) {
   const refs = useRef({});
   function onKeyDown(e, index) {
     const next = nextTabIndex(e.key, index, tabs.length);
@@ -54,6 +54,7 @@ export default function SettingsTabs({ tabs, active, onChange, marks = {}, label
           </button>
         );
       })}
+      {right && <div className="ml-auto flex items-center self-center pl-2">{right}</div>}
     </div>
   );
 }
