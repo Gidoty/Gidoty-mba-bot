@@ -57,8 +57,10 @@ export default function AppShell({ route, onLogout, botCode, showAdmin = false, 
           <button type="button" onClick={() => navigate("dashboard")} className="text-left">
             <BrandLogo subtitle={botCode || null} />
           </button>
+          <span id="advice-slot-mobile" className="contents" />
         </header>
         <div className="hidden items-center justify-end gap-3 px-6 pt-5 shell:flex">
+          <span id="advice-slot-desktop" className="contents" />
           {botCode && <Pill>{botCode}</Pill>}
         </div>
         <main className={`mx-auto px-4 pb-28 pt-5 shell:px-6 shell:pb-12 ${wide ? "max-w-[1120px]" : "max-w-3xl"}`}>{children}</main>

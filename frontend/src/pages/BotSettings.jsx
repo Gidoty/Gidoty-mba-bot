@@ -7,10 +7,10 @@ import BinanceSettingsLine from "../components/BinanceSettingsLine.jsx";
 import DailyLossLimitField from "../components/DailyLossLimitField.jsx";
 import HelpTip from "../components/HelpTip.jsx";
 import PairSkipNotice from "../components/PairSkipNotice.jsx";
-import AdviceNotes, { useAdvice } from "../components/AdviceNotes.jsx";
-import { buildRequest } from "../lib/advice.js";
+import { SetupNotes, useAdvice } from "../components/AdviceNotes.jsx";
+import { buildRequest, notesForTab } from "../lib/advice.js";
 import InfoHelp from "../components/InfoHelp.jsx";
-import SettingsTabs, { tabPanelProps } from "../components/SettingsTabs.jsx";
+import SettingsTabs, { tabId, tabPanelProps } from "../components/SettingsTabs.jsx";
 import { LEVERAGE_HELP } from "../leverageHelp.js";
 import { FormField, SavedNote, inputClass, primaryButton } from "../components/form.jsx";
 import { Card, CardTitle, ErrorBanner, PageHeader, Pill } from "../components/ui.jsx";
@@ -89,6 +89,7 @@ export default function BotSettings() {
     setProblems({ trading: null, risk: null });
   }, [editKey]);
   const advice = useAdvice(buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit }));
+  const tabNotes = notesForTab(advice.notes, tab);
   const marks = {
     trading: problems.trading ? "error" : tradingDirty ? "changed" : null,
     risk: problems.risk ? "error" : riskDirty ? "changed" : null,
@@ -181,7 +182,14 @@ export default function BotSettings() {
       )}
 
       <form onSubmit={save} className="rounded-card border border-line bg-surface p-4" noValidate>
-        <SettingsTabs tabs={TABS} active={tab} onChange={setTab} marks={marks} label="Bot settings sections" />
+        <SettingsTabs
+          tabs={TABS}
+          active={tab}
+          onChange={setTab}
+          marks={marks}
+          label="Bot settings sections"
+          right={advice.enabled && tabNotes.length > 0 ? <SetupNotes notes={tabNotes} fallbackFocus={() => document.getElementById(tabId(tab))} /> : null}
+        />
 
         <div {...tabPanelProps("trading", tab)} className="pt-4">
           <CardTitle right={<HelpTip text="You can change your risk per trade, leverage and trading capital at any time; they apply to new trades only. Your pair, market and pair selection mode cannot be changed while a trade is open, so nothing gets left unmanaged." />}>
@@ -281,7 +289,6 @@ export default function BotSettings() {
               )}
             </fieldset>
           )}
-          <AdviceNotes advice={advice} tab="trading" />
         </div>
 
         <div {...tabPanelProps("risk", tab)} className="pt-4">
@@ -325,7 +332,6 @@ export default function BotSettings() {
               problem={limitFieldProblem}
             />
           </div>
-          <AdviceNotes advice={advice} tab="risk" />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
