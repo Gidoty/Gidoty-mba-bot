@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from mba_bot import scheduler
 from mba_bot.db import get_open_trade, init_db, list_active_accounts, session_scope
 from mba_bot.instance_lock import AlreadyRunning, acquire_single_instance_lock
-from mba_bot.models import Base, DecisionLog, KillSwitch, KillSwitchEvent, Trade, TradeTelemetry, TradingAccount
+from mba_bot.models import AdminAudit, AdminTotp, Base, DecisionLog, KillSwitch, KillSwitchEvent, Trade, TradeTelemetry, TradingAccount
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
 PREVIOUS_HEAD = "dc1a28b7a42e"
@@ -27,7 +27,7 @@ KILL_SWITCH_REVISION = "e5b9c2d7f1a4"  # the kill switch tables
 SUBSCRIPTION_REVISION = "f6c3a9d1b8e2"  # subscription billing tables (Stage 0), on top of the kill switch
 TOKENS_REVISION = "a7d4e1c9b3f5"  # subscription_tokens (Stage 1)
 NOTICES_REVISION = "b8e5f2a0c4d6"  # billing_notices (customer reminders)
-LATEST_HEAD = "d9b5f7c2e4a6"  # head now also includes trading_accounts.live_slot and the per-slot live trade index (B7), on top of trades.initial_stop_price b7f3d5a9c2e4 (B5b)
+LATEST_HEAD = "a1d6c3e8b5f7"  # head now also includes trading_accounts.live_slot and the per-slot live trade index (B7), on top of trades.initial_stop_price b7f3d5a9c2e4 (B5b)
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -118,7 +118,7 @@ def test_fresh_database_migrates_to_the_model_schema(tmp_path, monkeypatch):
     indexes = {i["name"] for i in inspect(engine).get_indexes("trades")}
     assert {"uq_trades_one_nonterminal_per_pair", "uq_trades_one_nonterminal_no_pair"} <= indexes
     assert "uq_trades_one_nonterminal_per_account" not in indexes  # replaced by the multi-trade foundation migration
-    for model in (TradeTelemetry, DecisionLog, KillSwitch, KillSwitchEvent):
+    for model in (TradeTelemetry, DecisionLog, KillSwitch, KillSwitchEvent, AdminTotp, AdminAudit):
         table_cols = {c["name"] for c in inspect(engine).get_columns(model.__tablename__)}
         assert table_cols == {c.name for c in model.__table__.columns}, f"{model.__tablename__}: migration and model must agree"
     with engine.connect() as conn:
@@ -241,7 +241,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     assert script.get_revision("a6e2c4f8b1d3").down_revision == "f4c7d9b2a6e1"  # the demo runner (B4)
     assert script.get_revision("b7f3d5a9c2e4").down_revision == "a6e2c4f8b1d3"  # the initial stop (B5b)
     assert script.get_revision("c8a4e6b1d3f5").down_revision == "b7f3d5a9c2e4"  # the live slot setting (B7)
-    assert script.get_revision(LATEST_HEAD).down_revision == "c8a4e6b1d3f5"  # the per-slot live trade index (B7)
+    assert script.get_revision("d9b5f7c2e4a6").down_revision == "c8a4e6b1d3f5"  # the per-slot live trade index (B7)
+    assert script.get_revision(LATEST_HEAD).down_revision == "d9b5f7c2e4a6"  # the admin dashboard tables
 
 
 # =========================== single-instance lock ===========================

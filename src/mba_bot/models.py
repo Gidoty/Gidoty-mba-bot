@@ -767,3 +767,35 @@ class KillSwitchEvent(Base):
     actor: Mapped[str] = mapped_column(String(60), nullable=False)
     reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     prev_engaged: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+
+class AdminTotp(Base):
+    """One row per admin who enrolled a TOTP authenticator (docs/security/admin_dashboard.md). Written ONLY by the command-line enrolment tool run by the owner on the server (and by the login route for
+    the replay, failure and lock counters). The secret is ENCRYPTED with the same Fernet key as the exchange credentials and is never returned by any route. Recovery codes are stored hashed, one JSON list of
+    salt and digest pairs; a used code is removed. `last_step` is the last accepted 30-second time step, so a code cannot be used twice. Nothing reads this table while ADMIN_DASHBOARD_ENABLED is off."""
+
+    __tablename__ = "admin_totp"
+
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), primary_key=True)
+    secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    recovery_hashes: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    last_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AdminAudit(Base):
+    """Append-only record of admin activity: one row per admin request and per admin sign-in attempt. Holds the admin's customer id, the time, a fixed action word, the path, the HTTP status and a short
+    detail (for a reveal: the reason the admin typed). No email, no IP address, no secret. Written only by the admin routes; never updated or deleted by the application."""
+
+    __tablename__ = "admin_audit"
+    __table_args__ = (Index("ix_admin_audit_customer_at", "customer_id", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    path: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[int] = mapped_column(Integer, nullable=False)
+    detail: Mapped[str | None] = mapped_column(String(200), nullable=True)

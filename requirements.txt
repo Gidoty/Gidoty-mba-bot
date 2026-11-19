@@ -16,3 +16,7 @@ uvicorn[standard]>=0.30
 pydantic[email]>=2.7
 python-jose[cryptography]>=3.3
 bcrypt>=4.0
+
+# admin dashboard TOTP (docs/security/admin_dashboard.md). Exact pin: this sits in the admin login path. pyotp is a small, pure-Python RFC 6238 (TOTP) implementation with no dependencies;
+# 2.9.0 is the last release before the 2.10 line. Upgrade deliberately and re-run tests/test_admin_dashboard.py.
+pyotp==2.9.0

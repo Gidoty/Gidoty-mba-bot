@@ -151,7 +151,7 @@ def test_paper_trades_leave_the_columns_null(db, monkeypatch):
 
 
 def test_nothing_in_the_trading_path_reads_the_fee_columns():
-    allowed = {"models.py", "lifecycle.py", "pilot_status.py", "paper_export.py", "reporting.py"}  # reporting.py (B2) only READS them to build reports; no trading code imports the numbers
+    allowed = {"models.py", "lifecycle.py", "pilot_status.py", "paper_export.py", "reporting.py", "admin_service.py"}  # reporting.py (B2) only READS them to build reports; admin_service.py (admin dashboard) only READS them in one aggregate query, labelled by reporting.Group; no trading code imports the numbers
     for path in (ROOT / "src" / "mba_bot").rglob("*.py"):
         if path.name in allowed or "alembic" in str(path):
             continue
@@ -191,7 +191,7 @@ def test_the_head_is_the_fee_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == ["d9b5f7c2e4a6"] and script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"  # (the head moved on with the daily loss limit)
+    assert script.get_heads() == ["a1d6c3e8b5f7"] and script.get_revision("d2a5b9c7e1f4").down_revision == "c1f4a8d2e6b3"  # (the head moved on with the daily loss limit)
 
 
 def test_no_trade_history_read_happens_before_the_protective_stop_on_a_futures_entry(db, monkeypatch):
