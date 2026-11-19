@@ -96,6 +96,8 @@ def test_the_rules_refuse_and_change_nothing(slots, body, code):
     before = c.get("/api/account").json()
     r = _patch(c, **body)
     assert r.status_code == code, r.text
+    if slots == 1:
+        assert "Set the number of open trades to 2 or 3" in r.json()["detail"]
     after = c.get("/api/account").json()
     assert after["live_pair_list"] == before["live_pair_list"] and after["pair_selection_mode"] == before["pair_selection_mode"]
 
