@@ -21,7 +21,7 @@ from ...db import get_open_trade, list_open_trades
 from ...multi_trade import strategy_of
 from ...models import PROTECTION_PROTECTED, TRADE_ATTENTION
 from ...legal import RISK_DISCLOSURE_VERSION, has_current_acceptance, record_acceptance
-from ... import account_loss, daily_limit, demo as demo_module, live_multi, risk_limits, small_capital
+from ... import setup_advice, account_loss, daily_limit, demo as demo_module, live_multi, risk_limits, small_capital
 from ...models import ApiCredential, Customer, DemoCredential, TradingAccount
 from ...onboarding import (
     LIVE_TRADING_ACTIVATION_DISCLOSURE,
@@ -52,6 +52,8 @@ from ..schemas import (
     StartBotRequest,
     TotalLossResetRequest,
     BinanceSettingsOut,
+    AdviceOut,
+    AdviceRequest,
 )
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -76,22 +78,10 @@ def _check_risk_setting(db: Session, customer: Customer, risk_pct: float, *, ack
     """Server-side rule for a customer's risk per trade (docs/safety/risk_per_trade.md). Raises 422 with a plain message if the number is outside 0.1 up to the current RISK_PCT_MAX
     (it is never silently lowered), or if it needs an acknowledgment that is neither on file for the current version nor ticked in this request. Returns the acknowledgment
     types to record (ticked now, not on file yet); the caller records them only once the whole request is going through."""
-    problem = risk_limits.validate_range(risk_pct, settings.risk_pct_max)
+    on_file = {t: has_current_acceptance(db, customer_id=customer.id, document_type=t, version=risk_limits.ACK_VERSION) for t in (risk_limits.ACK_HIGH, risk_limits.ACK_VERY_HIGH)}
+    problem, to_record = risk_limits.risk_setting_problem(risk_pct, settings.risk_pct_max, on_file=on_file, ticked={risk_limits.ACK_HIGH: ack_high, risk_limits.ACK_VERY_HIGH: ack_very_high})
     if problem is not None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
-    ticked = {risk_limits.ACK_HIGH: ack_high, risk_limits.ACK_VERY_HIGH: ack_very_high}
-    to_record: list[str] = []
-    for doc_type in risk_limits.required_acknowledgments(risk_pct):
-        on_file = has_current_acceptance(db, customer_id=customer.id, document_type=doc_type, version=risk_limits.ACK_VERSION)
-        if on_file:
-            continue
-        if not ticked[doc_type]:
-            what = "above 2%" if doc_type == risk_limits.ACK_HIGH else "of 10% or more"
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"A risk per trade {what} needs your confirmation that you understand the risk. Tick the confirmation on the screen and save again. Nothing was changed.",
-            )
-        to_record.append(doc_type)
     return to_record
 
 
@@ -392,13 +382,12 @@ def update_account(
         if problem is not None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, problem)
 
-    if body.live_slots is not None:
-        if not settings.live_multi_position:
-            raise HTTPException(status.HTTP_409_CONFLICT, "holding more than one live trade at a time is not available on this service")
-        if body.live_slots > 1 and (body.pair_selection_mode or account.pair_selection_mode) == "auto":
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Switch pair selection to Manual to hold more than one trade at once.")
-    elif settings.live_multi_position and live_multi.slot_cap(account.live_slots, switch_on=True) > 1 and body.pair_selection_mode == "auto":
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Auto Select trades one pair at a time. Set the number of open trades to 1 before switching pair selection to Auto Select.")
+    refusal = live_multi.slots_refusal(
+        new_slots=body.live_slots, new_selection_mode=body.pair_selection_mode, current_slots=account.live_slots,
+        current_selection_mode=account.pair_selection_mode, switch_on=settings.live_multi_position,
+    )
+    if refusal is not None:
+        raise HTTPException(refusal[0], refusal[1])
 
     if body.pair_list is not None:
         refusal = _pair_list_problem(body, account, db, settings=settings, facts=facts)
@@ -531,6 +520,40 @@ async def get_binance_settings(
         _bs_pending.pop(account.id, None)
     _bs_cache[account.id] = (_bs_now() + (_BS_OK_TTL if result.status == "ok" else _BS_FAIL_TTL), result)
     return result
+
+
+# --- /api/account/advice: the setup advisor (docs/safety/setup_advisor.md). SETUP_ADVISOR off (default): the route does not exist (404). It reads this customer's own account only, uses data the service
+# already holds (no exchange call), changes nothing and returns no secret. ---
+def _advice(customer: Customer, db: Session, settings: Settings, body: AdviceRequest | None) -> AdviceOut:
+    if not settings.setup_advisor:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    account = _require_account(customer)
+    today, _ = _day_keys(settings)
+    r = daily_limit.resolve(account.daily_loss_limit_usd, account.daily_loss_limit_pending_usd, account.daily_loss_limit_pending_from, today)
+    cached_pairs = pair_catalog.cached_facts() or {}
+    bs = _bs_cache.get(account.id)
+    bs_out = bs[1] if (bs is not None and bs[0] > _bs_now() and bs[1].status == "ok") else None
+    facts = setup_advice.Facts(
+        switch_multi=settings.live_multi_position, risk_pct_max=settings.risk_pct_max, max_notional_multiplier=settings.max_notional_multiplier,
+        futures_max_leverage=settings.futures_max_leverage, live_total_risk_cap_pct=settings.live_total_risk_cap_pct, donchian_risk_pct=settings.donchian_risk_pct,
+        rsi_risk_pct=settings.rsi_mr_risk_pct, rsi_live=settings.live_rsi_mr, donchian_live=settings.live_donchian, daily_limit_now=r.amount,
+        reference_value=daily_limit.reference_value(account, db),
+        acks_on_file={t: has_current_acceptance(db, customer_id=customer.id, document_type=t, version=risk_limits.ACK_VERSION) for t in (risk_limits.ACK_HIGH, risk_limits.ACK_VERY_HIGH)},
+        pair_min_notional={k: v.min_notional for k, v in cached_pairs.items() if v.listed and v.min_notional is not None},
+        binance_leverage=bs_out.leverage if bs_out else None, binance_margin_mode=bs_out.margin_mode if bs_out else None, binance_pair=bs_out.pair if bs_out else None,
+    )
+    proposed = setup_advice.Proposed(**body.model_dump()) if body is not None else None
+    return AdviceOut(notes=setup_advice.advise(account, facts, proposed))
+
+
+@router.get("/advice", response_model=AdviceOut)
+def get_advice(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> AdviceOut:
+    return _advice(customer, db, settings, None)
+
+
+@router.post("/advice", response_model=AdviceOut)
+def post_advice(body: AdviceRequest, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> AdviceOut:
+    return _advice(customer, db, settings, body)
 
 
 @router.get("/risk-limits")

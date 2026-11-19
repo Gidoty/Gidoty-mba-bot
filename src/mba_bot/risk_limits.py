@@ -87,3 +87,24 @@ def total_loss_hit(*, reference_equity, equity, risk_pct=None) -> float | None:
         return float("nan")
     loss = (reference_equity - equity) / reference_equity * 100.0
     return loss if loss >= TOTAL_STOP_PCT - _EPS else None
+
+
+def ack_problem_text(doc_type: str) -> str:
+    what = "above 2%" if doc_type == ACK_HIGH else "of 10% or more"
+    return f"A risk per trade {what} needs your confirmation that you understand the risk. Tick the confirmation on the screen and save again. Nothing was changed."
+
+
+def risk_setting_problem(risk_pct, limit: float, *, on_file: dict, ticked: dict) -> tuple[str | None, list[str]]:
+    """The ONE rule for a customer's risk per trade, used by the account API (which refuses with it) and by the setup advisor (which reports it): (a plain problem text or None, the acknowledgment types
+    ticked now that are not on file yet). `on_file` and `ticked` map ACK_HIGH and ACK_VERY_HIGH to booleans."""
+    problem = validate_range(risk_pct, limit)
+    if problem is not None:
+        return problem, []
+    to_record: list[str] = []
+    for doc_type in required_acknowledgments(risk_pct):
+        if on_file.get(doc_type):
+            continue
+        if not ticked.get(doc_type):
+            return ack_problem_text(doc_type), []
+        to_record.append(doc_type)
+    return None, to_record

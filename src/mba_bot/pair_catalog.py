@@ -129,5 +129,10 @@ async def futures_pair_facts() -> dict[str, PairFacts] | None:
     return facts
 
 
+def cached_facts() -> dict[str, PairFacts] | None:
+    """The last good exchange facts WITHOUT fetching anything (None if never read). For read-only callers that must not make an exchange call."""
+    return _cache["facts"]
+
+
 def reset_cache() -> None:  # tests
     _cache.update(facts=None, at=0.0, failed_at=None)

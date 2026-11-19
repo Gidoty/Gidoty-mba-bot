@@ -7,6 +7,8 @@ import BinanceSettingsLine from "../components/BinanceSettingsLine.jsx";
 import DailyLossLimitField from "../components/DailyLossLimitField.jsx";
 import HelpTip from "../components/HelpTip.jsx";
 import PairSkipNotice from "../components/PairSkipNotice.jsx";
+import AdviceNotes, { useAdvice } from "../components/AdviceNotes.jsx";
+import { buildRequest } from "../lib/advice.js";
 import InfoHelp from "../components/InfoHelp.jsx";
 import SettingsTabs, { tabPanelProps } from "../components/SettingsTabs.jsx";
 import { LEVERAGE_HELP } from "../leverageHelp.js";
@@ -86,6 +88,7 @@ export default function BotSettings() {
   useEffect(() => {
     setProblems({ trading: null, risk: null });
   }, [editKey]);
+  const advice = useAdvice(buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit }));
   const marks = {
     trading: problems.trading ? "error" : tradingDirty ? "changed" : null,
     risk: problems.risk ? "error" : riskDirty ? "changed" : null,
@@ -278,6 +281,7 @@ export default function BotSettings() {
               )}
             </fieldset>
           )}
+          <AdviceNotes advice={advice} tab="trading" />
         </div>
 
         <div {...tabPanelProps("risk", tab)} className="pt-4">
@@ -321,6 +325,7 @@ export default function BotSettings() {
               problem={limitFieldProblem}
             />
           </div>
+          <AdviceNotes advice={advice} tab="risk" />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
