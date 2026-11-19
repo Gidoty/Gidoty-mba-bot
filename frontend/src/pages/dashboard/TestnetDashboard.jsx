@@ -7,6 +7,9 @@ import PositionCard, { NoPosition } from "../../components/dashboard/PositionCar
 import RecentTrades from "../../components/dashboard/RecentTrades.jsx";
 import useTrades from "../../components/dashboard/useTrades.js";
 import HelpTip from "../../components/HelpTip.jsx";
+import SubscribeCard from "../../components/SubscribeCard.jsx";
+import useBillingOptions from "../../components/useBillingOptions.js";
+import { screenKind } from "../../lib/billing.js";
 import { Badge, Card, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
 import { GLOSSARY } from "../../glossary.js";
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
@@ -19,6 +22,7 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
   const { status, trades, reload } = useTrades(true, account.id);
   const [error, setError] = useState(null);
   const [bypassing, setBypassing] = useState(false);
+  const billing = useBillingOptions(); // 404 (subscription billing off) means "off": the Activate block below is exactly what it always was
 
   async function acceptBypass() {
     setError(null);
@@ -116,20 +120,23 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
 
       <UnderstandingTestnet labels={L} />
 
-      <div className="rounded-card border border-line border-l-4 border-l-brand-line bg-surface p-5">
-        <p className="text-sm font-semibold text-fg">Ready to move beyond practice trading?</p>
-        <p className="mt-1 text-sm text-muted">
-          Activating your account unlocks the full trading environment. You'll still choose, separately and
-          explicitly, if and when to connect real funds - activating does not do that by itself.
-        </p>
-        <button
-          type="button"
-          onClick={onActivate}
-          className="mt-4 min-h-[44px] w-full rounded-ctl bg-brand px-5 text-sm font-semibold text-brand-ink hover:brightness-105 sm:w-auto"
-        >
-          Activate
-        </button>
-      </div>
+      {billing.status === "off" && (
+        <div className="rounded-card border border-line border-l-4 border-l-brand-line bg-surface p-5">
+          <p className="text-sm font-semibold text-fg">Ready to move beyond practice trading?</p>
+          <p className="mt-1 text-sm text-muted">
+            Activating your account unlocks the full trading environment. You'll still choose, separately and
+            explicitly, if and when to connect real funds - activating does not do that by itself.
+          </p>
+          <button
+            type="button"
+            onClick={onActivate}
+            className="mt-4 min-h-[44px] w-full rounded-ctl bg-brand px-5 text-sm font-semibold text-brand-ink hover:brightness-105 sm:w-auto"
+          >
+            Activate
+          </button>
+        </div>
+      )}
+      {billing.status === "ready" && screenKind(billing.options) === "offer" && <SubscribeCard options={billing.options} />}
 
       {!account.live_bypass_accepted_at && (
         <div className="flex items-center gap-1 text-xs text-muted">
