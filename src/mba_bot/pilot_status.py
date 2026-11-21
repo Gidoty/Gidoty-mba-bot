@@ -124,7 +124,7 @@ def account_screen(session: Session, account: TradingAccount, settings, now: dat
     if pauses:
         lines.append("strategy pauses: " + ", ".join(f"{p.strategy_id}:{p.code}" for p in pauses))
     lines.append(f"last error: {account.last_error or 'none'}" + (f" ({_fmt_time(account.last_error_at)})" if account.last_error else ""))
-    decisions = list(session.scalars(select(DecisionLog).where(DecisionLog.account_id == account.id).order_by(desc(DecisionLog.ts)).limit(10)))
+    decisions = list(session.scalars(select(DecisionLog).where(DecisionLog.account_id == account.id, DecisionLog.stage != "opportunity").order_by(desc(DecisionLog.ts)).limit(10)))  # the opportunity ledger (docs/safety/opportunity_ledger.md) has its own report
     lines.append(f"last {len(decisions)} decisions (newest first):" if decisions else "last decisions: none (TRADE_TELEMETRY is off or nothing has happened)")
     for d in decisions:
         lines.append(f"  {_fmt_time(d.ts)}  {d.stage:<9} {d.outcome:<9} {d.reason_code:<40} {d.pair or '-':<9} {d.strategy_id}")
