@@ -590,7 +590,8 @@ async def _read_once(client, pair: str, *, raw: bool) -> tuple[list[MaintenanceT
             items, shape = _items_from_raw(response, market["id"])
             if not items:
                 return None, CAUSE_EMPTY if not response else CAUSE_PAIR_MISSING, f"raw answer shape {shape}, no entry for {market['id']}"
-            return _convert(client.parse_market_leverage_tiers(items[0], market))
+            tiers, cause, detail = _convert(client.parse_market_leverage_tiers(items[0], market))
+            return tiers, cause, (detail if tiers is None else f"raw answer shape {shape}")  # on success the detail says which shape Binance sent (the tiers probe prints it)
         response = await client.fetch_leverage_tiers([pair], params)
         if not isinstance(response, dict) or not response:
             length = f", length {len(response)}" if hasattr(response, "__len__") else ""
@@ -598,7 +599,8 @@ async def _read_once(client, pair: str, *, raw: bool) -> tuple[list[MaintenanceT
         if pair not in response:
             keys = ", ".join(scrub_exchange_text(k, 30) for k in list(response)[:5])
             return None, CAUSE_PAIR_MISSING, f"response has {len(response)} entr{'y' if len(response) == 1 else 'ies'} but none for {pair}; first keys: {keys}"
-        return _convert(response[pair])
+        tiers, cause, detail = _convert(response[pair])
+        return tiers, cause, (detail if tiers is None else f"ccxt answer: mapping of {len(response)} with the symbol")
     except Exception as exc:  # noqa: BLE001
         return None, CAUSE_EXCEPTION, _exception_facts(exc)
 

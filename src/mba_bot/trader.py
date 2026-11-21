@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -80,6 +80,8 @@ def _ema_entry_stale(session, settings: Settings, account, signal, signal_candle
     age_ms = now_ms - (last_ts + tf_ms)
     if 0 <= age_ms <= int(settings.ema_entry_window_minutes * 60_000):
         return False
+    opportunity.record_not_taken(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=pair, candle_ts=last_ts, reason=opportunity.R_STALE, is_paper=is_paper, now=now,
+                                 detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.ema_entry_window_minutes})  # observability only
     if protection_guard.should_alert(account.id, pair, f"stale:ema:{last_ts}", now=now, repeat_hours=24.0):
         logger.info("account %s: EMA signal on %s skipped (signal_stale): the signal candle closed %.0f minutes ago, the window is %g",
                     account.id, pair, age_ms / 60_000, settings.ema_entry_window_minutes)
@@ -260,7 +262,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             if settings.small_capital_pairs and not is_paper and account.allocated_capital is not None:
                 auto_capital, viability_out = account.allocated_capital, []  # every live account, Spot included, scans only pairs its capital can trade
             scan_out: dict | None = {} if telemetry.enabled(settings) else None
-            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms, viability_out=viability_out)
+            ledger_rows: list | None = [] if opportunity.enabled(settings) else None
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms, viability_out=viability_out, ledger_rows=ledger_rows)
+            if ledger_rows is not None:
+                _ledger_auto_scan(session, settings, account, ledger_rows, auto_result, is_paper=is_paper, now=now, now_ms=now_ms)  # observability only
             for skipped_pair, v in viability_out or []:
                 try:
                     small_capital.record_skip(session, account, skipped_pair, small_capital.R_BELOW_MIN_CAPITAL, v, now=now)
@@ -276,6 +281,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # signal this cycle - a normal, uneventful scan, not an
                 # error. Record it as such and stop; there is nothing to
                 # enter and no open trade to manage.
+                if ledger_rows is not None:
+                    _ledger_not_evaluated(session, settings, account, is_paper=is_paper, now=now, now_ms=now_ms)  # Donchian and RSI are not reached on this path (observability only)
                 account.last_signal = SignalType.NONE.value
                 account.last_signal_at = now
                 account.last_error = None
@@ -297,6 +304,9 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 return
             sig_candles = _ema_signal_candles(candles, settings, now_ms)
             signal = _ema_generate(sig_candles, settings)
+            if open_trade is None and sig_candles:
+                opportunity.record_verdict(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=account.pair, candle_ts=sig_candles[-1].timestamp, sig=signal,
+                                           price=sig_candles[-1].close, is_paper=is_paper, now=now, tf=settings.timeframe)  # observability only
 
         current_price = candles[-1].close
         # A successful evaluation, whatever it concluded, is a healthy
@@ -867,7 +877,8 @@ def _note_small_capital(session, account, venue, settings: Settings, *, price, c
 
 
 async def _scan_auto_pair(
-    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None, viability_out: list | None = None
+    client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None, viability_out: list | None = None,
+    ledger_rows: list | None = None,
 ) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
@@ -914,6 +925,8 @@ async def _scan_auto_pair(
                 viability_out.append((pair, v))
                 if scan_out is not None:
                     scan_out.setdefault("skipped_capital", []).append(pair)
+                if ledger_rows is not None:
+                    ledger_rows.append(("skip", pair))  # observability only
                 continue
         elif capital is not None:
             facts = pair_catalog.facts_from_market((client.markets or {}).get(exchange.exchange_symbol(pair, account.market_type)))
@@ -921,6 +934,8 @@ async def _scan_auto_pair(
                 logger.info("account %s: auto-select skipping %s: %s", account.id, pair, pair_catalog.REASON_INSUFFICIENT_CAPITAL)
                 if scan_out is not None:
                     scan_out.setdefault("skipped_capital", []).append(pair)
+                if ledger_rows is not None:
+                    ledger_rows.append(("skip", pair))  # observability only
                 continue
         try:
             ohlcv = await client.fetch_ohlcv(
@@ -945,12 +960,63 @@ async def _scan_auto_pair(
     )
     if scan_out is not None:
         _note_scan(scan_out, scanned, ranked, settings)
+    if ledger_rows is not None:
+        try:  # observability only: what the EMA rule said about every scanned pair, and which of them had an actionable signal
+            for cand in scanned:
+                if cand.candles:
+                    ledger_rows.append(("eval", cand.pair, _ema_generate(cand.candles, settings), cand.candles[-1].timestamp, cand.candles[-1].close))
+            ledger_rows.append(("ranked", [r.pair for r in ranked]))
+        except Exception:  # noqa: BLE001
+            pass
     if not ranked:
         return None
 
     best_pair = ranked[0].pair
     signal = _ema_generate(next(c.candles for c in scanned if c.pair == best_pair), settings)
     return best_pair, raw[best_pair], signal
+
+
+def _ledger_auto_scan(session, settings: Settings, account, rows: list, result, *, is_paper: bool, now: datetime, now_ms: int) -> None:
+    """Opportunity ledger rows for one Auto Select scan (observability only, never raises): the EMA verdict for every scanned pair, the pairs skipped for capital, and, when a pair was picked, the pairs that
+    also had a signal but ranked lower (not_best_ranked)."""
+    try:
+        picked = result[0] if result is not None else None
+        ts_by_pair: dict[str, int] = {}
+        for row in rows:
+            if row[0] == "skip":
+                tf, _ = rsi_mr.normalize_timeframe(settings.timeframe)
+                tf_ms = rsi_mr.timeframe_ms(tf)
+                opportunity.record_not_taken(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=row[1], candle_ts=((now_ms // tf_ms) - 1) * tf_ms,
+                                             reason=opportunity.R_CAPITAL_SKIP, is_paper=is_paper, now=now)
+            elif row[0] == "eval":
+                _, pair, sig, candle_ts, close = row
+                ts_by_pair[pair] = candle_ts
+                opportunity.record_verdict(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=pair, candle_ts=candle_ts, sig=sig, price=close, is_paper=is_paper, now=now, tf=settings.timeframe)
+        for row in rows:
+            if row[0] == "ranked" and picked is not None:
+                for other in row[1]:
+                    if other != picked:
+                        opportunity.record_not_taken(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=other, candle_ts=ts_by_pair.get(other), reason=opportunity.R_NOT_BEST,
+                                                     is_paper=is_paper, now=now, detail={"picked": picked})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _ledger_not_evaluated(session, settings: Settings, account, *, is_paper: bool, now: datetime, now_ms: int) -> None:
+    """Auto Select returns BEFORE the Donchian and RSI entry checks when EMA found no actionable signal in the scan (process_account). For an opted-in account with those strategies live, say so in the ledger,
+    once per candle (observability only, never raises)."""
+    try:
+        if is_paper:
+            return
+        opted = multi_trade.account_strategies(account)
+        for sid, on, tfs in ((donchian.STRATEGY_ID, settings.live_donchian and settings.donchian_enabled, settings.donchian_timeframe), (rsi_mr.STRATEGY_ID, settings.live_rsi_mr and settings.rsi_mr_enabled, settings.rsi_mr_timeframe)):
+            if on and sid in opted:
+                tf, _ = rsi_mr.normalize_timeframe(tfs)
+                tf_ms = rsi_mr.timeframe_ms(tf)
+                opportunity.record_not_taken(session, settings, account, strategy_id=sid, pair=account.pair, candle_ts=((now_ms // tf_ms) - 1) * tf_ms, reason=opportunity.R_NOT_EVALUATED, is_paper=False, now=now,
+                                             detail={"why": "auto_select_no_ema_signal"})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _scan_info(scan_out: dict, result) -> telemetry.ScanInfo | None:
@@ -1618,6 +1684,8 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
                 age_ms = now_ms - (closed[-1].timestamp + tf_ms)
                 if 0 <= age_ms <= window_ms:
                     return True
+                opportunity.record_not_taken(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, reason=opportunity.R_STALE, is_paper=True, now=now,
+                                             detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})  # observability only
                 if protection_guard.should_alert(account.id, pair, f"stale:{strategy}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
                     logger.info("account %s: %s signal on %s skipped (signal_stale): the signal candle closed %.0f minutes ago, the window is %g",
                                 account.id, strategy, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
@@ -1630,18 +1698,25 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
                 if strategy == donchian.STRATEGY_ID:
                     closed = await don_closed_for(pair)
                     sig = donchian.signal_from_candles(closed, don_p, allow_short=allow_short)
+                    if closed:
+                        opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=True, now=now, tf=don_tf)  # observability only
                     return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, don_tf_ms)) else None
                 if strategy == rsi_mr.STRATEGY_ID:
                     closed = await rsi_closed_for(pair)
                     sig = rsi_mr.generate_signal(closed, rsi_p, allow_short=allow_short)
+                    if closed:
+                        opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=True, now=now, tf=rsi_tf)  # observability only
                     return (sig, closed[-1].close, closed) if (sig.side and closed and fresh(strategy, pair, closed, rsi_tf_ms)) else None
                 candles = await candles_for(pair)
                 if not candles:
                     return None
                 sig = signal_for(candles)
+                ema_closed = _ema_signal_candles(candles, settings, now_ms)  # the list the signal was made from (the raw one with the switch off)
+                if ema_closed:
+                    opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=ema_closed[-1].timestamp, sig=sig, price=ema_closed[-1].close, is_paper=True, now=now,
+                                               tf=settings.timeframe)  # observability only
                 if sig.signal == SignalType.NONE:
                     return None
-                ema_closed = _ema_signal_candles(candles, settings, now_ms)  # the list the signal was made from (the raw one with the switch off)
                 if _ema_entry_stale(session, settings, account, sig, ema_closed, pair, now=now, now_ms=now_ms, is_paper=True):
                     return None
                 return sig, candles[-1].close, ema_closed
@@ -1736,11 +1811,14 @@ async def _live_donchian_entry(session, account, client, settings: Settings, not
     if not raw or not closed:
         return
     sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=account.market_type == "futures")
+    opportunity.record_verdict(session, settings, account, strategy_id=donchian.STRATEGY_ID, pair=account.pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
     if not sig.side:
         return
     age_ms = now_ms - (closed[-1].timestamp + tf_ms)
     window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
     if not 0 <= age_ms <= window_ms:
+        opportunity.record_not_taken(session, settings, account, strategy_id=donchian.STRATEGY_ID, pair=account.pair, candle_ts=closed[-1].timestamp, reason=opportunity.R_STALE, is_paper=False, now=now,
+                                     detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})
         if protection_guard.should_alert(account.id, account.pair, f"stale:{donchian.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
             logger.info("account %s: donchian_breakout_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, account.pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
         return
@@ -1790,11 +1868,14 @@ async def _live_rsi_entry(session, account, client, settings: Settings, notifier
     if not raw or not closed:
         return
     sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=account.market_type == "futures")
+    opportunity.record_verdict(session, settings, account, strategy_id=rsi_mr.STRATEGY_ID, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
     if not sig.side:
         return
     age_ms = now_ms - (closed[-1].timestamp + tf_ms)
     window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
     if not 0 <= age_ms <= window_ms:  # the signal candle must be the latest closed one and closed within the window (audit M5)
+        opportunity.record_not_taken(session, settings, account, strategy_id=rsi_mr.STRATEGY_ID, pair=pair, candle_ts=closed[-1].timestamp, reason=opportunity.R_STALE, is_paper=False, now=now,
+                                     detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})
         if protection_guard.should_alert(account.id, pair, f"stale:{rsi_mr.STRATEGY_ID}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
             logger.info("account %s: rsi_mr_v1 signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
         return
@@ -1855,6 +1936,8 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
         age_ms = now_ms - (closed[-1].timestamp + tf_ms)
         if 0 <= age_ms <= window_ms:
             return True
+        opportunity.record_not_taken(session, settings, account, strategy_id=label, pair=pair, candle_ts=closed[-1].timestamp, reason=opportunity.R_STALE, is_paper=False, now=now,
+                                     detail={"age_minutes": round(age_ms / 60_000, 1), "window_minutes": settings.new_strategy_entry_window_minutes})  # observability only
         if protection_guard.should_alert(account.id, pair, f"stale:{label}:{closed[-1].timestamp}", now=now, repeat_hours=24.0):
             logger.info("account %s: %s signal on %s skipped (signal_stale): closed %.0f minutes ago, window %g", account.id, label, pair, age_ms / 60_000, settings.new_strategy_entry_window_minutes)
         return False
@@ -1867,6 +1950,7 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
         if not raw or not closed:
             return None
         sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=allow_short)
+        opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
         return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
     if strategy == rsi_mr.STRATEGY_ID:
         tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
@@ -1876,12 +1960,16 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
         if not raw or not closed:
             return None
         sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=allow_short)
+        opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
         return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
     candles = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=settings.timeframe, limit=settings.ohlcv_limit))
     if not candles:
         return None
     sig_candles = _ema_signal_candles(candles, settings, now_ms)
     sig = _ema_generate(sig_candles, settings)
+    if sig_candles:
+        opportunity.record_verdict(session, settings, account, strategy_id=multi_trade.EMA_STRATEGY_ID, pair=pair, candle_ts=sig_candles[-1].timestamp, sig=sig, price=sig_candles[-1].close, is_paper=False, now=now,
+                                   tf=settings.timeframe)  # observability only
     if sig.signal == SignalType.NONE or _ema_entry_stale(session, settings, account, sig, sig_candles, pair, now=now, now_ms=now_ms, is_paper=False):
         return None
     return sig, candles[-1].close
@@ -2108,13 +2196,16 @@ async def _maybe_send_daily_summary(session, account, notifier, *, now, settings
 
     total_pnl = sum(t.pnl or 0.0 for t in closed_today)
     quote = exchange.quote_currency(account.pair)
+    # OPPORTUNITY_LEDGER on: the same message gets a few more text lines (entry checks of the last 24 hours). Off, or nothing to say: the text is exactly what it was. No new message, no new alert type.
+    lines = opportunity.summary_lines(session, account.id, now) if (settings is not None and opportunity.enabled(settings)) else []
+    extra = ("\n" + "\n".join(lines)) if lines else ""
     if settings is not None and settings.reporting_v2:
-        await notifier.send(account.notification_target, reporting.daily_summary_text(today, closed_today, quote))  # modes kept apart; "net" only with every fee known
+        await notifier.send(account.notification_target, reporting.daily_summary_text(today, closed_today, quote) + extra)  # modes kept apart; "net" only with every fee known
         return
     await notifier.send(
         account.notification_target,
         pnl_labels.daily_summary(
             today, len(closed_today), total_pnl, quote, on=bool(settings and settings.pnl_labels),
             paper_count=sum(1 for t in closed_today if t.is_paper),
-        ),
+        ) + extra,
     )

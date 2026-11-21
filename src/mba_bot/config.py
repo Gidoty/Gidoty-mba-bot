@@ -310,6 +310,11 @@ class Settings:
     # The pre-entry check reads Binance's brackets fresh on every entry. When that read fails, the last known good table for the same account and symbol may stand in for it while it is no older than this many
     # seconds (never for a position value outside that table, and never when the fresh read worked). 0 = never use a stored table (every failed read refuses the entry). docs/safety/pre_entry_protection_check.md.
     precheck_tiers_cache_max_age_seconds: float = 21600.0
+    # Opportunity ledger (docs/safety/opportunity_ledger.md): False = off (default). True: one decision_log row (stage "opportunity") per account, strategy, pair and closed candle for EVERY evaluation, including
+    # "no signal", and one for each reason a signal was not taken. Observability only: it never changes an entry decision. The cap is per account and day; rows older than the keep days are deleted (at most 5000 a day).
+    opportunity_ledger: bool = False
+    opportunity_ledger_daily_cap: int = 1500
+    opportunity_ledger_keep_days: int = 30
     # Repeat-failure limits (one mode switch for all three; a limit of 0 disables that limit whatever the mode).
     # Each counts live emergency exits caused by a protective stop that could not be established, by category:
     #   structural    the stop cannot be placed (unavailable, beyond liquidation, rejected by Binance). Repeats
@@ -671,6 +676,9 @@ def load_settings() -> Settings:
         nowpayments_ipn_url=os.environ.get("NOWPAYMENTS_IPN_URL") or None,
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
         precheck_tiers_cache_max_age_seconds=min(86400.0, max(0.0, _env_float("PRECHECK_TIERS_CACHE_MAX_AGE_SECONDS", 21600.0))),
+        opportunity_ledger=_env_bool("OPPORTUNITY_LEDGER", False),
+        opportunity_ledger_daily_cap=min(20000, max(10, _env_int("OPPORTUNITY_LEDGER_DAILY_CAP", 1500))),
+        opportunity_ledger_keep_days=min(365, max(1, _env_int("OPPORTUNITY_LEDGER_KEEP_DAYS", 30))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),
         protection_unclassified_limit=max(0, _env_int("PROTECTION_UNCLASSIFIED_LIMIT", 3)),
