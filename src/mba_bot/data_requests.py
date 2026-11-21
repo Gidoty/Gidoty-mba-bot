@@ -17,6 +17,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .billing.entitlement import is_entitled
+from .config import load_settings
 from .models import BillingPayment, Customer, DataRequest, LegalAcceptance, Subscription, Trade, TradingAccount
 from .restart_gate import DEFAULT_URL, _engine
 
@@ -54,7 +56,7 @@ def export_customer(session: Session, customer_id: str) -> dict | None:
     if len(matches) != 1:
         return None
     c = matches[0]
-    out: dict = {"customer": {"email": c.email, "created_at": _plain(c.created_at), "is_active": c.is_active, "activated": c.has_paid}}
+    out: dict = {"customer": {"email": c.email, "created_at": _plain(c.created_at), "is_active": c.is_active, "activated": is_entitled(c, settings=load_settings())}}
     account = session.scalars(select(TradingAccount).where(TradingAccount.customer_id == c.id)).first()
     out["account"] = _pick(account, ACCOUNT_FIELDS) if account else None
     out["telegram_linked"] = bool(account and account.notification_target)

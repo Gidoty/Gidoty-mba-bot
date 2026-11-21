@@ -295,3 +295,15 @@ def test_the_privacy_text_lists_exactly_the_records_the_route_says_are_kept():
         head = what.split(",")[0].split(" (")[0]
         assert head.lower().replace("your ", "") in js.lower().replace("your ", ""), what
     assert "no automatic deletion" in js
+
+
+def test_the_risk_acceptance_row_carries_the_risk_disclosure_version_not_another_documents(monkeypatch):
+    """The three versions are equal today, so a mix-up would be invisible. Give the Risk Disclosure its own version and check the row says so."""
+    monkeypatch.setattr(legal, "RISK_DISCLOSURE_VERSION", "2099-02-02")
+    monkeypatch.setattr(auth_router, "RISK_DISCLOSURE_VERSION", "2099-02-02")
+    _customer("ownversion@example.com", accept={"terms": legal.TERMS_VERSION, "privacy": legal.PRIVACY_VERSION, "risk_disclosure": legal.RISK_DISCLOSURE_VERSION.replace("2099-02-02", OLD)}, live=True)
+    with TestClient(app, base_url="https://testserver") as client:
+        assert _login(client, "ownversion@example.com")["risk_acceptance_needed"] is True
+        assert client.post("/api/auth/accept-legal", json={"accept_terms": True, "acknowledge_privacy": True, "accept_risk_disclosure": True}).status_code == 200
+    accepted = _accepted("ownversion@example.com")
+    assert ("risk_disclosure", "2099-02-02") in accepted and ("risk_disclosure", legal.TERMS_VERSION) not in accepted
