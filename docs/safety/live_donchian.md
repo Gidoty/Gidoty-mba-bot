@@ -28,3 +28,6 @@ The trailing level is `donchian_trail.py`, not `donchian.py`: that file's hash i
 
 ## NOT verified
 Profit; Binance behaviour on second stops (above); Spot trailing; the screens (none changed).
+
+## Auto Select
+An Auto Select account opted in to this strategy now has it evaluated every round on every candidate pair, whether or not EMA found a signal: see `docs/safety/auto_select_strategies.md`.
