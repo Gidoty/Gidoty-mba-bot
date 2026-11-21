@@ -661,6 +661,9 @@ def enable_live_trading_route(
     everything written so far if anything above raises)."""
     account = _require_account(customer)
 
+    if body.risk_disclosure_version is not None and body.risk_disclosure_version != RISK_DISCLOSURE_VERSION:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the Risk Disclosure was updated - reload the page and read it again before enabling live trading")
+
     if not _paid(customer, settings):
         raise HTTPException(status.HTTP_409_CONFLICT, "pay to unlock live trading before enabling it")
 
@@ -695,7 +698,8 @@ def enable_live_trading_route(
 
     account.live_trading_enabled_at = enable_live_trading()
     account.live_trading_disclosure_text = LIVE_TRADING_ACTIVATION_DISCLOSURE
-    record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
+    if not has_current_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION):
+        record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
     return _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings)
 
 

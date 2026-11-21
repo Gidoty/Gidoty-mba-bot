@@ -7,11 +7,14 @@ from sqlalchemy.orm import Session
 from ...billing.entitlement import is_entitled
 from ...config import Settings
 from ...legal import (
+    OPERATOR_EMAIL,
     PRIVACY_VERSION,
+    RISK_DISCLOSURE_VERSION,
     TERMS_VERSION,
     has_current_acceptance,
-    has_current_terms_and_privacy,
+    legal_acceptance_current,
     record_acceptance,
+    risk_acceptance_needed,
 )
 from ...models import Customer
 from ..deps import get_current_customer, get_db, get_settings
@@ -41,8 +44,22 @@ def _to_customer_out(customer: Customer, db: Session, settings: Settings) -> Cus
         created_at=customer.created_at,
         # What the screens call "activated": is_entitled() is exactly customer.has_paid unless SUBSCRIPTION_BILLING_ENABLED is on.
         has_paid=is_entitled(customer, settings=settings),
-        legal_acceptance_current=has_current_terms_and_privacy(db, customer_id=customer.id),
+        legal_acceptance_current=legal_acceptance_current(db, customer_id=customer.id),
+        risk_acceptance_needed=risk_acceptance_needed(db, customer_id=customer.id),
     )
+
+
+SIGNUPS_CLOSED_MESSAGE = (
+    "New registrations are closed right now, so we cannot create an account for you. If you already have an account, log in as usual. "
+    f"Questions: {OPERATOR_EMAIL}"
+)
+
+
+@router.get("/signups")
+def signups_status(settings: Settings = Depends(get_settings)) -> dict:
+    """Public. Whether new accounts can be created right now, so the sign-up page can say so before the customer types anything. Reveals nothing else."""
+    is_open = settings.signups_mode == "open"
+    return {"open": is_open, "message": None if is_open else SIGNUPS_CLOSED_MESSAGE}
 
 def _set_session_cookie(response: Response, *, customer_id: str, settings: Settings) -> None:
     if not settings.jwt_secret:
@@ -80,6 +97,9 @@ def signup(
     # True here - SignupRequest's validators reject a False/missing value
     # with a 422 before this function body ever runs, so there is no
     # direct-API path that creates a customer without both.
+    # SIGNUPS_MODE=closed: no new customer row is created, whatever the body says. Login, existing customers and the admin dashboard do not pass through here.
+    if settings.signups_mode != "open":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, SIGNUPS_CLOSED_MESSAGE)
     customer = Customer(email=body.email.lower(), password_hash=hash_password(body.password))
     db.add(customer)
     try:
@@ -153,4 +173,10 @@ def accept_legal(
         record_acceptance(db, customer_id=customer.id, document_type="terms", version=TERMS_VERSION)
     if not has_current_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION):
         record_acceptance(db, customer_id=customer.id, document_type="privacy", version=PRIVACY_VERSION)
+    if risk_acceptance_needed(db, customer_id=customer.id):
+        # A customer who already trades live must accept the CURRENT Risk Disclosure too. All or nothing: no row is written for terms or privacy if this is missing.
+        if not body.accept_risk_disclosure:
+            db.rollback()
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "accept_risk_disclosure must be true - the Risk Disclosure was updated and applies to your live trading")
+        record_acceptance(db, customer_id=customer.id, document_type="risk_disclosure", version=RISK_DISCLOSURE_VERSION)
     return _to_customer_out(customer, db, settings)

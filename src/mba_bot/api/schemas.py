@@ -61,6 +61,8 @@ class AcceptLegalRequest(BaseModel):
 
     accept_terms: bool
     acknowledge_privacy: bool
+    # Only needed (and then required true) for a customer who already has live trading enabled and has not accepted the current Risk Disclosure; the route checks that, not this model.
+    accept_risk_disclosure: bool = False
 
     @field_validator("accept_terms")
     @classmethod
@@ -85,6 +87,8 @@ class CustomerOut(BaseModel):
     # Whether the CURRENT Terms+Privacy version is accepted - the
     # frontend blocks everything past login on this until it's true.
     legal_acceptance_current: bool
+    # True only for a customer who already has live trading enabled and has not accepted the CURRENT Risk Disclosure: the consent screen then shows a third box.
+    risk_acceptance_needed: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -286,6 +290,8 @@ class EnableLiveTradingRequest(BaseModel):
     instead of) the four existing paid/eligible/enabled/mainnet gates."""
 
     accept_risk_disclosure: bool
+    # The Risk Disclosure version the screen showed. Optional for older clients; when present it must be the current one, so an acceptance can never be recorded against text the customer did not see.
+    risk_disclosure_version: str | None = Field(default=None, max_length=20)
 
     @field_validator("accept_risk_disclosure")
     @classmethod

@@ -740,6 +740,21 @@ class DecisionLog(Base):
     detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class DataRequest(Base):
+    """A customer's request to export or delete their data (docs/commercial_readiness.md, api/routers/privacy.py). A record for the operator to act on, nothing more: no row deletes anything by itself,
+    and the request text holds no free text from the customer (no key, no message). Kept after it is handled, as proof of what was asked and when."""
+
+    __tablename__ = "data_requests"
+    __table_args__ = (Index("ix_data_requests_customer_id", "customer_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # export | deletion
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="open")  # open | done | declined
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class KillSwitch(Base):
     """The operator kill switch (docs/safety/kill_switch.md): ONE row, id 1. `engaged` stops NEW live entries on every
     account; open positions keep being managed. Written only by `python -m mba_bot.killswitch` (and the first-run seed);

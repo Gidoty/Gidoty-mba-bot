@@ -105,7 +105,7 @@ export default function App() {
     // Privacy Policy. The backend's own require_legal_acceptance
     // dependency enforces this independently on every /api/account/*
     // call, so this isn't just a frontend-only gate.
-    content = <LegalConsentGate onAccepted={refreshCustomer} onLogout={handleLogout} />;
+    content = <LegalConsentGate onAccepted={refreshCustomer} onLogout={handleLogout} riskNeeded={Boolean(customer.risk_acceptance_needed)} />;
   } else {
     content = (
       <AccountProvider customer={customer} onCustomerChanged={refreshCustomer}>

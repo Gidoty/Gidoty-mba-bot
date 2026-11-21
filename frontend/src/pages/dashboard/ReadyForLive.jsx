@@ -5,6 +5,7 @@ import BinanceConnectionPanel from "../../components/BinanceConnectionPanel.jsx"
 import ConsentCheckbox from "../../components/ConsentCheckbox.jsx";
 import { secondaryButton } from "../../components/form.jsx";
 import { Card, CardTitle, ErrorBanner, PageHeader, Pill } from "../../components/ui.jsx";
+import { RISK_DISCLOSURE_VERSION } from "../../legalContent.js";
 
 const LIVE_TRADING_RISK_SENTENCE =
   "You are enabling LIVE automated cryptocurrency trading. Real orders may be submitted to your connected " +
@@ -20,7 +21,7 @@ export default function ReadyForLive({ account, onAccountChanged }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.post("/account/enable-live-trading", { accept_risk_disclosure: acceptRiskDisclosure });
+      await api.post("/account/enable-live-trading", { accept_risk_disclosure: acceptRiskDisclosure, risk_disclosure_version: RISK_DISCLOSURE_VERSION });
       setConfirming(false);
       onAccountChanged();
     } catch (err) {
