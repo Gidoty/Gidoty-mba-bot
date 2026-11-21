@@ -20,3 +20,6 @@ Remove `LIVE_RSI_MR` and restart (restart gate first). An RSI trade that is open
 * Anything about profit. The 2 wins in 27 paper trades were decided on testnet/demo candles (see `docs/ops/paper_source_and_replay.md`); the replay against mainnet data is the owner's step before this goes on.
 * Binance behaviour; the fake exchange stands in.
 * Live fills, slippage and fees against the strategy's 1.0 ATR target (it is small relative to costs; the fee guard exists for this).
+
+## Auto Select
+An Auto Select account opted in to this strategy now has it evaluated every round on every candidate pair, whether or not EMA found a signal: see `docs/safety/auto_select_strategies.md`.
