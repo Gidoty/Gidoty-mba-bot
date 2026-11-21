@@ -145,6 +145,7 @@ def install(monkeypatch, client) -> None:
 
     monkeypatch.setattr(venue, "_sleep", _no_sleep)
     monkeypatch.setattr(lifecycle, "_sleep", _no_sleep)
+    monkeypatch.setattr(exchange, "_sleep", _no_sleep)  # the bracket-read retry pause
 
 
 def run_cycle(

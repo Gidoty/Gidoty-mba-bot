@@ -307,6 +307,9 @@ class Settings:
     # Highest leverage the pre-check accepts as plausible (Binance's current maximum is 125). Only the pre-check
     # applies the 1..max range; the leverage READ accepts any positive finite number, exactly as before the guards.
     precheck_max_leverage: float = 125.0
+    # The pre-entry check reads Binance's brackets fresh on every entry. When that read fails, the last known good table for the same account and symbol may stand in for it while it is no older than this many
+    # seconds (never for a position value outside that table, and never when the fresh read worked). 0 = never use a stored table (every failed read refuses the entry). docs/safety/pre_entry_protection_check.md.
+    precheck_tiers_cache_max_age_seconds: float = 21600.0
     # Repeat-failure limits (one mode switch for all three; a limit of 0 disables that limit whatever the mode).
     # Each counts live emergency exits caused by a protective stop that could not be established, by category:
     #   structural    the stop cannot be placed (unavailable, beyond liquidation, rejected by Binance). Repeats
@@ -667,6 +670,7 @@ def load_settings() -> Settings:
         nowpayments_underpay_tolerance_pct=_tolerance_from_env(os.environ.get("NOWPAYMENTS_UNDERPAY_TOLERANCE_PCT")),
         nowpayments_ipn_url=os.environ.get("NOWPAYMENTS_IPN_URL") or None,
         precheck_max_leverage=min(1000.0, max(1.0, _env_float("PRECHECK_MAX_LEVERAGE", 125.0))),
+        precheck_tiers_cache_max_age_seconds=min(86400.0, max(0.0, _env_float("PRECHECK_TIERS_CACHE_MAX_AGE_SECONDS", 21600.0))),
         protection_transient_limit=max(0, _env_int("PROTECTION_TRANSIENT_LIMIT", 3)),
         protection_transient_window_hours=max(0.1, _env_float("PROTECTION_TRANSIENT_WINDOW_HOURS", 6.0)),
         protection_unclassified_limit=max(0, _env_int("PROTECTION_UNCLASSIFIED_LIMIT", 3)),

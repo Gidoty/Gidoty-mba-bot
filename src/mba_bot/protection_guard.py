@@ -112,5 +112,46 @@ def should_alert(account_id: str, pair: str, reason: str, *, now: datetime, repe
     return True
 
 
+def _too_soon(key, now: datetime, repeat_hours: float) -> bool:
+    last = _ALERTED.get(key)
+    return last is not None and _aware(now) - last < timedelta(hours=repeat_hours)
+
+
+def claim_alert(session, account_id: str, pair: str, reason: str, *, now: datetime, repeat_hours: float) -> bool:
+    """`should_alert` for a customer alert, with the last alert time kept in the DATABASE (table alert_marks): at most one alert per (account, pair, reason) per `repeat_hours`, also across a restart and across
+    a second scheduler process (API_SINGLE_INSTANCE_LOCK is off by default, so two can run). The claim is one atomic upsert that only succeeds when the stored time is older than the window; it is committed at
+    once, before the caller sends anything, so no write lock is held across the network send. Any database trouble falls back to the in-memory rule (never a lost alert because of it, never a crash).
+
+    The in-memory rule runs first as a cheap filter; the database is asked only when memory would allow the alert."""
+    key = (account_id, pair, reason)
+    now = _aware(now).astimezone(timezone.utc)
+    if _too_soon(key, now, repeat_hours):
+        return False
+    if session is not None:
+        try:
+            bind = session.get_bind()
+            if bind.dialect.name == "sqlite":
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+                from mba_bot.models import AlertMark
+
+                cutoff = now - timedelta(hours=repeat_hours)
+                stmt = sqlite_insert(AlertMark).values(account_id=account_id, pair=pair[:20], reason=reason[:48], last_alert_at=now)
+                stmt = stmt.on_conflict_do_update(index_elements=[AlertMark.account_id, AlertMark.pair, AlertMark.reason], set_={"last_alert_at": now}, where=AlertMark.last_alert_at < cutoff)
+                with session.begin_nested():  # a failing upsert rolls back to here and leaves the caller's pending changes alone
+                    allowed = session.execute(stmt).rowcount == 1
+                try:
+                    session.commit()  # durable now, and the write lock is released before the caller's network send
+                except Exception:  # noqa: BLE001
+                    session.rollback()
+                    raise
+                _ALERTED[key] = now
+                return allowed
+        except Exception:  # noqa: BLE001 - the in-memory rule below still applies
+            pass
+    _ALERTED[key] = now
+    return True
+
+
 def reset_for_tests() -> None:
     _ALERTED.clear()

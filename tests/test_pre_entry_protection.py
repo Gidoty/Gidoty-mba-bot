@@ -148,26 +148,29 @@ def test_a_notional_exactly_on_a_bracket_boundary_takes_the_worse_bracket():
 
 
 @pytest.mark.parametrize(
-    "tiers",
+    "tiers, reason",
     [
-        None, [],
-        [MaintenanceTier(1, 0.0, 1e9, 0.6, 0.0)],                                   # implausible rate
-        [MaintenanceTier(1, 0.0, 1e9, -0.01, 0.0)],
-        [MaintenanceTier(1, 0.0, 1e9, 0.004, -5.0)],                                # negative cum
-        [MaintenanceTier(1, 0.0, 1e9, float("nan"), 0.0)],
-        [MaintenanceTier(1, 0.0, 1e9, 0.004, float("inf"))],
-        [MaintenanceTier(1, 100.0, 1e9, 0.004, 0.0)],                               # does not start at 0
-        [MaintenanceTier(1, 0.0, 0.0, 0.004, 0.0)],                                 # empty range
-        [MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 5000.0, 1e9, 0.005, 0.0)],   # gap
-        [MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 500.0, 1e9, 0.005, 0.0)],    # overlap
-        [MaintenanceTier(1, 0.0, 1000.0, 0.01, 0.0), MaintenanceTier(2, 1000.0, 1e9, 0.005, 0.0)],    # rate falls with size
-        [MaintenanceTier(1, 0.0, 50.0, 0.004, 0.0)],                                # notional (100) above the last cap
-        ["not a tier"],
+        (None, risk.TIERS_READ_FAILED),                                                  # the read gave nothing
+        ([], risk.TIERS_INVALID),
+        ([MaintenanceTier(1, 0.0, 1e9, 0.6, 0.0)], risk.TIERS_INVALID),                  # implausible rate
+        ([MaintenanceTier(1, 0.0, 1e9, -0.01, 0.0)], risk.TIERS_INVALID),
+        ([MaintenanceTier(1, 0.0, 1e9, 0.004, -5.0)], risk.TIERS_INVALID),               # negative cum
+        ([MaintenanceTier(1, 0.0, 1e9, float("nan"), 0.0)], risk.TIERS_INVALID),
+        ([MaintenanceTier(1, 0.0, 1e9, 0.004, float("inf"))], risk.TIERS_INVALID),
+        ([MaintenanceTier(1, 100.0, 1e9, 0.004, 0.0)], risk.TIERS_INVALID),              # does not start at 0
+        ([MaintenanceTier(1, 0.0, 0.0, 0.004, 0.0)], risk.TIERS_INVALID),                # empty range
+        ([MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 5000.0, 1e9, 0.005, 0.0)], risk.TIERS_INVALID),   # gap
+        ([MaintenanceTier(1, 0.0, 1000.0, 0.004, 0.0), MaintenanceTier(2, 500.0, 1e9, 0.005, 0.0)], risk.TIERS_INVALID),    # overlap
+        ([MaintenanceTier(1, 0.0, 1000.0, 0.01, 0.0), MaintenanceTier(2, 1000.0, 1e9, 0.005, 0.0)], risk.TIERS_INVALID),    # rate falls with size
+        ([MaintenanceTier(1, 0.0, 50.0, 0.004, 0.0)], risk.TIERS_NO_MATCH),              # a plausible table, but the notional (100) is above the last cap
+        (["not a tier"], risk.TIERS_INVALID),
     ],
 )
-def test_missing_invalid_or_unmatchable_brackets_fail_closed(tiers):
+def test_missing_invalid_or_unmatchable_brackets_fail_closed(tiers, reason):
     r = _check(tiers=tiers)
-    assert not r.viable and r.reason == risk.TIERS_UNAVAILABLE
+    assert not r.viable and r.reason == reason
+    if reason in (risk.TIERS_INVALID, risk.TIERS_NO_MATCH):
+        assert r.note  # the first failing check, or why no bracket matched, for the journal
 
 
 def test_validate_tiers_accepts_a_real_looking_table_and_sorts_it():
@@ -560,10 +563,10 @@ def test_spot_is_never_subject_to_the_check(db, monkeypatch):
 @pytest.mark.parametrize(
     "client_kw, reason",
     [
-        (dict(maintenance_tiers=[]), telemetry.R_TIERS_UNAVAILABLE),                         # no brackets for the symbol
+        (dict(maintenance_tiers=[]), telemetry.R_TIERS_READ_FAILED),                         # no brackets for the symbol
         (dict(maintenance_tiers=[{"bracket": 1, "initialLeverage": 5, "notionalCap": 10, "notionalFloor": 0,
-                                  "maintMarginRatio": 0.004, "cum": 0.0}]), telemetry.R_TIERS_UNAVAILABLE),  # notional beyond the last cap
-        (dict(maintenance_tiers=[{"bracket": 1, "notionalCap": 1e9, "notionalFloor": 0, "maintMarginRatio": 0.004}]), telemetry.R_TIERS_UNAVAILABLE),  # no cum
+                                  "maintMarginRatio": 0.004, "cum": 0.0}]), telemetry.R_TIERS_NO_MATCH),  # notional beyond the last cap
+        (dict(maintenance_tiers=[{"bracket": 1, "notionalCap": 1e9, "notionalFloor": 0, "maintMarginRatio": 0.004}]), telemetry.R_TIERS_READ_FAILED),  # no cum
         (dict(margin_mode=None), telemetry.R_MARGIN_MODE_UNKNOWN),
     ],
 )
@@ -586,7 +589,7 @@ def test_a_failing_bracket_read_refuses_before_any_order(db, monkeypatch):
 
     run_cycle(account_id, settings)
 
-    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_UNAVAILABLE)) == 1
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_READ_FAILED)) == 1
 
 
 def test_an_unexpected_error_inside_the_check_refuses_the_entry(db, monkeypatch):
@@ -900,7 +903,9 @@ def test_reason_codes_match_between_risk_and_telemetry():
     assert (risk.STOP_UNVIABLE, risk.INPUTS_INVALID, risk.TIERS_UNAVAILABLE, risk.MARGIN_MODE_UNKNOWN, risk.CROSS_UNVERIFIABLE) == (
         telemetry.R_STOP_UNVIABLE, telemetry.R_PROTECTION_INPUTS_INVALID, telemetry.R_TIERS_UNAVAILABLE,
         telemetry.R_MARGIN_MODE_UNKNOWN, telemetry.R_CROSS_UNVERIFIABLE)
-    assert all(len(c) <= 48 for c in (risk.STOP_UNVIABLE, risk.TIERS_UNAVAILABLE, risk.CROSS_UNVERIFIABLE, risk.MARGIN_MODE_UNKNOWN))
+    assert (risk.TIERS_READ_FAILED, risk.TIERS_INVALID, risk.TIERS_NO_MATCH) == (telemetry.R_TIERS_READ_FAILED, telemetry.R_TIERS_INVALID, telemetry.R_TIERS_NO_MATCH)
+    assert len({risk.TIERS_UNAVAILABLE, risk.TIERS_READ_FAILED, risk.TIERS_INVALID, risk.TIERS_NO_MATCH}) == 4 and risk.TIERS_UNAVAILABLE == "maintenance_tiers_unavailable"  # the old code stays defined for old rows
+    assert all(len(c) <= 48 for c in (risk.STOP_UNVIABLE, risk.TIERS_UNAVAILABLE, risk.TIERS_READ_FAILED, risk.TIERS_INVALID, risk.TIERS_NO_MATCH, risk.CROSS_UNVERIFIABLE, risk.MARGIN_MODE_UNKNOWN))
 
 
 # ------------------------------------------------------------------ the transient and unclassified limits
@@ -1250,3 +1255,174 @@ def test_every_emergency_close_reason_has_an_explicit_customer_label():
     reasons = {lifecycle.EMERGENCY_REASON_STRUCTURAL, lifecycle.EMERGENCY_REASON_TRANSIENT, lifecycle.EMERGENCY_REASON_OTHER} | literal
     for reason in reasons:
         assert reason in cases, f"{reason} would be shown to the customer as a signal exit"
+
+
+# ------------------------------------------------------------------ bracket refusals: three causes, three codes, three texts, the journal says why (21 Nov 2026)
+def _bracket(n, floor, cap, rate, cum=0.0):
+    return {"bracket": n, "initialLeverage": 5, "notionalCap": cap, "notionalFloor": floor, "maintMarginRatio": rate, "cum": cum}
+
+
+@pytest.mark.parametrize(
+    "client_kw, raise_tiers, code, phrase",
+    [
+        ({}, True, risk.TIERS_READ_FAILED, "could not get the position-size safety table"),
+        (dict(maintenance_tiers=[_bracket(1, 0, 10, 0.004)]), False, risk.TIERS_NO_MATCH, "does not cover the size of this trade"),
+        (dict(maintenance_tiers=[_bracket(1, 0, 1000, 0.004), _bracket(2, 5000, 1e9, 0.005)]), False, risk.TIERS_INVALID, "incomplete or did not add up"),
+    ],
+)
+def test_each_bracket_cause_has_its_own_code_text_and_journal_line(db, monkeypatch, caplog, client_kw, raise_tiers, code, phrase):
+    import logging
+
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0}, **client_kw)
+    client._tiers_raise = raise_tiers
+    account_id = _live(db, monkeypatch, settings, client)
+
+    with caplog.at_level(logging.WARNING):
+        notifier = run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and all_trades(account_id) == []
+    rows = _decisions(code)
+    assert len(rows) == 1 and rows[0].outcome == telemetry.REJECTED
+    for other in (risk.TIERS_READ_FAILED, risk.TIERS_INVALID, risk.TIERS_NO_MATCH, risk.TIERS_UNAVAILABLE):
+        if other != code:
+            assert _decisions(other) == []
+    detail = json.loads(rows[0].detail_json)
+    assert detail["note"] and "secret" not in rows[0].detail_json.lower()
+    (alert,) = _alerts(notifier)
+    assert phrase in alert and "margin tier" not in alert.lower() and phrase in _last_error(account_id)
+    assert "not caused by your settings" in alert or "not your settings" in alert or code == risk.TIERS_NO_MATCH
+    journal = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "BTC/USDT:USDT" in journal and (detail["note"].split(":")[0] in journal or code == risk.TIERS_READ_FAILED)
+    if code == risk.TIERS_READ_FAILED:
+        assert "exception" in detail["note"] and "simulated leverageBracket failure" in journal
+    if code == risk.TIERS_NO_MATCH:
+        assert "[0-10]" in journal and "position value" in journal
+    if code == risk.TIERS_INVALID:
+        assert "brackets 1 and 2" in journal
+
+
+def test_a_failed_read_uses_the_stored_table_only_within_the_maximum_age_and_the_row_says_so(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+    exchange._CACHE[f"{account_id}:BTC/USDT:USDT"] = (exchange._clock() - 3600.0, list(FLAT_TIER))
+
+    run_cycle(account_id, settings)
+
+    assert the_trade(account_id).status == "open"
+    accepted = _decisions(telemetry.R_ENTRY_SUBMITTED)[0]
+    pre = json.loads(accepted.detail_json)["precheck"]
+    assert pre["tiers_source"] == "cache" and 3590 <= pre["tiers_age_seconds"] <= 3700
+
+
+def test_a_stored_table_older_than_the_maximum_age_is_never_used(db, monkeypatch):
+    settings = _settings(precheck_tiers_cache_max_age_seconds=3600.0)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+    exchange._CACHE[f"{account_id}:BTC/USDT:USDT"] = (exchange._clock() - 3601.0, list(FLAT_TIER))
+
+    run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_READ_FAILED)) == 1
+
+
+def test_the_cache_can_be_switched_off_by_a_zero_age(db, monkeypatch):
+    settings = _settings(precheck_tiers_cache_max_age_seconds=0.0)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+    exchange._CACHE[f"{account_id}:BTC/USDT:USDT"] = (exchange._clock(), list(FLAT_TIER))
+
+    run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_READ_FAILED)) == 1
+
+
+def test_a_stored_table_never_covers_a_position_value_outside_it(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+    exchange._CACHE[f"{account_id}:BTC/USDT:USDT"] = (exchange._clock(), [MaintenanceTier(1, 0.0, 10.0, 0.004, 0.0)])  # ends at 10 USDT
+
+    run_cycle(account_id, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_NO_MATCH)) == 1
+
+
+def test_a_second_account_never_uses_the_first_accounts_stored_table(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    first = _live(db, monkeypatch, settings, client)
+    second = new_account(settings, market_type="futures", email="second@example.com")
+    exchange._CACHE[f"{first}:BTC/USDT:USDT"] = (exchange._clock(), list(FLAT_TIER))
+
+    run_cycle(second, settings)
+
+    assert client.market_orders == [] and len(_decisions(telemetry.R_TIERS_READ_FAILED)) == 1
+
+
+def test_the_same_refusal_is_alerted_once_even_after_a_restart_and_per_account(db, monkeypatch):
+    settings = _settings()
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    a = _live(db, monkeypatch, settings, client)
+    b = new_account(settings, market_type="futures", email="second@example.com")
+
+    n1 = run_cycle(a, settings)
+    assert len(_alerts(n1)) == 1
+    protection_guard._ALERTED.clear()  # a restart, or a second scheduler process: the in-memory limit is gone
+    n2 = run_cycle(a, settings, n1)
+    n3 = run_cycle(a, settings, n2)
+    assert len(_alerts(n3)) == 1, "one alert per account, pair and reason per window, however often the process restarts"
+    protection_guard._ALERTED.clear()
+    n4 = run_cycle(b, settings, n3)
+    assert len(_alerts(n4)) == 2, "a different account is its own alert (several accounts on one pair each get one)"
+    assert client.market_orders == []
+
+
+def test_the_alert_comes_again_after_the_window(db, monkeypatch):
+    settings = _settings(protection_alert_repeat_hours=6.0)
+    client = _fut(leverage_by_symbol={"BTC/USDT": 1.0})
+    client._tiers_raise = True
+    account_id = _live(db, monkeypatch, settings, client)
+    n = run_cycle(account_id, settings)
+    assert len(_alerts(n)) == 1
+    from sqlalchemy import update
+    from mba_bot.models import AlertMark
+
+    with session_scope() as s:
+        s.execute(update(AlertMark).values(last_alert_at=datetime.now(timezone.utc) - timedelta(hours=6, minutes=1)))
+    protection_guard._ALERTED.clear()
+    n = run_cycle(account_id, settings, n)
+    assert len(_alerts(n)) == 2
+
+
+def test_the_refusal_report_counts_refused_entries_per_pair_and_reason(db, tmp_path, monkeypatch, capsys):
+    import hashlib
+
+    from mba_bot import pair_skip_report
+
+    now = datetime.now(timezone.utc)
+    with session_scope() as s:
+        for i, (pair, reason, hours_ago, outcome) in enumerate([
+            ("XRP/USDT", risk.TIERS_READ_FAILED, 1, "rejected"), ("XRP/USDT", risk.TIERS_READ_FAILED, 2, "rejected"), ("SOL/USDT", risk.TIERS_NO_MATCH, 3, "rejected"),
+            ("XRP/USDT", risk.TIERS_READ_FAILED, 30, "rejected"),  # older than 24 hours
+            ("XRP/USDT", risk.TIERS_READ_FAILED, 1, "observed"),   # observe mode is not a refusal
+        ]):
+            s.add(DecisionLog(ts=now - timedelta(hours=hours_ago), account_id="acct-ffffffff", mode="live", market_type="futures", pair=pair, strategy_id="ema_cross_atr_v1", stage="entry", outcome=outcome,
+                              reason_code=reason, candle_ts=i))
+    path = db_path = tmp_path / "test.db"
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    assert pair_skip_report.main([]) == 0
+    out = capsys.readouterr().out
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before  # read-only
+    assert "refused entries, last 24 hours" in out and "maintenance_tiers_read_failed=2" in out and "maintenance_tiers_no_match=1" in out
+    assert "XRP/USDT" in out and "refused    2" in out and "SOL/USDT" in out and "acct-fff" not in out and "acct-ffffffff" not in out
+    assert db_path.exists()
+    assert pair_skip_report.main(["--hours", "48"]) == 0 and "maintenance_tiers_read_failed=3" in capsys.readouterr().out

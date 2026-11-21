@@ -17,3 +17,12 @@ def keep_logging():
         lg.disabled, lg.level, lg.propagate, lg.handlers = disabled, level, propagate, handlers
     root.setLevel(root_state[0])
     root.handlers = root_state[1]
+
+
+@pytest.fixture(autouse=True)
+def _clear_tiers_cache():
+    """The last known good Binance bracket table is kept per account and symbol in memory; no test may see another test's table."""
+    from mba_bot import exchange
+
+    exchange.clear_tiers_cache()
+    yield

@@ -141,7 +141,13 @@ LEVERAGE_MAX = 125.0
 OK = "ok"
 STOP_UNVIABLE = "stop_beyond_safe_liquidation_distance"
 INPUTS_INVALID = "protection_check_inputs_invalid"
-TIERS_UNAVAILABLE = "maintenance_tiers_unavailable"
+# The bracket table could not be used. Three different causes, three codes (before, all three were one code, TIERS_UNAVAILABLE, which stays defined because historical decision-log rows and
+# older queries carry it; nothing writes it any more):
+TIERS_UNAVAILABLE = "maintenance_tiers_unavailable"  # legacy, never produced by assess_stop_viability any more
+TIERS_READ_FAILED = "maintenance_tiers_read_failed"  # the brackets could not be read from Binance (call failed, empty, key mismatch, a field missing)
+TIERS_INVALID = "maintenance_tiers_invalid"  # they were read but the table is not plausible (gap, overlap, falling rate, impossible number)
+TIERS_NO_MATCH = "maintenance_tiers_no_match"  # a plausible table, but no bracket contains this entry's position value
+TIERS_REASONS = (TIERS_UNAVAILABLE, TIERS_READ_FAILED, TIERS_INVALID, TIERS_NO_MATCH)
 MARGIN_MODE_UNKNOWN = "margin_mode_unknown"
 CROSS_UNVERIFIABLE = "cross_margin_unverifiable"
 
@@ -166,30 +172,53 @@ class MaintenanceTier:
     cum: float
 
 
-def validate_tiers(tiers) -> list[MaintenanceTier] | None:
-    """The tiers sorted by floor if they form a plausible, contiguous bracket table, else None (fail closed)."""
+MAX_TIER_RATE = 0.5  # a maintenance-margin rate is a fraction of position value; Binance's top brackets reach 0.5 (UNVERIFIED from memory), nothing above is possible
+
+
+def tiers_problem(tiers) -> str | None:
+    """None when the tiers form a plausible, contiguous bracket table, else a short plain description of the FIRST check that failed (for the journal; it never carries exchange text)."""
     if not tiers:
-        return None
+        return "empty table"
     try:
         if not all(isinstance(t, MaintenanceTier) for t in tiers):
-            return None
+            return "an entry is not a bracket"
         out = sorted(tiers, key=lambda t: t.floor)
-        for t in out:
+        for i, t in enumerate(out, 1):
             vals = (t.floor, t.cap, t.rate, t.cum)
             if any(isinstance(v, bool) or not math.isfinite(float(v)) for v in vals):
-                return None
-            if t.floor < 0 or t.cap <= t.floor or not (0 <= t.rate < 0.5) or t.cum < 0:
-                return None
+                return f"bracket {i}: a value is not a finite number"
+            if t.floor < 0:
+                return f"bracket {i}: floor {t.floor:g} is below 0"
+            if t.cap <= t.floor:
+                return f"bracket {i}: cap {t.cap:g} is not above floor {t.floor:g}"
+            if not (0 <= t.rate <= MAX_TIER_RATE):
+                return f"bracket {i}: rate {t.rate:g} is outside 0 to {MAX_TIER_RATE:g}"
+            if t.cum < 0:
+                return f"bracket {i}: maintenance amount {t.cum:g} is below 0"
         if out[0].floor != 0:
-            return None
-        for a, b in zip(out, out[1:]):
+            return f"first bracket starts at {out[0].floor:g}, not 0"
+        for i, (a, b) in enumerate(zip(out, out[1:]), 1):
             if abs(b.floor - a.cap) > 1e-6 * max(1.0, a.cap):  # a gap or an overlap
-                return None
+                return f"brackets {i} and {i + 1}: cap {a.cap:g} and next floor {b.floor:g} do not meet"
             if b.rate < a.rate:  # rates only rise with size
-                return None
-        return out
-    except (TypeError, ValueError, AttributeError):
+                return f"brackets {i} and {i + 1}: rate falls from {a.rate:g} to {b.rate:g}"
         return None
+    except (TypeError, ValueError, AttributeError):
+        return "a value could not be read as a number"
+
+
+def validate_tiers(tiers) -> list[MaintenanceTier] | None:
+    """The tiers sorted by floor if they form a plausible, contiguous bracket table, else None (fail closed). `tiers_problem` says which check failed."""
+    if tiers_problem(tiers) is not None:
+        return None
+    return sorted(tiers, key=lambda t: t.floor)
+
+
+def no_match_note(table: list[MaintenanceTier], notional: float) -> str:
+    """For the journal: the position value and the brackets that did not contain it (floors and caps, at most 8)."""
+    shown = ", ".join(f"[{t.floor:g}-{t.cap:g}]" for t in table[:8])
+    more = f" (+{len(table) - 8} more)" if len(table) > 8 else ""
+    return f"position value {notional:g} is in none of the brackets {shown}{more}"
 
 
 @dataclass(frozen=True)
@@ -207,12 +236,15 @@ class StopViability:
     notional: float | None = None
     effective_maint_rate: float | None = None
     margin_basis: str | None = None  # "isolated" | "cross"
+    note: str | None = None  # for a refusal about the bracket table: the first failing check, or why no bracket matched (numbers only, no exchange text)
+    tiers_source: str | None = None  # "fresh" (read from Binance now) or "cache" (last known good, within the maximum age); set by the caller that read the brackets
+    tiers_age_seconds: float | None = None  # how old the cached table is, when tiers_source is "cache"
 
     def detail(self) -> dict:
         """Small, non-sensitive numbers for the decision log (fractions, not percent)."""
         keys = (
             "stop_distance_frac", "liquidation_distance_frac", "max_allowed_stop_frac", "margin_mode", "tier",
-            "tier_rate", "tier_cum", "notional", "effective_maint_rate", "margin_basis",
+            "tier_rate", "tier_cum", "notional", "effective_maint_rate", "margin_basis", "note", "tiers_source", "tiers_age_seconds",
         )
         return {k: getattr(self, k) for k in keys}
 
@@ -276,13 +308,16 @@ def assess_stop_viability(
     if margin_mode not in ("isolated", "cross"):
         return fail(MARGIN_MODE_UNKNOWN)
 
-    table = validate_tiers(tiers)
     notional = quantity * entry_price
-    if table is None:
-        return fail(TIERS_UNAVAILABLE, notional=notional)
+    if tiers is None:
+        return fail(TIERS_READ_FAILED, notional=notional)  # the caller could not read the brackets (why is in the journal)
+    problem = tiers_problem(tiers)
+    if problem is not None:
+        return fail(TIERS_INVALID, notional=notional, note=problem)
+    table = validate_tiers(tiers)
     matches = [t for t in table if t.floor <= notional <= t.cap]  # at a boundary both brackets match: take the worse
     if not matches:
-        return fail(TIERS_UNAVAILABLE, notional=notional)
+        return fail(TIERS_NO_MATCH, notional=notional, note=no_match_note(table, notional))
     tier = max(matches, key=lambda t: t.rate - t.cum / notional)
     t_eff = max(tier.rate - tier.cum / notional, min_maint_rate)
 
