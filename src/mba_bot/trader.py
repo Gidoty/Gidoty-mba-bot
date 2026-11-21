@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from . import account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
@@ -751,30 +751,39 @@ async def _block_entry(
 ) -> None:
     """A safety refusal that can repeat every round while a signal persists. The dashboard message is always
     refreshed; the customer is alerted at most once per `protection_alert_repeat_hours` for the same
-    account, pair and reason (plus once after a restart), and the refusal is always logged."""
+    account, pair and reason (kept in the database, so also across a restart or a second process), and the refusal is always logged."""
     logger.warning("account %s: new %s entry refused (%s)", account.id, account.pair, reason)
     account.last_error = message
     account.last_error_at = now
-    if protection_guard.should_alert(
-        account.id, account.pair, reason, now=now, repeat_hours=settings.protection_alert_repeat_hours
+    # The last alert time is kept in the database, so a restart or a second scheduler process cannot send the same alert again inside the window (protection_guard.claim_alert).
+    if protection_guard.claim_alert(
+        object_session(account), account.id, account.pair, reason, now=now, repeat_hours=settings.protection_alert_repeat_hours
     ):
         await _notify_safe(notifier, account, f"MBA Bot did not open a trade: {message}")
 
 
-async def _precheck_entry(client, venue, settings: Settings, *, side, entry_price, stop_price, quantity, leverage, margin_mode, effective_capital):
+async def _precheck_entry(client, venue, settings: Settings, *, side, entry_price, stop_price, quantity, leverage, margin_mode, effective_capital, cache_key=None):
     """Reads (read-only) what the pre-entry protection check needs and returns the verdict. Never raises: any
-    missing or unreadable input becomes a refusal reason, so an unreadable exchange can never wave an entry through."""
+    missing or unreadable input becomes a refusal reason, so an unreadable exchange can never wave an entry through.
+    The bracket read retries once and may use the last known good table of this account and symbol (`cache_key`) for at most
+    PRECHECK_TIERS_CACHE_MAX_AGE_SECONDS, only when the fresh read failed (exchange.read_maintenance_tiers)."""
     try:
-        tiers = await exchange.fetch_maintenance_tiers(client, venue.symbol)
+        read = await exchange.read_maintenance_tiers(client, venue.symbol, cache_key=cache_key, cache_max_age=settings.precheck_tiers_cache_max_age_seconds)
         other_positions = await exchange.fetch_open_position_count(client) if margin_mode == "cross" else 0
-        return assess_stop_viability(
+        check = assess_stop_viability(
             side=side, entry_price=entry_price, stop_price=stop_price, quantity=quantity, leverage=leverage,
-            effective_capital=effective_capital, margin_mode=margin_mode, tiers=tiers,
+            effective_capital=effective_capital, margin_mode=margin_mode, tiers=read.tiers,
             other_open_positions=other_positions, min_maint_rate=settings.precheck_min_maint_rate,
             safety_fraction=settings.precheck_stop_safety_fraction,
             cross_collateral_factor=settings.precheck_cross_collateral_factor,
             max_leverage=settings.precheck_max_leverage,
         )
+        note = check.note
+        if check.reason == risk_module.TIERS_READ_FAILED:
+            note = f"{read.cause}: {read.detail}"[:300]  # the real cause of the failed read (already cleaned of keys and long tokens)
+        elif check.reason in (risk_module.TIERS_INVALID, risk_module.TIERS_NO_MATCH):
+            exchange.warn_tiers(venue.symbol, check.reason, note or "")
+        return dc_replace(check, note=note, tiers_source=(read.source if read.tiers is not None else None), tiers_age_seconds=read.age_seconds)
     except Exception:  # noqa: BLE001
         logger.exception("protection pre-check failed unexpectedly; refusing the entry")
         return StopViability(False, risk_module.INPUTS_INVALID)
@@ -789,7 +798,23 @@ def _precheck_message(account: TradingAccount, check: StopViability, leverage: f
             f"{check.max_allowed_stop_frac * 100:.2f}% is safe). Changing the leverage for this pair on Binance "
             "to a lower number allows trading it again."
         )
-    if check.reason == risk_module.TIERS_UNAVAILABLE:
+    if check.reason == risk_module.TIERS_READ_FAILED:
+        return (
+            f"the bot could not get the position-size safety table Binance publishes for {pair} just now (a connection or Binance problem, not your settings), "
+            "so it could not confirm a protective stop is safe and did not open a trade. It checks again on the next cycle while the signal lasts."
+        )
+    if check.reason == risk_module.TIERS_INVALID:
+        return (
+            f"the position-size safety table Binance sent for {pair} was incomplete or did not add up, so the bot could not confirm a protective stop is safe "
+            "and did not open a trade. This is not caused by your settings. It checks again on the next cycle while the signal lasts."
+        )
+    if check.reason == risk_module.TIERS_NO_MATCH:
+        size = f" ({check.notional:,.2f} USDT)" if check.notional else ""
+        return (
+            f"the position-size safety table Binance published for {pair} does not cover the size of this trade{size}, so the bot could not confirm a protective stop "
+            "is safe and did not open a trade. It checks again on the next cycle while the signal lasts."
+        )
+    if check.reason == risk_module.TIERS_UNAVAILABLE:  # legacy code, no longer produced; kept for old rows
         return (
             f"Binance's margin tiers for {pair} could not be read or matched just now, so the bot could not confirm a "
             "protective stop is safe. This will retry automatically on the next check."
@@ -1292,7 +1317,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         if account.market_type == "futures" and settings.protection_precheck_mode != "off":
             check = await _precheck_entry(
                 client, venue, settings, side=side, entry_price=current_price, stop_price=stop_price, quantity=quantity,
-                leverage=leverage, margin_mode=margin_mode, effective_capital=effective_capital,
+                leverage=leverage, margin_mode=margin_mode, effective_capital=effective_capital, cache_key=f"{account.id}:{venue.symbol}",
             )
             precheck_detail = check.detail()
             if not check.viable:

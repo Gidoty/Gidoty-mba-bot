@@ -7,14 +7,18 @@ recommended deployment shape here.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
+import re
 import time
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import ccxt.async_support as ccxt_async
 
+from . import risk as risk_module
 from .risk import MaintenanceTier
 
 logger = logging.getLogger(__name__)
@@ -442,37 +446,206 @@ async def fetch_symbol_leverage(client: ccxt_async.Exchange, pair: str, *, side:
     return (await fetch_symbol_leverage_and_margin_mode(client, pair, side=side))[0]
 
 
-async def fetch_maintenance_tiers(client: ccxt_async.Exchange, pair: str) -> list[MaintenanceTier] | None:
-    """Read-only. The symbol's Binance leverage brackets (notional range, maintenance-margin rate, maintenance
-    amount `cum`), fetched fresh on every call (never cached here, so never stale by more than this call), or None
-    when they cannot be read or are incomplete. The caller treats None as "cannot prove the stop is safe"."""
+# ---------------------------------------------------------------------------------------------------- Binance leverage brackets (maintenance tiers)
+# The pre-entry protection check (risk.assess_stop_viability) needs the symbol's brackets. A failed read used to return None with no trace; now every failure says WHY in the journal (once per pair and cause
+# per scheduler round), is retried once after a short pause when a retry can help, and, only when a FRESH read still fails, the last known good table for the same account and symbol may stand in for it
+# while it is younger than a strict maximum age (see TiersRead and docs/safety/pre_entry_protection_check.md). Nothing here ever invents a bracket: no data means None, and None refuses the entry.
+TIERS_RETRY_PAUSE_S = 0.75  # one retry, after this pause; far below the scheduler's cycle watchdog (120 s by default)
+TIERS_RETRY_SKIP_AFTER_S = 20.0  # no retry when the first attempt alone already took this long (the round budget matters more)
+TIERS_LOG_WINDOW_S = 240.0  # used only when the scheduler never announced a round (tests, one-off scripts)
+
+CAUSE_EXCEPTION = "exception"  # the call raised
+CAUSE_EMPTY = "empty_response"  # Binance answered with nothing usable (None, not a mapping, an empty mapping)
+CAUSE_PAIR_MISSING = "pair_missing"  # an answer with entries, but none for the symbol asked about (a key mismatch, or a response shape ccxt did not parse)
+CAUSE_NO_TIERS = "no_tiers_for_pair"  # the symbol's entry holds no brackets
+CAUSE_FIELD_MISSING = "field_missing"  # a bracket lacks a field (for example the maintenance amount `cum`)
+CAUSE_NOT_NUMBER = "non_numeric_field"  # a bracket field is not a number
+_RETRYABLE = frozenset({CAUSE_EXCEPTION, CAUSE_EMPTY, CAUSE_PAIR_MISSING, CAUSE_NO_TIERS})
+
+_SECRETISH = re.compile(r"(?i)\b(api[-_ ]?key|secret|signature|token|authorization|password)\b[^\s,;]*|[A-Za-z0-9_\-]{24,}")
+_BINANCE_CODE = re.compile(r'"code"\s*:\s*(-?\d+)')
+
+
+def scrub_exchange_text(text: object, limit: int = 200) -> str:
+    """An exchange or library message made safe for the journal: cut to `limit` characters, and anything that looks like a key, signature, token or other long secret-like string removed."""
+    cleaned = _SECRETISH.sub("<removed>", str(text))
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:limit]
+
+
+def _exception_facts(exc: BaseException) -> str:
+    """Class, a cleaned message, and the HTTP status and Binance error code when they are there. Never headers, never the request."""
+    parts = [f"{type(exc).__name__}: {scrub_exchange_text(exc)}"]
+    status = getattr(exc, "http_status", None) or getattr(exc, "status", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        parts.append(f"http status {status}")
+    match = _BINANCE_CODE.search(str(exc))
+    if match:
+        parts.append(f"binance code {match.group(1)}")
+    return ", ".join(parts)
+
+
+@dataclass(frozen=True)
+class TiersRead:
+    """The outcome of reading a symbol's brackets. `tiers` is None when nothing usable exists (the entry is then refused). `source` is "fresh" (read now), "cache" (the fresh read failed and the last known
+    good table, `age_seconds` old, stood in) or "none". `cause` and `detail` describe the FRESH read's failure, even when the cache served."""
+
+    tiers: list[MaintenanceTier] | None
+    source: str = "fresh"
+    age_seconds: float | None = None
+    cause: str | None = None
+    detail: str | None = None
+    attempts: int = 1
+
+
+_CACHE: dict[str, tuple[float, list[MaintenanceTier]]] = {}
+_clock = time.monotonic
+_sleep = asyncio.sleep  # tests replace it so a retry pause costs nothing
+_round = [0]
+_logged: dict[tuple[str, str], tuple[int, float]] = {}
+
+
+def clear_tiers_cache() -> None:  # tests
+    _CACHE.clear()
+    _logged.clear()
+    _round[0] = 0
+
+
+def begin_round() -> None:
+    """Called by the scheduler at the start of each round: a failure is journalled once per pair and cause per round."""
+    _round[0] += 1
+
+
+def warn_tiers(symbol: str, cause: str, detail: str) -> None:
+    """One WARNING per (symbol, cause) per scheduler round, with the real cause. Further identical failures in the same round (other accounts on the same pair) stay quiet."""
+    key = (symbol, cause)
+    now = _clock()
+    last = _logged.get(key)
+    if last is not None and ((_round[0] != 0 and last[0] == _round[0]) or (_round[0] == 0 and now - last[1] < TIERS_LOG_WINDOW_S)):
+        return
+    if len(_logged) > 500:
+        _logged.clear()
+    _logged[key] = (_round[0], now)
+    logger.warning("binance maintenance tiers for %s: %s (%s)", symbol, cause, detail)
+
+
+def _convert(raw) -> tuple[list[MaintenanceTier] | None, str | None, str | None]:
+    """ccxt's parsed leverage tiers for one symbol -> our brackets, or (None, cause, detail) naming the first thing wrong."""
+    if not isinstance(raw, list) or not raw:
+        return None, CAUSE_NO_TIERS, f"the symbol's entry is {type(raw).__name__}" + (f" of length {len(raw)}" if isinstance(raw, (list, dict)) else "")
+    out: list[MaintenanceTier] = []
+    for i, item in enumerate(raw, 1):
+        info = item.get("info") if isinstance(item, dict) else None
+        if not isinstance(item, dict) or not isinstance(info, dict):
+            return None, CAUSE_FIELD_MISSING, f"bracket {i}: no readable entry or info"
+        if info.get("cum") is None:
+            return None, CAUSE_FIELD_MISSING, f"bracket {i}: field cum (maintenance amount) missing"  # without it the rate alone would be wrong
+        for name in ("minNotional", "maxNotional", "maintenanceMarginRate"):
+            if item.get(name) is None:
+                return None, CAUSE_FIELD_MISSING, f"bracket {i}: field {name} missing"
+        try:
+            out.append(MaintenanceTier(tier=item.get("tier"), floor=float(item["minNotional"]), cap=float(item["maxNotional"]), rate=float(item["maintenanceMarginRate"]), cum=float(info["cum"])))
+        except (TypeError, ValueError):
+            bad = next((n for n, v in (("minNotional", item["minNotional"]), ("maxNotional", item["maxNotional"]), ("maintenanceMarginRate", item["maintenanceMarginRate"]), ("cum", info["cum"]))
+                        if not _is_numberish(v)), "a field")
+            return None, CAUSE_NOT_NUMBER, f"bracket {i}: field {bad} is not a number"
+    return out, None, None
+
+
+def _is_numberish(value) -> bool:
+    try:
+        float(value)
+        return not isinstance(value, bool)
+    except (TypeError, ValueError):
+        return False
+
+
+def _items_from_raw(response, market_id: str) -> tuple[list, str]:
+    """The symbol's entry from Binance's own leverageBracket answer, in either documented shape: a list (one entry per symbol) or a single object with `brackets`, or a mapping keyed by symbol."""
+    if isinstance(response, list):
+        entries = [x for x in response if isinstance(x, dict)]
+        mine = [x for x in entries if x.get("symbol") == market_id] or (entries if len(entries) == 1 else [])
+        return mine, f"list of {len(response)}"
+    if isinstance(response, dict):
+        if "brackets" in response:
+            return [response], "single object"
+        entries = [v for v in response.values() if isinstance(v, dict) and "brackets" in v]
+        return entries, f"mapping of {len(response)}"
+    return [], type(response).__name__
+
+
+async def _read_once(client, pair: str, *, raw: bool) -> tuple[list[MaintenanceTier] | None, str | None, str | None]:
+    """One attempt. Returns (tiers, cause, detail). `raw` asks Binance's endpoint directly and parses either answer shape (the second attempt when ccxt's own parse found nothing for the symbol)."""
     try:
         params = {}
+        market = None
         try:
-            params = {"symbol": client.market(pair)["id"]}  # one symbol instead of the whole exchange
+            market = client.market(pair)
+            params = {"symbol": market["id"]}  # one symbol instead of the whole exchange
         except Exception:  # noqa: BLE001
             params = {}
+        raw_fn = getattr(client, "fapiPrivateGetLeverageBracket", None) if raw else None
+        if raw_fn is not None and market is not None and hasattr(client, "parse_market_leverage_tiers"):
+            response = await raw_fn(params)
+            items, shape = _items_from_raw(response, market["id"])
+            if not items:
+                return None, CAUSE_EMPTY if not response else CAUSE_PAIR_MISSING, f"raw answer shape {shape}, no entry for {market['id']}"
+            return _convert(client.parse_market_leverage_tiers(items[0], market))
         response = await client.fetch_leverage_tiers([pair], params)
-        raw = response.get(pair) if isinstance(response, dict) else None
-        if not isinstance(raw, list) or not raw:
-            return None
-        out: list[MaintenanceTier] = []
-        for item in raw:
-            info = item.get("info") if isinstance(item, dict) else None
-            if not isinstance(info, dict) or info.get("cum") is None:
-                return None  # without the maintenance amount the rate alone would be wrong
-            out.append(
-                MaintenanceTier(
-                    tier=item.get("tier"),
-                    floor=float(item["minNotional"]),
-                    cap=float(item["maxNotional"]),
-                    rate=float(item["maintenanceMarginRate"]),
-                    cum=float(info["cum"]),
-                )
-            )
-        return out
-    except Exception:  # noqa: BLE001
-        return None
+        if not isinstance(response, dict) or not response:
+            length = f", length {len(response)}" if hasattr(response, "__len__") else ""
+            return None, CAUSE_EMPTY, f"response type {type(response).__name__}{length}"
+        if pair not in response:
+            keys = ", ".join(scrub_exchange_text(k, 30) for k in list(response)[:5])
+            return None, CAUSE_PAIR_MISSING, f"response has {len(response)} entr{'y' if len(response) == 1 else 'ies'} but none for {pair}; first keys: {keys}"
+        return _convert(response[pair])
+    except Exception as exc:  # noqa: BLE001
+        return None, CAUSE_EXCEPTION, _exception_facts(exc)
+
+
+async def read_maintenance_tiers(
+    client: ccxt_async.Exchange, pair: str, *, retry: bool = True, cache_key: str | None = None, cache_max_age: float = 0.0, pause: float = TIERS_RETRY_PAUSE_S, sleeper=None,
+) -> TiersRead:
+    """Read-only. The symbol's Binance leverage brackets (notional range, maintenance-margin rate, maintenance amount `cum`).
+
+    A fresh read first. If it fails with a cause a second try can fix (an exception, an empty or mismatched answer), one retry follows after `pause` seconds (the retry asks Binance's endpoint directly and
+    understands both answer shapes), unless the first attempt already took TIERS_RETRY_SKIP_AFTER_S. Every failure is logged with its real cause (scrub_exchange_text keeps keys and long tokens out).
+
+    The last known good table is stored per `cache_key` (the caller passes account and symbol) every time a fresh read passes risk.tiers_problem. Only when the FRESH read failed, and only when
+    `cache_max_age` is above 0 and the stored table is no older than it, that table is returned with source "cache". It is never used when the fresh read worked (even if the fresh table is later rejected as
+    invalid or does not contain the position value), and the caller still matches the position value against it: a value outside the cached table is refused like any other."""
+    started = _clock()
+    tiers, cause, detail = await _read_once(client, pair, raw=False)
+    attempts = 1
+    if tiers is None and retry and cause in _RETRYABLE and _clock() - started < TIERS_RETRY_SKIP_AFTER_S:
+        await (sleeper or _sleep)(max(0.0, pause))
+        tiers, cause2, detail2 = await _read_once(client, pair, raw=True)
+        attempts = 2
+        if tiers is None:
+            detail = f"{detail}; after one retry: {cause2} ({detail2})"
+            cause = cause2 or cause
+    if tiers is not None:
+        if attempts == 2:
+            logger.info("binance maintenance tiers for %s: read succeeded after one retry", pair)
+        if cache_key and risk_module.tiers_problem(tiers) is None:
+            _CACHE[cache_key] = (_clock(), tiers)
+        return TiersRead(tiers=tiers, source="fresh", attempts=attempts)
+    warn_tiers(pair, cause or CAUSE_EXCEPTION, f"{detail}; attempts {attempts}")
+    if cache_key and cache_max_age > 0:
+        hit = _CACHE.get(cache_key)
+        if hit is not None:
+            age = _clock() - hit[0]
+            if 0 <= age <= cache_max_age:
+                logger.warning("binance maintenance tiers for %s: using the last known good table (%.0f s old, at most %.0f s allowed)", pair, age, cache_max_age)
+                return TiersRead(tiers=hit[1], source="cache", age_seconds=round(age, 1), cause=cause, detail=detail, attempts=attempts)
+            _CACHE.pop(cache_key, None)  # too old: never used again
+    return TiersRead(tiers=None, source="none", cause=cause, detail=detail, attempts=attempts)
+
+
+async def fetch_maintenance_tiers(client: ccxt_async.Exchange, pair: str) -> list[MaintenanceTier] | None:
+    """Read-only, one fresh attempt, no retry and no cache: the symbol's brackets, or None when they cannot be read or are incomplete (the cause is logged). The pre-entry check uses
+    read_maintenance_tiers; this stays for callers that want exactly one read. The caller treats None as "cannot prove the stop is safe"."""
+    return (await read_maintenance_tiers(client, pair, retry=False)).tiers
 
 
 async def fetch_open_position_count(client: ccxt_async.Exchange) -> int | None:

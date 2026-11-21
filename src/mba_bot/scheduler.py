@@ -189,6 +189,7 @@ async def _wait_round(tasks: dict[asyncio.Task, str], *, timeout: float, label: 
 
 
 async def run_once(settings: Settings) -> None:
+    exchange.begin_round()  # a failed Binance bracket read is journalled once per pair and cause per round (exchange.warn_tiers)
     with session_scope() as session:
         account_ids = [a.id for a in list_active_accounts(session)]
 

@@ -799,3 +799,15 @@ class AdminAudit(Base):
     path: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[int] = mapped_column(Integer, nullable=False)
     detail: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class AlertMark(Base):
+    """When a customer alert for one account, pair and reason was last sent (protection_guard.claim_alert). It lives in the database, not in process memory, so a restart or a second scheduler process cannot
+    repeat an alert inside `protection_alert_repeat_hours`. Holds an account id, a pair, a fixed reason code and a time: no text, no secret. Nothing else reads it."""
+
+    __tablename__ = "alert_marks"
+
+    account_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    pair: Mapped[str] = mapped_column(String(20), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(48), primary_key=True)
+    last_alert_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

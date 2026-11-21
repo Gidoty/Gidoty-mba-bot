@@ -42,8 +42,7 @@ opening and closing trades while its guard only observes. Keep such an account i
 
 ## 1. Pre-entry check (`risk.assess_stop_viability`)
 
-Runs for live Futures entries only, after sizing and before any order. It reads, fresh on every entry attempt (nothing
-is cached by this code, so data is never staler than that call):
+Runs for live Futures entries only, after sizing and before any order. It reads, fresh on every entry attempt (the last known good bracket table is kept only as a fallback for a FAILED read, see "Reading the brackets"):
 
 * leverage and margin mode: the existing `fetch_leverage` read (symbol config);
 * the symbol's leverage brackets: `fetch_leverage_tiers` (notional floor and cap, maintenance-margin rate, maintenance
@@ -74,13 +73,40 @@ Largest stop distance allowed with the defaults (flat 0.4% bracket, so `t` is th
 Brackets that matter use the maintenance amount: at 100,000 notional in a 0.5% bracket with `cum` 50, `t` is 0.45%, not 0.5%.
 A notional exactly on a bracket boundary takes the worse of the two brackets.
 
+### Reading the brackets (changed 21 Nov 2026)
+
+On 21 Nov live Futures entries on XRP/USDT and SOL/USDT were refused as "margin tiers could not be read or matched", the XRP alert came up to four times in 35 minutes, and the journal could not say why (every failed
+read returned nothing, and one reason code covered three different causes). Now:
+
+* **The cause is journalled.** Every failed read writes ONE WARNING per pair and cause per scheduler round: `binance maintenance tiers for <symbol>: <cause> (<detail>)`. Causes: `exception` (class, message cut to 200
+  characters with anything that looks like a key, signature or long token removed, HTTP status and Binance error code when present), `empty_response` (type and length), `pair_missing` (the first keys it got), `no_tiers_for_pair`,
+  `field_missing` (bracket number and field), `non_numeric_field`. An invalid table logs its first failing check; a no-match logs the position value and the bracket floors and caps.
+* **One retry**, after a 0.75 s pause, on an exception, an empty answer, a missing symbol entry or an empty bracket list (not on a data problem such as a missing `cum`), skipped when the first attempt already took 20 s
+  (the cycle watchdog is 120 s). The retry asks Binance's `leverageBracket` endpoint directly and reads either documented answer shape (a list, or one object with `brackets`). With ccxt 4.5.88 a single-object answer
+  parses to an empty result through `fetch_leverage_tiers`, which the old code turned into a silent failure; a test pins that. WHICH shape Binance returns for a request with a `symbol` is UNVERIFIED (the Binance page could not
+  be reached from the development environment).
+* **Last known good table** (`PRECHECK_TIERS_CACHE_MAX_AGE_SECONDS`, default 21600 = 6 hours, 0 = off). Every plausible fresh table is stored in memory per ACCOUNT and symbol. It is used ONLY when a fresh read failed, only while
+  no older than the maximum (`age <= max`; older tables are dropped), never when the fresh read worked (even if it is then refused as invalid or no-match), never for another account or symbol, and never for a position value
+  outside the stored table (that is `maintenance_tiers_no_match`). An entry that passes on a stored table is marked `tiers_source: cache` and `tiers_age_seconds` in the decision log, and the journal says so. Why 6 hours: the
+  brackets are a static per-symbol table that Binance changes by announcement (rarely: weeks to months apart, UNVERIFIED), the check already carries a safety fraction and a 0.5% floor, and after the fill the venue's own
+  protection check uses the real liquidation price and closes the position if the stop cannot sit inside it. A stored table is therefore a bounded, marked estimate, never invented data. The table is lost on a restart (it
+  is not persisted), and a failed read with no usable table refuses the entry exactly as before.
+* **Alerts survive restarts and a second process.** The refusal alert (`_block_entry`) is limited to one per account, pair and reason per `PROTECTION_ALERT_REPEAT_HOURS` using a database table (`alert_marks`, migration
+  `b2e7d4a9c6f1`, additive, reversible; the table is also created at start like the other tables). The check-and-claim is one atomic statement committed before the message is sent. Before this, the limit lived in process memory,
+  so every restart repeated the alert, and `API_SINGLE_INSTANCE_LOCK` is off by default so two scheduler processes can run. Several accounts on one pair each still get their own alert. If the database cannot be used the
+  in-memory limit applies as before.
+* **Refused entries are countable.** `python -m mba_bot.pair_skip_report` now also prints "refused entries, last 24 hours" per pair and reason from the decision log (needs `TRADE_TELEMETRY`; `--hours N` changes the window).
+
 ### What fails closed (entry refused, specific reason code)
 
 | Reason code | When |
 |---|---|
 | `stop_beyond_safe_liquidation_distance` | the stop is not inside `PRECHECK_STOP_SAFETY_FRACTION` of the estimated distance, or the distance is not positive |
 | `protection_check_inputs_invalid` | a price, quantity or capital is missing, non-finite or non-positive; the stop is on the wrong side of entry; leverage is outside 1 to `PRECHECK_MAX_LEVERAGE` (125), or is a boolean, string, NaN or infinite; a setting is out of range; the check itself raised |
-| `maintenance_tiers_unavailable` | the bracket read failed, a bracket lacks `cum`, the table is empty, has a gap or overlap, does not start at 0, has a rate outside 0 to 50% or a rate that falls with size, or no bracket contains `N` |
+| `maintenance_tiers_read_failed` | the brackets could not be read: the call failed, Binance answered with nothing usable, the answer had no entry for the symbol, or a bracket lacked a field such as `cum` (the cause is in the journal, see "Reading the brackets") |
+| `maintenance_tiers_invalid` | the brackets were read but the table is not plausible: empty, a gap or overlap, does not start at 0, a rate outside 0 to 50% (50% itself is allowed) or a rate that falls with size, a negative `cum`, a non-finite number. The first failing check is in the journal and the decision-log `note` |
+| `maintenance_tiers_no_match` | a plausible table, but no bracket contains `N` (the journal and the `note` give `N` and the floors and caps) |
+| `maintenance_tiers_unavailable` | the OLD code for all three tiers causes above. Nothing writes it any more; historical decision-log rows carry it. Queries should use `reason_code LIKE 'maintenance_tiers_%'` |
 | `margin_mode_unknown` | Binance did not report isolated or cross (it is not assumed) |
 | `cross_margin_unverifiable` | cross margin and the account holds any other open position, or the position list could not be read reliably |
 
@@ -204,7 +230,7 @@ These are not resolved by anything on this branch and must be closed before the 
 2. **Live response shapes.** The bracket call is made with `{"symbol": <id>}` and the code requires `cum` in every
    bracket; the cross-margin check uses the account-wide position list. Both are written against ccxt 4.5.88's
    documented samples, never against a live response. If the real shapes differ, enforce mode would refuse every futures
-   entry (`maintenance_tiers_unavailable` or `cross_margin_unverifiable`): safe, but a trading outage.
+   entry (`maintenance_tiers_read_failed`, `maintenance_tiers_invalid` or `cross_margin_unverifiable`): safe, but a trading outage. Since 21 Nov the journal names which.
 3. **Margin mode and leverage fields** (`marginType`, `leverage`) of the symbol-config read, same caveat.
 
 Observe mode is how gates 2 and 3 are closed in practice: real entry attempts will show real tiers, `cum` and margin
@@ -216,7 +242,7 @@ modes in the `precheck` numbers (decision log or `[observe]` journal lines) befo
    `TRADE_TELEMETRY` on so the decision log is complete. An account that is already looping stays exposed in observe;
    keep it inactive, or enforce the limits first (below).
 2. Watch `decision_log` (`outcome = 'observed'`) and the journal (`[observe]` lines, including the pass lines) over
-   several real entries. Look for read failures (`maintenance_tiers_unavailable`, `margin_mode_unknown`,
+   several real entries. Look for read failures (`maintenance_tiers_read_failed`, `maintenance_tiers_invalid`, `maintenance_tiers_no_match`, `margin_mode_unknown`,
    `cross_margin_unverifiable`), implausible `cum` or rates, and observed refusals on trades that were then protected.
 3. Move `PROTECTION_FAIL_LIMIT_MODE` to `enforce` first (it only acts after exits have really happened), then
    `PROTECTION_PRECHECK_MODE` once gates 1 to 3 are closed.
