@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { linkButton, secondaryButton } from "../components/form.jsx";
+import DataRequestCard from "../components/DataRequestCard.jsx";
 import { Card, CardTitle, PageHeader, Pill } from "../components/ui.jsx";
 import { MARKET_TYPES } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
@@ -91,6 +92,8 @@ export default function Account({ customer, onLogout }) {
           <a className={linkButton} href="#/risk-disclosure">Trading Risk Disclosure</a>
         </div>
       </Card>
+
+      <DataRequestCard />
 
       <button type="button" onClick={onLogout} className={`${secondaryButton} w-full`}>
         Log out

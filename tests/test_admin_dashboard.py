@@ -725,7 +725,7 @@ def test_the_migration_is_additive_idempotent_reversible_and_matches_the_models(
     run(mig.downgrade)  # reversible and repeatable
     assert not inspect(eng).has_table("admin_totp") and not inspect(eng).has_table("admin_audit")
     script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
-    assert script.get_heads() == ["b2e7d4a9c6f1"] and mig.down_revision == "d9b5f7c2e4a6"
+    assert script.get_heads() == ["c3f8a2d5b7e9"] and mig.down_revision == "d9b5f7c2e4a6"
 
 
 # ------------------------------------------------------------------------------------------------ "paid" and the modes follow the entitlement rule, flag off and on

@@ -412,7 +412,7 @@ def test_the_head_is_the_new_revision_on_top_of_the_opt_in_migration():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["b2e7d4a9c6f1"]  # (the head moved on with the daily loss limit)
+    assert script.get_revision("a8d2f6c1e3b7").down_revision == "f3c8a1d6e2b9" and script.get_heads() == ["c3f8a2d5b7e9"]  # (the head moved on with the daily loss limit)
 
 
 def test_the_pause_row_is_unique_per_account_kind_and_day(db):

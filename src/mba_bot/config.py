@@ -141,6 +141,13 @@ def parse_strategy_guards_mode(raw: str | None) -> str:
     return value if value in ("observe", "enforce") else "off"
 
 
+def parse_signups_mode(raw: str | None) -> str:
+    """open | closed for creating NEW customer accounts (docs/commercial_readiness.md). Unset or empty is open, so nothing changes by default. Any other value that is not "open" is closed: a
+    mistyped value must never leave registration open to strangers while the operator thinks it is shut."""
+    value = (raw or "").strip().lower()
+    return "open" if value in ("", "open") else "closed"
+
+
 def parse_guard_mode(raw: str | None) -> str:
     """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
     value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
@@ -436,6 +443,8 @@ class Settings:
     # Admin dashboard (docs/security/admin_dashboard.md): False = off (default), the admin routes are not mounted (404). ADMIN_EMAILS is the only list of admins (never a database column).
     admin_dashboard_enabled: bool = False
     admin_emails: tuple = ()
+    # Registration of NEW customers: "open" (default) or "closed" (a new signup is refused with a plain message; login, activation of existing customers and the admin dashboard are unaffected).
+    signups_mode: str = "open"
     subscription_billing_enabled: bool = False
     # Days a subscription stays entitled after its paid period ends (owner decision D2: 5). Malformed or negative counts as the default or 0.
     subscription_grace_days: int = 5
@@ -656,6 +665,7 @@ def load_settings() -> Settings:
         pnl_labels=_env_bool("PNL_LABELS", False),
         admin_dashboard_enabled=_env_bool("ADMIN_DASHBOARD_ENABLED", False),
         admin_emails=tuple(sorted({e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS") or "").split(",") if e.strip()})),
+        signups_mode=parse_signups_mode(os.environ.get("SIGNUPS_MODE")),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         subscription_grace_days=_grace_days_from_env(),
         paystack_plan_code=os.environ.get("PAYSTACK_PLAN_CODE") or None,

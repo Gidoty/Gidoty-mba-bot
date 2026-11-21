@@ -9,9 +9,10 @@ import ConsentCheckbox from "./ConsentCheckbox.jsx";
 // who signed up before these documents existed and therefore has zero
 // acceptance rows on file. Nothing lets them past this except actually
 // checking both boxes; there is no backdated/implicit acceptance.
-export default function LegalConsentGate({ onAccepted, onLogout }) {
+export default function LegalConsentGate({ onAccepted, onLogout, riskNeeded = false }) {
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [acknowledgePrivacy, setAcknowledgePrivacy] = useState(false);
+  const [acceptRisk, setAcceptRisk] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,6 +24,7 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
       await api.post("/auth/accept-legal", {
         accept_terms: acceptTerms,
         acknowledge_privacy: acknowledgePrivacy,
+        accept_risk_disclosure: acceptRisk,
       });
       await onAccepted();
     } catch (err) {
@@ -38,10 +40,10 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
         onSubmit={handleSubmit}
         className="w-full max-w-md space-y-4 rounded-lg border border-line bg-surface p-8 shadow-sm"
       >
-        <h1 className="text-xl font-semibold text-fg">Updated Terms of Service and Privacy Policy</h1>
+        <h1 className="text-xl font-semibold text-fg">{riskNeeded ? "Updated Terms, Privacy Policy and Risk Disclosure" : "Updated Terms of Service and Privacy Policy"}</h1>
         <p className="text-sm text-muted">
-          We've introduced a Terms of Service and a Privacy Policy. Please review and accept them to continue
-          using your account.
+          We updated our legal texts. Please read and accept them to continue using your account.
+          {riskNeeded && " Your live trading stays managed while you read: open trades keep their stop-loss and exit rules."}
         </p>
 
         {error && <p className="rounded-md bg-neg-soft px-3 py-2 text-sm text-fg">{error}</p>}
@@ -71,9 +73,24 @@ export default function LegalConsentGate({ onAccepted, onLogout }) {
           }
         />
 
+        {riskNeeded && (
+          <ConsentCheckbox
+            checked={acceptRisk}
+            onChange={setAcceptRisk}
+            label={
+              <>
+                I accept the{" "}
+                <a href="#/risk-disclosure" target="_blank" rel="noopener noreferrer" className="text-brand-text hover:underline">
+                  Trading Risk Disclosure
+                </a>
+              </>
+            }
+          />
+        )}
+
         <button
           type="submit"
-          disabled={!acceptTerms || !acknowledgePrivacy || submitting}
+          disabled={!acceptTerms || !acknowledgePrivacy || (riskNeeded && !acceptRisk) || submitting}
           className="w-full rounded-md bg-brand px-4 py-2 font-medium text-brand-ink hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {submitting ? "Saving..." : "Continue"}

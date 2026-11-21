@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { api } from "../api/client.js";
 import AuthLayout from "../components/AuthLayout.jsx";
@@ -14,6 +14,12 @@ export default function Signup({ onAuthed }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [closedMessage, setClosedMessage] = useState(null);
+
+  // The server says whether new accounts can be created right now (SIGNUPS_MODE). If it cannot be reached the form shows as usual; the server refuses a closed signup anyway.
+  useEffect(() => {
+    api.get("/auth/signups").then((s) => { if (s && s.open === false) setClosedMessage(s.message || "New registrations are closed right now."); }).catch(() => {});
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -44,6 +50,14 @@ export default function Signup({ onAuthed }) {
         <p className="mt-1 text-sm text-muted">It takes a minute.</p>
       </div>
 
+      {closedMessage ? (
+        <div className="space-y-3 rounded-card border border-line bg-surface p-5">
+          <p className="text-sm text-fg">{closedMessage}</p>
+          <button type="button" onClick={() => navigate("login")} className="font-medium text-brand-text hover:underline">
+            Log in
+          </button>
+        </div>
+      ) : (
       <form onSubmit={handleSubmit} className="space-y-4 rounded-card border border-line bg-surface p-5">
         <ErrorBanner message={error} />
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" placeholder="you@example.com" required />
@@ -98,6 +112,7 @@ export default function Signup({ onAuthed }) {
           </button>
         </p>
       </form>
+      )}
     </AuthLayout>
   );
 }

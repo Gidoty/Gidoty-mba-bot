@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..config import Settings, load_settings
 from ..db import session_scope
 from .. import pair_catalog
-from ..legal import has_current_terms_and_privacy
+from ..legal import legal_acceptance_current
 from ..models import Customer
 from .security import SESSION_COOKIE_NAME, TokenError, read_customer_id
 
@@ -48,15 +48,18 @@ def require_legal_acceptance(
     accepted the CURRENT Terms of Service and Privacy Policy can't reach
     any trading functionality, however they got here - including a
     customer who signed up before these documents existed and therefore
-    has zero acceptance rows on file. Nothing backfills that; they have
+    has zero acceptance rows on file (and, once live trading is enabled, the current Risk Disclosure). Nothing backfills that; they have
     to actually accept it once, via POST /api/auth/accept-legal. The
     distinct "ACCEPTANCE_REQUIRED" prefix lets the frontend tell this
     apart from an ordinary 403 and show the consent screen instead of a
-    generic error."""
-    if not has_current_terms_and_privacy(db, customer_id=customer.id):
+    generic error.
+
+    This gate is for the API ONLY. The trading engine (scheduler, trader, lifecycle, reconciler, protective stops) never reads consent: an open live trade is managed to its exit whatever the
+    customer's acceptance state (tests/test_commercial_consent.py pins that)."""
+    if not legal_acceptance_current(db, customer_id=customer.id):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "ACCEPTANCE_REQUIRED: accept the current Terms of Service and Privacy Policy before continuing",
+            "ACCEPTANCE_REQUIRED: accept the current Terms of Service, Privacy Policy and (if live trading is on) Risk Disclosure before continuing",
         )
     return customer
 
