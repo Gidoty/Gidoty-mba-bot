@@ -338,6 +338,28 @@ async def _billing_reminders(settings: Settings) -> None:
         logger.warning("billing reminder pass failed; it will be tried again later")
 
 
+_RENEWAL_JOB_EVERY_SECONDS = 3600.0
+_RENEWAL_JOB_TIMEOUT_SECONDS = 120.0
+_last_renewal_job = 0.0
+
+
+async def _renewal_reconcile(settings: Settings) -> None:
+    """Paystack renewal recovery (billing/renewal_job.py). Does NOTHING unless SUBSCRIPTION_BILLING_ENABLED and PAYSTACK_RENEWAL_RECONCILE are both on; at most hourly; runs after the round with a time limit, and
+    every failure is caught here, so it can never delay or affect a trading cycle beyond that limit."""
+    global _last_renewal_job
+    if not (settings.subscription_billing_enabled and settings.paystack_renewal_reconcile):
+        return
+    now = time.monotonic()
+    if _last_renewal_job and now - _last_renewal_job < _RENEWAL_JOB_EVERY_SECONDS:
+        return
+    _last_renewal_job = now
+    try:
+        from .billing.renewal_job import run_once
+        await asyncio.wait_for(run_once(settings), timeout=_RENEWAL_JOB_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("billing: outcome=error reason=renewal_job_failed cause=%s", type(exc).__name__)
+
+
 async def run_poll_forever(settings: Settings) -> None:
     while True:
         try:
@@ -345,6 +367,7 @@ async def run_poll_forever(settings: Settings) -> None:
         except Exception:
             logger.exception("unexpected error in scheduler loop")
         await _billing_reminders(settings)
+        await _renewal_reconcile(settings)
         await asyncio.sleep(settings.poll_interval_seconds)
 
 

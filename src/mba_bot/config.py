@@ -88,13 +88,17 @@ def parse_ipn_mode(raw: str | None) -> str:
 
 
 def _price_from_env(raw: str | None) -> str:
-    """The USD price as a decimal string. A malformed, zero or negative value falls back to 10 (the owner's decision)."""
+    """The USD price as a decimal string. Unset or empty is the default, 10 (the owner's decision). A malformed, zero or negative value is NOT replaced by 10: it returns "" so that the checkout refuses to create
+    an invoice (billing/nowpayments.price_problem) instead of silently charging a price nobody chose."""
     from decimal import Decimal, InvalidOperation
-    try:
-        value = Decimal((raw or "10").strip())
-    except InvalidOperation:
+    text = (raw or "").strip()
+    if not text:
         return "10"
-    return str(value) if value.is_finite() and value > 0 else "10"
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return ""
+    return str(value) if value.is_finite() and value > 0 else ""
 
 
 def _tolerance_from_env(raw: str | None) -> float:
@@ -451,6 +455,9 @@ class Settings:
     # Registration of NEW customers: "open" (default) or "closed" (a new signup is refused with a plain message; login, activation of existing customers and the admin dashboard are unaffected).
     signups_mode: str = "open"
     subscription_billing_enabled: bool = False
+    # Hourly recovery of a Paystack renewal whose webhook never arrived (docs/security/billing_paystack_subscriptions.md). OFF by default: it makes read-only calls with the live Paystack key, and the operator
+    # enables anything that uses a secret key by hand. Read only while SUBSCRIPTION_BILLING_ENABLED is on.
+    paystack_renewal_reconcile: bool = False
     # Days a subscription stays entitled after its paid period ends (owner decision D2: 5). Malformed or negative counts as the default or 0.
     subscription_grace_days: int = 5
     # Stage 1 (Paystack subscriptions). Read only while SUBSCRIPTION_BILLING_ENABLED is on. The plan is created by the
@@ -468,7 +475,7 @@ class Settings:
     nowpayments_api_key: str | None = field(default=None, repr=False)
     nowpayments_ipn_secret: str | None = field(default=None, repr=False)
     nowpayments_pay_currency: str | None = None  # the code found by the probe, for example usdtbsc. Unset = the routes answer 503
-    nowpayments_price_usd: str = "10"  # a decimal string
+    nowpayments_price_usd: str = "10"  # a decimal string; "" means NOWPAYMENTS_PRICE_USD was set to something malformed, zero or negative (checkout then refuses)
     nowpayments_underpay_tolerance_pct: float = 1.0  # owner decision D8
     nowpayments_ipn_url: str | None = None  # the public URL of POST /api/billing/nowpayments/ipn, sent with each invoice
     # --- Security hardening (docs/security/). Every switch is OFF / unset by default:
@@ -672,6 +679,7 @@ def load_settings() -> Settings:
         admin_emails=tuple(sorted({e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS") or "").split(",") if e.strip()})),
         signups_mode=parse_signups_mode(os.environ.get("SIGNUPS_MODE")),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
+        paystack_renewal_reconcile=_env_bool("PAYSTACK_RENEWAL_RECONCILE", False),
         subscription_grace_days=_grace_days_from_env(),
         paystack_plan_code=os.environ.get("PAYSTACK_PLAN_CODE") or None,
         paystack_plan_amount=max(0, _env_int("PAYSTACK_PLAN_AMOUNT", 1_500_000)),

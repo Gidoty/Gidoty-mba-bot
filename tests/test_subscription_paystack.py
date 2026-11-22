@@ -388,7 +388,7 @@ def test_a_payment_paystack_does_not_call_successful_stays_pending(app_on, fake)
     with app_on() as c:
         cid = first_payment(c, fake)
         fake.txs["mbasub_ref1"]["status"] = "abandoned"
-        assert post_event(c, charge_event("mbasub_ref1")).status_code == 200
+        assert post_event(c, charge_event("mbasub_ref1")).status_code == 503  # a charge.success that Paystack's own record does not confirm yet is retried, never answered 200 and forgotten
         assert row(cid) is None and not entitled(cid)
         with session_scope() as s:
             assert s.query(BillingPayment).one().status == "pending"
@@ -511,7 +511,9 @@ def test_a_renewal_whose_period_has_not_advanced_is_retried_then_succeeds(app_on
         cid = activate(c, fake, old)
         fake.tx("RENEW1", cid, "payer@example.com", meta=False)
         assert post_event(c, renewal_event()).status_code == 503  # Paystack's date is still the old one
-        assert row(cid)[1].replace(tzinfo=timezone.utc) == old and count(BillingPayment) == 1
+        assert row(cid)[1].replace(tzinfo=timezone.utc) == old and count(BillingPayment) == 2  # the renewal is recorded as PENDING at once; it grants nothing
+        with session_scope() as s:
+            assert sorted(b.status for b in s.query(BillingPayment).all()) == ["paid", "pending"]
         fake.subs["SUB_1"]["next_payment_date"] = iso(end_in(30))
         assert post_event(c, renewal_event()).status_code == 200
         assert row(cid)[1].replace(tzinfo=timezone.utc) > old

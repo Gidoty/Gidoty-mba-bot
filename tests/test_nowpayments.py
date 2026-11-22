@@ -205,7 +205,7 @@ def test_settings_default_off_and_parse_safely(monkeypatch):
     monkeypatch.setenv("NOWPAYMENTS_PRICE_USD", "-3")
     monkeypatch.setenv("NOWPAYMENTS_UNDERPAY_TOLERANCE_PCT", "banana")
     s = load_settings()
-    assert s.nowpayments_price_usd == "10" and s.nowpayments_underpay_tolerance_pct == 1.0
+    assert s.nowpayments_price_usd == "" and s.nowpayments_underpay_tolerance_pct == 1.0  # an invalid price is NOT replaced by 10: the checkout refuses (tests/test_billing_renewal_recovery.py)
     monkeypatch.setenv("NOWPAYMENTS_UNDERPAY_TOLERANCE_PCT", "50")
     assert load_settings().nowpayments_underpay_tolerance_pct == 1.0
 

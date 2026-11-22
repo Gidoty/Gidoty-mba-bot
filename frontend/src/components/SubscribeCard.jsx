@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
-import { CANCEL_WORDING, EXPIRED_NOTE, channels, stateView } from "../lib/billing.js";
+import { CANCEL_WORDING, channels, renewView, stateView } from "../lib/billing.js";
 import { primaryButton, secondaryButton } from "./form.jsx";
 import { Card } from "./ui.jsx";
 
@@ -46,15 +46,18 @@ export function PayButtons({ options }) {
 // The Activate offer for a new customer (and for one whose subscription has ended). Prices and channels come from the server; the cancel wording is the Terms of Service sentence.
 export default function SubscribeCard({ options }) {
   const available = channels(options).length > 0;
+  const renew = renewView(options); // a lapsed customer: Renew wording and the lapse date, not the first-time offer
   return (
     <div className="rounded-card border border-line border-l-4 border-l-brand-line bg-surface p-5">
-      <p className="text-sm font-semibold text-fg">Ready to move beyond practice trading?</p>
-      {options?.state === "expired" && <p className="mt-1 text-sm text-fg">{EXPIRED_NOTE}</p>}
+      <p className="text-sm font-semibold text-fg">{renew ? renew.title : "Ready to move beyond practice trading?"}</p>
+      {renew && <p className="mt-1 text-sm text-fg">{renew.body}</p>}
       <p className="mt-1 text-sm text-muted">
-        A monthly subscription unlocks the full trading environment. You'll still choose, separately and explicitly, if and when to connect real funds - subscribing does not do that by itself.
+        {renew
+          ? "Renewing starts a new monthly period. Real funds stay under your control: renewing does not change your trading settings."
+          : "A monthly subscription unlocks the full trading environment. You'll still choose, separately and explicitly, if and when to connect real funds - subscribing does not do that by itself."}
       </p>
       <div className="mt-4">
-        {available ? <PayButtons options={options} /> : <p className="text-sm text-muted">Monthly subscriptions are not available yet. Please check back soon.</p>}
+        {available ? <PayButtons options={options} /> : <p className="text-sm text-muted">{renew ? "Renewal is not available right now. Please check back soon." : "Monthly subscriptions are not available yet. Please check back soon."}</p>}
       </div>
       <p className="mt-4 text-xs text-muted">{CANCEL_WORDING}</p>
     </div>
