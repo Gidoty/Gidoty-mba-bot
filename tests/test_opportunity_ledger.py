@@ -248,16 +248,17 @@ def test_auto_select_records_every_scanned_pair_and_why_the_others_were_not_take
     assert all(json.loads(r.detail_json)["sel"] == "auto" for r in rows)
 
 
-def test_auto_select_says_when_donchian_and_rsi_were_not_evaluated(db, monkeypatch):
+def test_auto_select_now_evaluates_donchian_and_rsi_when_ema_found_nothing(db, monkeypatch):
+    """Before the Auto Select fix these were recorded as strategy_not_evaluated; now the checks run, so the ledger holds their verdicts instead (tests/test_auto_select_all_strategies.py covers the flow)."""
     st = make_settings(max_notional_multiplier=100.0, opportunity_ledger=True, rsi_mr_enabled=True, donchian_enabled=True, live_rsi_mr=True, live_donchian=True, new_strategy_guards_mode="enforce")
     client = futures_client(ohlcv=FLAT_OHLCV, leverage_by_symbol={p: 1.0 for p in ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")})
     install(monkeypatch, client)
     aid = _live_auto(st, extra="rsi_mr_v1,donchian_breakout_v1")
     run_cycle(aid, st, swallow=True)
-    skipped = {r.strategy_id for r in _ledger(aid) if r.reason_code == opportunity.R_NOT_EVALUATED}
-    assert skipped == {opportunity.DONCHIAN_ID, opportunity.RSI_ID}
-    run_cycle(aid, st, swallow=True)
-    assert len([r for r in _ledger(aid) if r.reason_code == opportunity.R_NOT_EVALUATED]) == 2  # once per candle, not per cycle
+    rows = _ledger(aid)
+    assert [r for r in rows if r.reason_code == opportunity.R_NOT_EVALUATED] == []
+    for sid in (opportunity.DONCHIAN_ID, opportunity.RSI_ID):
+        assert {r.pair for r in rows if r.strategy_id == sid and r.outcome in (opportunity.OUT_SIGNAL, opportunity.OUT_NO_SIGNAL)} == {"BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT"}
 
 
 def test_a_stale_ema_signal_is_recorded(db, monkeypatch):

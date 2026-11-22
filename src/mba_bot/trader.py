@@ -250,6 +250,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         # the backend trading logic itself: there is no code path from
         # this branch into an account that has one.
         scan_info = None
+        auto_new: list[str] = []
+        auto_cache = None
         if open_trade is None and account.pair_selection_mode == "auto":
             # Capital-based skip only for a LIVE Futures account with the pair
             # expansion on; otherwise None = the scan is exactly what it always was.
@@ -263,7 +265,9 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 auto_capital, viability_out = account.allocated_capital, []  # every live account, Spot included, scans only pairs its capital can trade
             scan_out: dict | None = {} if telemetry.enabled(settings) else None
             ledger_rows: list | None = [] if opportunity.enabled(settings) else None
-            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms, viability_out=viability_out, ledger_rows=ledger_rows)
+            auto_new = _auto_new_strategies(settings, account, is_paper)  # [] for every account that has not opted in: then nothing below differs from before
+            auto_cache: dict | None = {} if auto_new else None
+            auto_result = await _scan_auto_pair(client, account, settings, capital=auto_capital, scan_out=scan_out, now_ms=now_ms, viability_out=viability_out, ledger_rows=ledger_rows, candle_out=auto_cache)
             if ledger_rows is not None:
                 _ledger_auto_scan(session, settings, account, ledger_rows, auto_result, is_paper=is_paper, now=now, now_ms=now_ms)  # observability only
             for skipped_pair, v in viability_out or []:
@@ -281,12 +285,20 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 # signal this cycle - a normal, uneventful scan, not an
                 # error. Record it as such and stop; there is nothing to
                 # enter and no open trade to manage.
-                if ledger_rows is not None:
-                    _ledger_not_evaluated(session, settings, account, is_paper=is_paper, now=now, now_ms=now_ms)  # Donchian and RSI are not reached on this path (observability only)
                 account.last_signal = SignalType.NONE.value
                 account.last_signal_at = now
                 account.last_error = None
                 account.last_error_at = None
+                evaluated: set[str] = set()
+                if auto_new:
+                    # No EMA signal: the strategies this account opted in to are still evaluated on every candidate pair of this round (Donchian first, then RSI; EMA has nothing to enter).
+                    for sid in auto_new:
+                        if list_open_trades(session, account.id):
+                            break  # the one live slot is taken
+                        if await _auto_new_strategy_pass(session, account, client, settings, notifier, strategy=sid, cache=auto_cache or {}, now=now, now_ms=now_ms, is_demo=is_demo):
+                            evaluated.add(sid)
+                if ledger_rows is not None:
+                    _ledger_not_evaluated(session, settings, account, is_paper=is_paper, now=now, now_ms=now_ms, evaluated=evaluated)  # a strategy that could not be evaluated is still said so (observability only)
                 return
             scan_pair, candles, signal = auto_result
             sig_candles = _ema_signal_candles(candles, settings, now_ms)
@@ -337,7 +349,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 account.pair = scan_pair
             don_took_it = False
             if not is_paper and settings.live_donchian:
-                await _live_donchian_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # highest priority: Donchian, then EMA, then RSI
+                if donchian.STRATEGY_ID in auto_new:
+                    await _auto_new_strategy_pass(session, account, client, settings, notifier, strategy=donchian.STRATEGY_ID, cache=auto_cache or {}, now=now, now_ms=now_ms, is_demo=is_demo)  # Auto Select: every candidate pair
+                else:
+                    await _live_donchian_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # highest priority: Donchian, then EMA, then RSI
                 don_took_it = bool(list_open_trades(session, account.id))
             if don_took_it:
                 pass  # the one live slot is taken; EMA and RSI wait for the next cycle
@@ -348,7 +363,11 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                     session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
                 )
             if not is_paper and settings.live_rsi_mr:
-                await _live_rsi_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # lowest priority: only if EMA took no entry
+                if rsi_mr.STRATEGY_ID in auto_new:
+                    if not list_open_trades(session, account.id):
+                        await _auto_new_strategy_pass(session, account, client, settings, notifier, strategy=rsi_mr.STRATEGY_ID, cache=auto_cache or {}, now=now, now_ms=now_ms, is_demo=is_demo)  # Auto Select: every candidate pair
+                else:
+                    await _live_rsi_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # lowest priority: only if EMA took no entry
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
@@ -878,7 +897,7 @@ def _note_small_capital(session, account, venue, settings: Settings, *, price, c
 
 async def _scan_auto_pair(
     client, account: TradingAccount, settings: Settings, *, capital: float | None = None, scan_out: dict | None = None, now_ms: int | None = None, viability_out: list | None = None,
-    ledger_rows: list | None = None,
+    ledger_rows: list | None = None, candle_out: dict | None = None,
 ) -> tuple[str, list, StrategySignal] | None:
     """Auto Select's market scan. Reuses the SAME exchange client
     already built for this account this cycle - same environment, same
@@ -947,6 +966,8 @@ async def _scan_auto_pair(
         candles = candles_from_ohlcv(ohlcv)
         if candles:
             raw[pair] = candles  # the caller prices the entry from the raw last row
+            if candle_out is not None:
+                candle_out[pair] = candles  # the candles of this round, in scan order, for the Donchian and RSI checks (no second fetch); None unless an opted-in account needs them
             scanned.append(PairCandidate(pair=pair, candles=_ema_signal_candles(candles, settings, now_ms)))  # ranking and signal use closed candles when the switch is on
 
     ranked = rank_candidates(
@@ -976,6 +997,51 @@ async def _scan_auto_pair(
     return best_pair, raw[best_pair], signal
 
 
+def _auto_new_strategies(settings: Settings, account, is_paper: bool) -> list[str]:
+    """The newer strategies an Auto Select LIVE account is opted in to AND the operator has switched on (both the strategy and its live switch), in the code's priority order: Donchian, then RSI (EMA sits
+    between them and has its own scan). Empty for a paper account, a manual account and any account that has not opted in: for those nothing in the Auto Select flow differs from before."""
+    if is_paper or account.pair_selection_mode != "auto":
+        return []
+    opted = multi_trade.account_strategies(account)
+    out = []
+    if settings.live_donchian and settings.donchian_enabled and donchian.STRATEGY_ID in opted:
+        out.append(donchian.STRATEGY_ID)
+    if settings.live_rsi_mr and settings.rsi_mr_enabled and rsi_mr.STRATEGY_ID in opted:
+        out.append(rsi_mr.STRATEGY_ID)
+    return out
+
+
+async def _auto_new_strategy_pass(session, account, client, settings: Settings, notifier, *, strategy: str, cache: dict, now, now_ms: int, is_demo: bool) -> bool:
+    """One opted-in strategy on an Auto Select account, evaluated on EVERY candidate pair of this round (the pairs the scan read, in the scan's order; candles come from the scan's own reads when the
+    strategy's timeframe is the scan's, so no extra exchange read). Every evaluation is recorded in the opportunity ledger by `_live_strategy_signal`. If one or more pairs have a fresh signal, the FIRST pair in
+    scan order is entered through `_maybe_enter` exactly as an EMA or single-pair entry is (same guards, risk, stop); the others are recorded as `not_best_ranked`. The account's pair is set to the entered pair
+    for the entry and put back if no trade opened (an Auto Select pair only ever changes together with an entry). Returns True once the strategy was evaluated."""
+    hits: list[tuple[str, object, float]] = []
+    evaluated = False
+    for pair in list(cache):
+        try:
+            got = await _live_strategy_signal(client, account, pair, strategy, settings, now=now, now_ms=now_ms, session=session, candles=cache.get(pair))
+        except exchange.WithdrawalPermissionDetected:
+            raise
+        except Exception:  # noqa: BLE001 - a failed read on one pair must not stop the other pairs or the cycle
+            logger.warning("account %s: %s check on %s failed this round, skipping that pair", account.id, strategy, pair)
+            continue
+        evaluated = True
+        if got is not None:
+            hits.append((pair, got[0], got[1]))
+    if not hits:
+        return evaluated
+    pair, sig, price = hits[0]
+    for other, _s, _p in hits[1:]:
+        opportunity.record_not_taken(session, settings, account, strategy_id=strategy, pair=other, candle_ts=None, reason=opportunity.R_NOT_BEST, is_paper=False, now=now, detail={"picked": pair})  # observability only
+    previous = account.pair
+    account.pair = pair
+    await _maybe_enter(session, account, client, sig, price, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
+    if not list_open_trades(session, account.id):
+        account.pair = previous
+    return True
+
+
 def _ledger_auto_scan(session, settings: Settings, account, rows: list, result, *, is_paper: bool, now: datetime, now_ms: int) -> None:
     """Opportunity ledger rows for one Auto Select scan (observability only, never raises): the EMA verdict for every scanned pair, the pairs skipped for capital, and, when a pair was picked, the pairs that
     also had a signal but ranked lower (not_best_ranked)."""
@@ -1002,19 +1068,20 @@ def _ledger_auto_scan(session, settings: Settings, account, rows: list, result, 
         pass
 
 
-def _ledger_not_evaluated(session, settings: Settings, account, *, is_paper: bool, now: datetime, now_ms: int) -> None:
-    """Auto Select returns BEFORE the Donchian and RSI entry checks when EMA found no actionable signal in the scan (process_account). For an opted-in account with those strategies live, say so in the ledger,
-    once per candle (observability only, never raises)."""
+def _ledger_not_evaluated(session, settings: Settings, account, *, is_paper: bool, now: datetime, now_ms: int, evaluated: set | None = None) -> None:
+    """For an opted-in Auto Select account with Donchian or RSI live, say in the ledger that a strategy was NOT evaluated this round, once per candle (observability only, never raises). Since Auto Select
+    evaluates every opted-in strategy even when EMA found nothing (`_auto_new_strategy_pass`), this now only fires for a strategy that could not be evaluated (the one live slot was already taken, or the
+    check failed); `evaluated` is the set of strategies that did run, which are never recorded here."""
     try:
         if is_paper:
             return
         opted = multi_trade.account_strategies(account)
         for sid, on, tfs in ((donchian.STRATEGY_ID, settings.live_donchian and settings.donchian_enabled, settings.donchian_timeframe), (rsi_mr.STRATEGY_ID, settings.live_rsi_mr and settings.rsi_mr_enabled, settings.rsi_mr_timeframe)):
-            if on and sid in opted:
+            if on and sid in opted and sid not in (evaluated or ()):
                 tf, _ = rsi_mr.normalize_timeframe(tfs)
                 tf_ms = rsi_mr.timeframe_ms(tf)
                 opportunity.record_not_taken(session, settings, account, strategy_id=sid, pair=account.pair, candle_ts=((now_ms // tf_ms) - 1) * tf_ms, reason=opportunity.R_NOT_EVALUATED, is_paper=False, now=now,
-                                             detail={"why": "auto_select_no_ema_signal"})
+                                             detail={"why": "slot_taken_or_check_failed"})
     except Exception:  # noqa: BLE001
         pass
 
@@ -1926,8 +1993,9 @@ async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settin
     )
 
 
-async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session):
-    """(signal, price) for one strategy on one pair from closed candles, or None when it has no actionable, fresh signal. Read-only."""
+async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session, candles: list | None = None):
+    """(signal, price) for one strategy on one pair from closed candles, or None when it has no actionable, fresh signal. Read-only. `candles` (the Auto Select scan's candles for this pair this round) is used instead
+    of a new fetch when the strategy's timeframe is the scan's; with None, or another timeframe, the candles are fetched as before."""
     allow_short = account.market_type == "futures"
     symbol = exchange.exchange_symbol(pair, account.market_type)
     window_ms = int(settings.new_strategy_entry_window_minutes * 60_000)
@@ -1945,7 +2013,7 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
     if strategy == donchian.STRATEGY_ID:
         tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
         tf_ms = rsi_mr.timeframe_ms(tf)
-        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        raw = candles if (candles is not None and tf == rsi_mr.normalize_timeframe(settings.timeframe)[0]) else candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
         closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
         if not raw or not closed:
             return None
@@ -1955,7 +2023,7 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
     if strategy == rsi_mr.STRATEGY_ID:
         tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
         tf_ms = rsi_mr.timeframe_ms(tf)
-        raw = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
+        raw = candles if (candles is not None and tf == rsi_mr.normalize_timeframe(settings.timeframe)[0]) else candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=tf, limit=settings.ohlcv_limit))
         closed = rsi_mr.closed_only(raw, now_ms, tf_ms)
         if not raw or not closed:
             return None
