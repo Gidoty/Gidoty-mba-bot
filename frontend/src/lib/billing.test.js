@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, FEE_NOTE, channels, dateText, formatMinor, formatUsd, screenKind, stateView } from "./billing.js";
+import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, channels, dateText, formatMinor, formatUsd, screenKind, stateView } from "./billing.js";
 
 const options = (over = {}) => ({
   state: "none", provider: null, period_end: null, grace_end: null, grace_days: 5,
@@ -45,10 +45,9 @@ test("only channels the server says are available and may start are offered, car
   assert.deepEqual(channels({}), []);
 });
 
-test("the card channel carries the fee note and calls the subscription route, crypto calls the crypto route", () => {
+test("the card channel carries no note and calls the subscription route, crypto calls the crypto route", () => {
   const [card, crypto] = channels(options());
-  assert.equal(card.note, FEE_NOTE);
-  assert.match(FEE_NOTE, /Paystack adds its own fee at checkout/);
+  assert.equal(card.note, null);
   assert.equal(card.path, "/billing/subscription/initialize");
   assert.equal(crypto.path, "/billing/crypto/initialize");
   assert.equal(crypto.note, null);
