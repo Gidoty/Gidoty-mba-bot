@@ -107,6 +107,31 @@ def _r(x):
     return None if x is None else round(float(x), 6)
 
 
+def strength(strategy_id: str, sig) -> float | None:
+    """How strong a Donchian or RSI signal was, as a plain number, for measuring the Auto Select tie-break (docs/safety/auto_select_strategies.md). It is NEVER used to choose anything.
+    Donchian: how far the close is beyond the channel, in ATR units (long: close above the channel high; short: close below the channel low). RSI: how far the RSI is beyond its entry threshold, in RSI
+    points (long: RSI minus the oversold line it crossed back above; short: the overbought line minus the RSI). None when the signal has no side or a needed number is missing."""
+    try:
+        side = getattr(sig, "side", None)
+        if not side:
+            return None
+        if strategy_id == DONCHIAN_ID:
+            if not sig.atr or sig.close is None:
+                return None
+            beyond = (sig.close - sig.upper) if side == "long" else (sig.lower - sig.close)
+            return _r(beyond / sig.atr)
+        if strategy_id == RSI_ID:
+            if sig.rsi is None:
+                return None
+            from .rsi_mr import RsiParams  # the entry lines the strategy itself uses (the live code never overrides them)
+
+            p = RsiParams()
+            return _r((sig.rsi - p.oversold) if side == "long" else (p.overbought - sig.rsi))
+    except Exception:  # noqa: BLE001 - a measurement must never break an evaluation
+        return None
+    return None
+
+
 def verdict(strategy_id: str, sig) -> tuple[str, str, dict]:
     """(outcome, reason code, numbers) for one strategy result. Pure. The numbers are the ones that decided it."""
     if strategy_id == EMA_ID:
@@ -121,11 +146,11 @@ def verdict(strategy_id: str, sig) -> tuple[str, str, dict]:
         vr = (sig.volume / sig.avg_volume) if (sig.volume is not None and sig.avg_volume) else None
         nums = {"channel_high": _r(sig.upper), "channel_low": _r(sig.lower), "volume_ratio": _r(vr), "atr_pct": _r(sig.atr_pct), "atr_pct_avg": _r(sig.atr_pct_avg)}
         if sig.side:
-            return OUT_SIGNAL, SIGNAL_CODES[DONCHIAN_ID][0 if sig.side == "long" else 1], nums
+            return OUT_SIGNAL, SIGNAL_CODES[DONCHIAN_ID][0 if sig.side == "long" else 1], dict(nums, strength=strength(DONCHIAN_ID, sig))
         return OUT_NO_SIGNAL, REASON_BY_STRATEGY_TEXT[DONCHIAN_ID].get(sig.reason, "donchian_other"), nums
     nums = {"rsi": _r(sig.rsi), "prev_rsi": _r(sig.prev_rsi), "adx": _r(sig.adx), "atr_pct": _r(sig.atr_pct)}
     if sig.side:
-        return OUT_SIGNAL, SIGNAL_CODES[RSI_ID][0 if sig.side == "long" else 1], nums
+        return OUT_SIGNAL, SIGNAL_CODES[RSI_ID][0 if sig.side == "long" else 1], dict(nums, strength=strength(RSI_ID, sig))
     return OUT_NO_SIGNAL, REASON_BY_STRATEGY_TEXT[RSI_ID].get(sig.reason, "rsi_other"), nums
 
 

@@ -57,7 +57,7 @@ Write cost: one indexed existence check per new key after a process start, and o
 
 Set `OPPORTUNITY_LEDGER=false` and restart. Existing rows stay and are readable by the report. `DELETE FROM decision_log WHERE stage = 'opportunity'` removes them (owner decision, not run here).
 
-## C. Report: `python -m mba_bot.opportunity_report --hours 24 [--account 27624db9]`
+## C. Report: `python -m mba_bot.opportunity_report --hours 24 [--account 27624db9] [--candles]`
 
 Per account (8 characters) and strategy: candles evaluated, signals, entries opened, and every non-entry with its reason, grouped and counted, with plain words. Evaluation counts come from the ledger; entries opened and refusals from the entry-stage rows (which need `TRADE_TELEMETRY`). It opens the database read-only, calls no exchange, writes nothing, and prints no secret, e-mail or full id. It exits 2 with the exception class only if the database is missing (it never creates one).
 
@@ -103,3 +103,6 @@ Worst case, a persistently failing signal on an Auto Select account with all str
 Rate limit: Binance limits requests per IP by weight, and the accounts all share the VPS's IP. The weights and the per-minute budget are UNVERIFIED here (Binance documentation was not reachable from this environment; from memory a 200-candle request costs weight 2 and the USD-M limit is on the order of 2,400 per minute). Per-account arithmetic: N accounts x (candle requests per round) per 60-second round. For 100 accounts on three strategies that is 300 requests (about 600 weight, if weight 2) in each fast round, a quarter of the remembered budget. Safer design: fetch each pair's public candles ONCE per round and share them across accounts (candles do not depend on the account), which makes the load depend on pairs, not accounts. That needs a shared fetch layer that does not exist today.
 
 Decision for the owner: whether to build it (question 3 in the PR), and the drift fraction.
+
+
+Ties and strength (Auto Select): see the last section of `docs/safety/auto_select_strategies.md`. The report's first line counts tie rounds; `--candles` reads public candles (no key).
