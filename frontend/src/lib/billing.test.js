@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, FEE_NOTE, channels, dateText, formatMinor, formatUsd, screenKind, stateView } from "./billing.js";
+import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, FEE_NOTE, channels, dateText, formatMinor, formatUsd, renewView, screenKind, stateView } from "./billing.js";
 
 const options = (over = {}) => ({
   state: "none", provider: null, period_end: null, grace_end: null, grace_days: 5,
@@ -67,19 +67,32 @@ test("subscription states: active, grace, cancelled, with dates; none and lifeti
   assert.match(stateView(options({ state: "active", provider: "nowpayments", period_end: end })).body, /paid period ends on 5 Dec 2026. Renew before then/);
   const g = stateView(options({ state: "grace", period_end: end, grace_end: "2026-12-10T10:00:00Z", grace_days: 5 }));
   assert.equal(g.kind, "grace");
-  assert.match(g.body, /5-day grace period, until 10 Dec 2026/);
+  assert.equal(g.title, "Renewal overdue");
+  assert.match(g.body, /Your paid period ended on 5 Dec 2026\. Your access continues for the 5-day grace period, until 10 Dec 2026\. Renew now to keep it\./);
   assert.match(stateView(options({ state: "cancelled", period_end: end })).body, /will not renew. Your access continues until 5 Dec 2026/);
   for (const state of ["none", "expired", "legacy_lifetime", "weird"]) assert.equal(stateView(options({ state })), null);
   assert.equal(stateView(null), null);
-  assert.match(EXPIRED_NOTE, /has ended/);
+  assert.match(EXPIRED_NOTE, /has ended\. Renew/);
   assert.equal(dateText("not a date"), null);
 });
 
-test("which screen: the old one when there are no options, nothing for lifetime customers, the offer for new or expired", () => {
+test("which screen: the old one when there are no options, nothing for lifetime customers, the offer for new customers, Renew for a lapsed one", () => {
   assert.equal(screenKind(null), "off");
   assert.equal(screenKind(undefined), "off");
   assert.equal(screenKind(options({ state: "legacy_lifetime" })), "legacy");
   assert.equal(screenKind(options({ state: "none" })), "offer");
-  assert.equal(screenKind(options({ state: "expired" })), "offer");
+  assert.equal(screenKind(options({ state: "expired" })), "renew");
   for (const s of ["active", "grace", "cancelled"]) assert.equal(screenKind(options({ state: s })), "status");
+});
+
+test("a lapsed customer sees Renew wording and the lapse date, not the first-time offer; the buttons say Renew", () => {
+  const lapsed = options({ state: "expired", period_end: "2026-11-10T10:00:00Z", grace_end: "2026-11-15T10:00:00Z", grace_days: 5 });
+  assert.equal(screenKind(lapsed), "renew");
+  assert.deepEqual(renewView(lapsed), { title: "Renew your subscription", body: "Your subscription lapsed on 15 Nov 2026. Renew to keep using live trading." });
+  assert.equal(renewView(options({ state: "expired", period_end: "2026-11-10T10:00:00Z", grace_end: null })).body, "Your subscription lapsed on 10 Nov 2026. Renew to keep using live trading.");
+  assert.equal(renewView(options({ state: "expired" })).body, EXPIRED_NOTE);
+  assert.deepEqual(channels(lapsed).map((c) => c.label), ["Renew by card", "Renew with USDT"]);
+  assert.deepEqual(channels(options({ state: "grace", period_end: "2026-11-10T10:00:00Z" })).map((c) => c.label), ["Renew by card", "Renew with USDT"]);
+  assert.deepEqual(channels(options({ state: "none" })).map((c) => c.label), ["Pay by card", "Pay with USDT"]); // a first-time customer keeps the first-time wording
+  for (const state of ["none", "active", "grace", "cancelled", "legacy_lifetime"]) assert.equal(renewView(options({ state })), null);
 });

@@ -190,11 +190,11 @@ def billing_options(
     gend = grace_end(sub, settings.subscription_grace_days) if sub is not None and end is not None else None
     card_configured = bool(settings.paystack_secret_key and settings.paystack_plan_code and settings.paystack_plan_amount > 0)
     try:
-        now_pay.require_configured(settings)
+        now_pay.require_configured(settings, quiet=True)
         crypto_configured = bool(settings.nowpayments_enabled)
     except now_pay.NotConfigured:
-        crypto_configured = False
-    price = f"{Decimal(now_pay.price_cents(settings)) / 100:.2f}"  # the setting is already sanitised in config (malformed, zero or negative counts as 10)
+        crypto_configured = False  # not configured, or NOWPAYMENTS_PRICE_USD is invalid: no crypto button
+    price = "0.00" if now_pay.price_problem(settings) else f"{Decimal(now_pay.price_cents(settings)) / 100:.2f}"
     return BillingOptionsOut(
         state=state.value,
         provider=sub.provider if sub is not None else None,
@@ -255,6 +255,7 @@ async def billing_webhook(request: Request, db: Session = Depends(get_db), setti
     signature = request.headers.get("x-paystack-signature", "")
     expected = hmac.new(settings.paystack_secret_key.encode("utf-8"), payload, hashlib.sha512).hexdigest()
     if not hmac.compare_digest(expected, signature):
+        logger.warning("paystack webhook rejected: reason=bad_signature")  # the signature itself is never logged
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid webhook signature")
 
     event = json.loads(payload)
@@ -264,10 +265,11 @@ async def billing_webhook(request: Request, db: Session = Depends(get_db), setti
         try:
             handled = await sub_billing.handle_event(db, event, settings)
         except (sub_billing.ProviderUnavailable, sub_billing.RetryLater) as exc:
-            logger.warning("subscription event not settled yet (%s); asking Paystack to retry", type(exc).__name__)
+            # The text of both is one of our own fixed phrases ("period not advanced yet", "http 503"), never provider text.
+            logger.warning("subscription event not settled yet (%s: %s); asking Paystack to retry", type(exc).__name__, sub_billing.safe_cause(exc))
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "not settled yet") from None
-        except Exception:  # noqa: BLE001 - a bug here must not be silent or poison the existing path
-            logger.error("subscription event handler failed")
+        except Exception as exc:  # noqa: BLE001 - a bug here must not be silent or poison the existing path
+            logger.error("subscription event handler failed: reason=handler_exception cause=%s: %s", type(exc).__name__, sub_billing.safe_cause(exc))
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
         if handled is not None:
             return handled

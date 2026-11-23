@@ -175,6 +175,15 @@ async def list_customer_subscriptions(plan_id: int, paystack_customer_id: int, s
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
 
+async def list_customer_transactions(paystack_customer_id: int, since: datetime, settings: Settings, per_page: int = 50) -> list[dict]:
+    """Successful transactions of one Paystack customer since `since` (read only: GET /transaction?customer=&status=success&from=). Only a LIST of candidates: the renewal job re-reads each one with
+    /transaction/verify before it counts. `[]` for 404 or a body that is not the expected shape."""
+    start = quote(since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), safe="")
+    body = await get_json(f"/transaction?customer={int(paystack_customer_id)}&status=success&from={start}&perPage={int(per_page)}", settings)
+    items = body.get("data") if body and body.get("status") is True else None
+    return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
 # ----------------------------------------------------------------- reading a subscription
 
 LIVE_STATUSES = frozenset({"active", "attention", "non-renewing"})

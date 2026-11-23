@@ -33,6 +33,7 @@ from ..notifications.telegram import TelegramNotifier
 from ..protection_guard import should_alert
 from . import notices
 from . import paystack_sub as ps
+from .logsafe import safe_cause  # noqa: F401  (re-exported for the router)
 from .paystack_sub import ProviderUnavailable  # noqa: F401  (re-exported for the router)
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,13 @@ ALERTS = {
     "payment_pending_apply": "Billing: a verified payment has not been applied to a subscription yet (waiting for Paystack's subscription record).",
     "subscription_cancelled": "Billing: a customer's subscription will not renew. Access continues until the paid period ends.",
     "unknown_customer": "Billing: a subscription payment event matched no customer. Nothing was changed.",
+    "renewal_recovered_by_job": "Billing: a renewal whose webhook did not settle was found on Paystack and applied by the hourly recovery job (verified payment, same checks as the webhook). Please check the webhook delivery log.",
 }
+
+
+def log_outcome(level: int, outcome: str, reason: str, customer_id: str | None = None, ref: str | None = None) -> None:
+    """One greppable line for a billing exit: `billing: outcome=<outcome> reason=<code> customer=<8 chars> ref=<last 6>`. Never an e-mail, a token or the body."""
+    logger.log(level, "billing: outcome=%s reason=%s customer=%s ref=%s", outcome, reason, _mask(customer_id), _tail(ref))
 
 
 class RetryLater(RuntimeError):
@@ -250,7 +257,7 @@ def _store_token(db: Session, row: Subscription, token: str | None, settings: Se
 
 
 async def reconcile(db: Session, customer: Customer, settings: Settings, now: datetime, alerts: list, *,
-                    hint_code: str | None = None, new_payment: BillingPayment | None = None) -> dict:
+                    hint_code: str | None = None, new_payment: BillingPayment | None = None, trigger_ref: str | None = None) -> dict:
     """Settle this customer's pending payments from Paystack's records, then bring our subscription row in line with
     Paystack's subscription. Idempotent: running it twice changes nothing the second time.
 
@@ -264,12 +271,23 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
         if new_payment is not None:
             pending.append(new_payment)
         verdicts = []  # (payment, tx, verdict, reason)
+        unverified = None  # the payment THIS event reports, when Paystack's own record does not (yet) say success
         for bp in pending:
             tx = await ps.fetch_transaction(bp.reference, settings)
             if tx is None or tx.get("status") != "success":
+                if trigger_ref is not None and bp.reference == trigger_ref:
+                    unverified = bp
                 continue  # not (yet) a successful payment on Paystack's side: it stays pending
             verdict, reason = _judge_payment(tx, bp, customer, settings)
             verdicts.append((bp, tx, verdict, reason))
+        if unverified is not None:
+            # The event said charge.success but Paystack's own record does not say success yet. Answering 200 would end the retries and lose the payment, so ask Paystack to deliver it again. The pending
+            # row stays (it was committed when the event arrived) and the owner is told if it is still unverified after 10 minutes.
+            issued = _aware(unverified.issued_at)
+            if issued is not None and now - issued > PENDING_APPLY_ALERT_AFTER:
+                alerts.append(("payment_pending_apply", customer.id))
+            log_outcome(logging.WARNING, "retry", "verify_not_success", customer.id, unverified.reference)
+            raise RetryLater("payment not verified yet")
         newly_paid = [(bp, tx) for bp, tx, v, _ in verdicts if v == "ok"]
         unapplied_times = [_aware(bp.paid_at) for bp in db.query(BillingPayment).filter_by(provider=PROVIDER, customer_id=customer.id, status="paid")
                            .filter(BillingPayment.period_end.is_(None)).all()]
@@ -283,17 +301,21 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
             if unapplied_times:
                 if now - unapplied_times[0] > PENDING_APPLY_ALERT_AFTER:
                     alerts.append(("payment_pending_apply", customer.id))
+                log_outcome(logging.WARNING, "retry", "subscription_not_visible", customer.id)
                 raise RetryLater("subscription not visible yet")
             return _settle_only(db, verdicts, now, alerts, customer)
         if settings.paystack_plan_code and info.plan_code and info.plan_code != settings.paystack_plan_code:
             alerts.append(("plan_mismatch", customer.id))
+            log_outcome(logging.WARNING, "no_change", "plan_mismatch", customer.id)
             return _settle_only(db, verdicts, now, alerts, customer)
         if not ps.same_email(info.email, customer.email):
             alerts.append(("subscription_customer_mismatch", customer.id))
+            log_outcome(logging.WARNING, "no_change", "subscription_customer_mismatch", customer.id)
             return _settle_only(db, verdicts, now, alerts, customer)
         status_ours = ps.our_status(info.status)
         if status_ours is None:
             alerts.append(("unknown_subscription_status", customer.id))
+            log_outcome(logging.WARNING, "no_change", "unknown_subscription_status", customer.id)
             return _settle_only(db, verdicts, now, alerts, customer)
         final_cancel = info.status in ("completed", "cancelled")
         new_end = None if final_cancel else info.next_payment_date
@@ -311,6 +333,7 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
             old_end = _aware(row.current_period_end) if row is not None else None
             if new_end is None:
                 alerts.append(("period_end_out_of_range", customer.id))
+                log_outcome(logging.WARNING, "retry", "next_payment_date_unusable", customer.id)
                 raise RetryLater("no usable next payment date")
             if new_end <= now or (old_end is not None and new_end <= old_end):
                 # Paystack's record has not caught up with the payment (or never will, for a payment shape nobody has seen yet).
@@ -318,10 +341,12 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
                 # the owner is told (once per 6 hours), because the customer has paid and nothing here extended them.
                 if now - unapplied_times[0] > PENDING_APPLY_ALERT_AFTER:
                     alerts.append(("payment_pending_apply", customer.id))
+                log_outcome(logging.WARNING, "retry", "period_not_advanced", customer.id)
                 raise RetryLater("period not advanced yet")
 
     # ---- PHASE B: writes only, no await
     if not _settle(db, customer, verdicts, now, alerts):
+        log_outcome(logging.INFO, "duplicate", "event_key_already_recorded", customer.id)
         return {"ok": True, "duplicate": True}
     if info.reusable is False and unapplied_times:
         alerts.append(("card_not_reusable", customer.id))
@@ -346,6 +371,7 @@ async def reconcile(db: Session, customer: Customer, settings: Settings, now: da
                 alerts.append(("subscription_cancelled", customer.id))
             row.status = status_ours
     else:
+        log_outcome(logging.INFO, "no_change", "nothing_to_apply", customer.id)
         return {"ok": True}
     if old_to_disable:
         old_token = None
@@ -418,24 +444,39 @@ async def _send_alerts(settings: Settings, alerts: list, now: datetime) -> None:
 async def _on_charge(db: Session, data: dict, settings: Settings, now: datetime, alerts: list) -> dict:
     ref = ps.event_reference(data)
     if not ref:
-        logger.warning("subscription charge event without a reference ignored")
+        log_outcome(logging.WARNING, "ignored", "missing_reference")
         return {"ok": True}
     bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=ref).first()
     if bp is not None and bp.status != "pending":
+        log_outcome(logging.INFO, "duplicate", f"payment_already_{bp.status}", bp.customer_id, ref)
         return {"ok": True, "duplicate": True}
-    new_payment = None
     if bp is None:  # a renewal Paystack charged by itself: not issued by us, so it is tied to a customer by email
         customer = customer_for_event(db, data)
         if customer is None:
             alerts.append(("unknown_customer", None))
+            log_outcome(logging.WARNING, "ignored", "unknown_customer", None, ref)
             return {"ok": True}
-        new_payment = BillingPayment(customer_id=customer.id, provider=PROVIDER, reference=ref[:100],
-                                     amount_minor=_expected_base(db, customer.id, settings), currency=ps.PLAN_CURRENCY, status="pending")
+        # Record what Paystack reported BEFORE anything is asked or decided, so it is visible in billing_payments even if it cannot be applied yet. A pending row grants nothing: access only ever follows a
+        # verified, applied payment (reconcile). Committed at once (no network wait with a write lock held); a concurrent delivery of the same reference finds the row instead.
+        try:
+            db.add(BillingPayment(customer_id=customer.id, provider=PROVIDER, reference=ref[:100], amount_minor=_expected_base(db, customer.id, settings), currency=ps.PLAN_CURRENCY, status="pending"))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            customer = customer_for_event(db, data)
+            if customer is None:
+                return {"ok": True}
+            bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=ref[:100]).first()
+            if bp is not None and bp.status != "pending":
+                log_outcome(logging.INFO, "duplicate", f"payment_already_{bp.status}", customer.id, ref)
+                return {"ok": True, "duplicate": True}
+        log_outcome(logging.INFO, "recorded", "renewal_payment_pending", customer.id, ref)
     else:
         customer = db.get(Customer, bp.customer_id)
         if customer is None:
+            log_outcome(logging.WARNING, "ignored", "payment_customer_missing", bp.customer_id, ref)
             return {"ok": True}
-    return await reconcile(db, customer, settings, now, alerts, hint_code=ps.event_subscription_code(data), new_payment=new_payment)
+    return await reconcile(db, customer, settings, now, alerts, hint_code=ps.event_subscription_code(data), trigger_ref=ref[:100])
 
 
 async def _on_subscription_event(db: Session, name: str, data: dict, settings: Settings, now: datetime, alerts: list) -> dict:
@@ -500,15 +541,17 @@ async def handle_event(db: Session, event: dict, settings: Settings, now: dateti
     now = now or datetime.now(timezone.utc)
     alerts = Out()
     if name in IGNORED_EVENTS:
+        log_outcome(logging.INFO, "ignored", f"event_{name.replace('.', '_')}")
         return {"ok": True, "ignored": name}
     try:
         if name == "charge.success":
             try:
                 mine = is_subscription_charge(db, data, settings)
-            except Exception:  # noqa: BLE001 - never let the new path block a legacy payment
-                logger.warning("could not classify a charge event; the existing handler will decide")
+            except Exception as exc:  # noqa: BLE001 - never let the new path block a legacy payment
+                logger.warning("billing: outcome=passed_on reason=classification_failed cause=%s: %s", type(exc).__name__, safe_cause(exc))
                 return None
             if not mine:
+                log_outcome(logging.INFO, "passed_on", "charge_not_a_subscription_charge", None, ps.event_reference(data))
                 return None
             result = await _on_charge(db, data, settings, now, alerts)
         elif name in SUBSCRIPTION_EVENTS:

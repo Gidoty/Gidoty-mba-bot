@@ -136,7 +136,7 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
           </button>
         </div>
       )}
-      {billing.status === "ready" && screenKind(billing.options) === "offer" && <SubscribeCard options={billing.options} />}
+      {billing.status === "ready" && ["offer", "renew"].includes(screenKind(billing.options)) && <SubscribeCard options={billing.options} />}
 
       {!account.live_bypass_accepted_at && (
         <div className="flex items-center gap-1 text-xs text-muted">

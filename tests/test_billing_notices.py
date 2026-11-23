@@ -579,7 +579,7 @@ def test_retry_link_assumption_A2_it_is_also_applied_if_the_status_is_still_atte
 
 def test_retry_link_assumption_B_the_date_does_not_move_nothing_is_applied_and_the_owner_is_told(app_on, fake, tg):
     """TODAY: the payment is verified but NOT applied (we refuse to invent a period end), the webhook answers 503 (Paystack redelivers
-    for up to 72 hours), nothing is stored for the payment, and the owner is alerted once per 6 hours after the payment is 10 minutes old.
+    for up to 72 hours), the payment is recorded as PENDING (it grants nothing), and the owner is alerted once per 6 hours after the payment is 10 minutes old.
     The customer gets no extra time from us. If this is what Paystack does, an owner action is needed: see the doc."""
     with app_on() as c:
         cid, old_end = grace_customer(c, fake)
@@ -587,7 +587,10 @@ def test_retry_link_assumption_B_the_date_does_not_move_nothing_is_applied_and_t
         assert post_event(c, retry_payment(fake, cid, minutes_ago=1)).status_code == 503
         assert tg.to_owner == []  # a payment that is a minute old may simply be early: no alert yet
         assert post_event(c, retry_payment(fake, cid, minutes_ago=20)).status_code == 503
-        assert row(cid) == before and count(BillingPayment) == 1  # only the first payment is recorded
+        assert row(cid) == before  # no period moved
+        with session_scope() as s:
+            statuses = [b.status for b in s.query(BillingPayment).order_by(BillingPayment.issued_at).all()]
+        assert statuses.count("paid") == 1 and set(statuses) <= {"paid", "pending"}  # the first payment is the only paid one; the retried payments are recorded as pending and grant nothing
         assert any(subs.ALERTS["payment_pending_apply"] in m for m in tg.to_owner)
         n = len([m for m in tg.to_owner if subs.ALERTS["payment_pending_apply"] in m])
         post_event(c, retry_payment(fake, cid, minutes_ago=25))

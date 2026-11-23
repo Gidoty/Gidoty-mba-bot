@@ -347,13 +347,25 @@ def new_reference() -> str:
     return f"mbacrypto_{secrets.token_hex(12)}"
 
 
-def require_configured(settings: Settings) -> None:
+def require_configured(settings: Settings, *, quiet: bool = False) -> None:
     if not (settings.nowpayments_api_key and settings.nowpayments_pay_currency and settings.nowpayments_ipn_url
             and _CODE.match(settings.nowpayments_pay_currency)):
         raise NotConfigured("NOWPayments is not configured")
+    if price_problem(settings):
+        # Fail closed. An operator-facing line says exactly what is wrong; the customer only sees that crypto payment is not available.
+        if not quiet:  # the options route asks on every dashboard load: only a real checkout attempt logs the operator line
+            logger.error("nowpayments: NOWPAYMENTS_PRICE_USD is malformed, zero or negative; refusing to create an invoice (fix the value and restart the service)")
+        raise NotConfigured("NOWPayments price is not valid")
+
+
+def price_problem(settings: Settings) -> bool:
+    """True when NOWPAYMENTS_PRICE_USD was set to something that is not a positive amount of dollars (config turns that into an empty string). Unset is the default price, not a problem."""
+    return not settings.nowpayments_price_usd
 
 
 def price_cents(settings: Settings) -> int:
+    if price_problem(settings):
+        raise NotConfigured("NOWPayments price is not valid")  # never a guessed price
     return int((Decimal(settings.nowpayments_price_usd) * 100).to_integral_value())
 
 
@@ -393,6 +405,7 @@ def start_checkout(db: Session, customer: Customer, settings: Settings, now: dat
     if pending >= MAX_PENDING_PER_DAY:
         raise CheckoutRefused(409, "too many unpaid invoices; pay one of them or try again tomorrow")
     cents = price_cents(settings)
+    logger.info("nowpayments: creating an invoice for price_usd=%s (NOWPAYMENTS_PRICE_USD as this process read it)", Decimal(cents) / 100)
     minimum = get_min_amount(settings)
     if minimum is not None and minimum > Decimal(cents) / 100:
         logger.warning("nowpayments minimum above the price: checkout refused")

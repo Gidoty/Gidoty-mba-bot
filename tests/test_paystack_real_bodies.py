@@ -242,7 +242,7 @@ def test_the_renewal_is_not_applied_before_paystacks_record_has_moved(env):
     with session_scope() as db:
         with pytest.raises(subs.RetryLater):
             asyncio.run(subs.handle_event(db, renewal, e.settings, now=at(renewal["data"]["paid_at"])))
-    assert e.row() == old and len(e.payments()) == 1
+    assert e.row() == old and len(e.payments()) == 2  # the first payment, plus the renewal recorded as pending (it grants nothing)
 
 
 def test_a_renewal_for_an_unknown_email_or_another_plan_grants_nothing(env):
