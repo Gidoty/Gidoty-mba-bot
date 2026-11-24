@@ -159,6 +159,42 @@ def _r_multiple_from_env(name: str) -> float:
     return min(50.0, max(0.25, value))
 
 
+def _atr_multiple_from_env(name: str, default: float = 0.0) -> float:
+    """A number of ATRs. Unset or empty is `default`; malformed, zero, negative or not finite is 0 = OFF (never the default, so a typo cannot switch a rule on); on is clamped to 0.5..10."""
+    import math
+
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(10.0, max(0.5, value))
+
+
+def parse_trail_tiers(raw: str | None) -> tuple[tuple[float, float], ...]:
+    """PROFIT_TRAIL_TIERS, for example "0:3,2:2,4:1.5": from +0R trail 3 ATR, from +2R 2 ATR, from +4R 1.5 ATR. Sorted by the R level, each level 0..50, each distance 0.5..10 ATR, no repeated level. Anything wrong in
+    any token (a typo, a missing colon, a number out of range, a level repeated) gives NO tiers (the plain PROFIT_TRAIL_ATR is used), never a partial list."""
+    import math
+
+    if not raw or not raw.strip():
+        return ()
+    out: dict[float, float] = {}
+    for token in raw.split(","):
+        try:
+            a, b = token.split(":")
+            lvl, mult = float(a), float(b)
+        except ValueError:
+            return ()
+        if not (math.isfinite(lvl) and math.isfinite(mult)) or not 0.0 <= lvl <= 50.0 or not 0.5 <= mult <= 10.0 or lvl in out:
+            return ()
+        out[lvl] = mult
+    return tuple(sorted(out.items()))
+
+
 def parse_signups_mode(raw: str | None) -> str:
     """open | closed for creating NEW customer accounts (docs/commercial_readiness.md). Unset or empty is open, so nothing changes by default. Any other value that is not "open" is closed: a
     mistyped value must never leave registration open to strangers while the operator thinks it is shut."""
@@ -424,6 +460,21 @@ class Settings:
     profit_every_round: bool = False
     profit_move_min_interval_seconds: int = 900
     profit_move_min_improve_atr: float = 0.25
+    # Profit protection v2, Part C (docs/safety/profit_staged_lock.md): a staged profit lock for every strategy. Every stage value 0 means OFF (the default). R is the distance from the entry to the initial stop.
+    #  stage 1: once the best price is up stage1_r x R, the stop goes to the entry plus the round-trip cost buffer (both fees, assumed slippage, funding paid), or, if stage1_atr is set, the better of that and the
+    #           best price minus stage1_atr x ATR (so the stop sits beyond normal noise);
+    #  stage 2: once up stage2_r x R, the stop goes to entry + stage2_lock_r x R;
+    #  trail:   once up trail_start_r x R, the stop trails the best price by trail_atr x ATR, or by the tier that applies at that profit (profit_trail_tiers), and by no more than tighten_trail_atr x ATR once the
+    #           trade has been held tighten_after_candles candles of its strategy's timeframe.
+    profit_lock_stage1_r: float = 0.0
+    profit_lock_stage1_atr: float = 0.0
+    profit_lock_stage2_r: float = 0.0
+    profit_lock_stage2_lock_r: float = 1.0
+    profit_trail_start_r: float = 0.0
+    profit_trail_atr: float = 2.0
+    profit_trail_tiers: tuple = ()
+    profit_tighten_after_candles: int = 0
+    profit_tighten_trail_atr: float = 0.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -662,6 +713,15 @@ def load_settings() -> Settings:
         ema_trail_atr=min(10.0, max(0.5, _env_float("EMA_TRAIL_ATR", 2.0))),
         ema_breakeven_r=_r_multiple_from_env("EMA_BREAKEVEN_R"),
         profit_every_round=_env_bool("PROFIT_EVERY_ROUND", False),
+        profit_lock_stage1_r=_r_multiple_from_env("PROFIT_LOCK_STAGE1_R"),
+        profit_lock_stage1_atr=_atr_multiple_from_env("PROFIT_LOCK_STAGE1_ATR"),
+        profit_lock_stage2_r=_r_multiple_from_env("PROFIT_LOCK_STAGE2_R"),
+        profit_lock_stage2_lock_r=min(50.0, max(0.1, _env_float("PROFIT_LOCK_STAGE2_LOCK_R", 1.0))),
+        profit_trail_start_r=_r_multiple_from_env("PROFIT_TRAIL_START_R"),
+        profit_trail_atr=_atr_multiple_from_env("PROFIT_TRAIL_ATR", 2.0) or 2.0,
+        profit_trail_tiers=parse_trail_tiers(os.environ.get("PROFIT_TRAIL_TIERS")),
+        profit_tighten_after_candles=max(0, min(10_000, _env_int("PROFIT_TIGHTEN_AFTER_CANDLES", 0))),
+        profit_tighten_trail_atr=_atr_multiple_from_env("PROFIT_TIGHTEN_TRAIL_ATR"),
         profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
         profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),

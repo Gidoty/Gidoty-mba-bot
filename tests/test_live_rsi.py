@@ -253,5 +253,5 @@ def test_an_open_rsi_trade_is_still_managed_when_the_switch_is_turned_off(db, mo
 def test_the_exit_rules_never_call_a_bare_order_from_the_trader(db):
     import inspect
 
-    src = inspect.getsource(trader._live_rsi_exit)
+    src = inspect.getsource(trader._live_rsi_rules) + inspect.getsource(trader._live_rsi_exit)
     assert "execute_exit" in src and "create_order" not in src
