@@ -866,6 +866,8 @@ async def _record_exit(
             "profit_target": "profit target",
             "channel_exit": "channel exit",
             "trailing_stop": "trailing stop",
+            "take_profit": "take profit",
+            "break_even_stop": "break-even stop",
             "rsi_exit": "RSI back to 50",
             "time_stop": "time stop",
         }.get(reason, "closed")
