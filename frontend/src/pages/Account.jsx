@@ -8,6 +8,8 @@ import { useAccount } from "../context/AccountContext.jsx";
 import { dayMonthYear } from "../lib/format.js";
 import { navigate } from "../useHashRoute.js";
 
+const STATEMENT_URL = `${import.meta.env.VITE_API_URL || "/api"}/statements/trades.csv`;
+
 export default function Account({ customer, onLogout }) {
   const { account } = useAccount();
   const [copied, setCopied] = useState(false);
@@ -27,6 +29,11 @@ export default function Account({ customer, onLogout }) {
   return (
     <div className="grid gap-4">
       <PageHeader title="Account" subtitle="Your profile." />
+      <Card>
+        <CardTitle>Your trade statement</CardTitle>
+        <p className="text-sm text-fg">A spreadsheet file (CSV) of your closed trades with results before fees, fees, funding and net as separate columns. A column is empty when the figure was not recorded for that trade (funding is not recorded yet).</p>
+        <a className={secondaryButton} href={STATEMENT_URL} download>Download statement (CSV)</a>
+      </Card>
 
       <Card>
         <div className="flex items-center gap-4">

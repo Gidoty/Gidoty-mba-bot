@@ -13,13 +13,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
-from ... import admin_actions, admin_auth, admin_service, operator_settings
+from ... import account_closure, admin_actions, admin_auth, admin_service, operator_settings
 from ...config import Settings, load_settings
 from ...db import session_scope
 from ...models import AdminAudit, AdminChange, Customer, DataRequest, TradingAccount
 from ..deps import get_current_customer, get_db, get_settings
 from ..admin_schemas import (
     ActionDone,
+    CompleteDeletionBody,
+    DeletionDone,
     ChangesList,
     DaysBody,
     NoteBody,
@@ -351,3 +353,19 @@ def kill_engage(body: StepUp, request: Request, admin: Customer = Depends(requir
 def kill_release(body: StepUp, request: Request, admin: Customer = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> ActionDone:
     _step_up(request, db, admin, settings, body, "kill release")
     return _done(_run(db, lambda d: admin_actions.kill_flag(d, admin.id, False, body.reason, _req_now(request))))
+
+
+@router.post("/requests/{request_id}/complete-deletion", response_model=DeletionDone)
+def request_complete_deletion(request_id: str, body: CompleteDeletionBody, request: Request, admin: Customer = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> DeletionDone:
+    """Erase an approved deletion request's customer (docs/safety/statements_and_closure.md). Needs ACCOUNT_DELETION_ENABLED on top of the admin actions switch, the exact confirmation text and a fresh code."""
+    if not settings.account_deletion_enabled:
+        request.state.audit_detail = "complete-deletion: switched off"
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "account deletion is switched off (ACCOUNT_DELETION_ENABLED)")
+    _step_up(request, db, admin, settings, body, f"delete {request_id[:8]}")
+    try:
+        result = account_closure.complete_deletion(db, admin.id, request_id, body.reason, body.confirm, admin_emails=settings.admin_emails, now=_req_now(request))
+    except account_closure.ClosureError as exc:
+        db.rollback()
+        raise HTTPException(exc.status_code, exc.message) from None
+    db.commit()
+    return DeletionDone(ok=True, **result)

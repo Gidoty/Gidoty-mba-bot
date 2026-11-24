@@ -12,4 +12,4 @@ LIB = Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib"
 def test_admin_actions_helpers():
     result = subprocess.run(["node", "--test", str(LIB / "adminActions.test.js")], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-1000:]
-    assert "# fail 0" in result.stdout and "# pass 6" in result.stdout
+    assert "# fail 0" in result.stdout and "# pass 7" in result.stdout
