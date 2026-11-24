@@ -3,8 +3,9 @@
 One account's CLOSED trades are grouped by mode (live, demo, practice), strategy and pair. Paper, demo and live are never added together. For each group:
   * gross P&L is the sum of `trades.pnl` (before exchange fees and before Futures funding);
   * fees are the sum of the real commissions captured from the fills (`entry_fee_quote` + `exit_fee_quote`, PR fee capture). A group is `fees_complete` only if EVERY closed trade in it has both numbers;
-  * net P&L (gross - fees) is given ONLY for a complete live or demo group. Otherwise it is None and the wording says "before fees". Futures funding is never included in either figure;
-  * practice (paper) results are SIMULATED: no fees, no slippage, never net.
+  * Futures funding is the sum of `funding_quote` (signed from the account's side: negative = paid). A Spot trade has none (known, zero). A Futures trade whose funding could not be read has NULL: unknown, never guessed;
+  * net P&L (gross - fees + funding) is given ONLY for a live or demo group where EVERY trade has both fee numbers AND its funding known. Otherwise it is None and the wording says "before fees" or "before funding";
+  * practice (paper) results are SIMULATED: no fees, no slippage, no funding, never net.
 Nothing here reads a key or a secret: every field is a number, a count or a label."""
 from __future__ import annotations
 
@@ -19,13 +20,19 @@ MODE_LABEL = {
     MODE_DEMO: "Demo (Binance demo system, no real money)",
     MODE_PAPER: "Practice (simulated: no fees, no slippage)",
 }
-FUNDING_NOTE = "Futures funding payments are not included in any figure."
+FUNDING_NOTE = "Net is shown only when the real fees and the Futures funding of every trade in the figure are known; funding is shown on its own line."
 
 
 def mode_of(trade) -> str:
     if getattr(trade, "is_demo", False):
         return MODE_DEMO
     return MODE_PAPER if getattr(trade, "is_paper", False) else MODE_LIVE
+
+
+def funding_applies(trade) -> bool:
+    """Funding exists only on Futures. A trade's market is not stored on it, so it is read from the protective order it was given: Futures stops are "stop_market_close" or "stop_market_reduce", Spot stops
+    "stop_loss" or "stop_loss_limit". A trade with no protective kind (a very old or practice row) is treated as Spot: no funding claimed, and a practice trade never gets a net figure anyway."""
+    return str(getattr(trade, "protective_kind", None) or "").startswith("stop_market")
 
 
 def strategy_of(trade) -> str:
@@ -47,21 +54,28 @@ class Group:
     gross_pnl: float = 0.0
     fees: float = 0.0
     trades_with_fees: int = 0
+    funding: float = 0.0  # signed from the account's side: negative = paid
+    trades_with_funding: int = 0  # trades whose funding is KNOWN (read, or a Spot trade, which has none)
 
     @property
     def fees_complete(self) -> bool:
         return self.mode != MODE_PAPER and self.closed > 0 and self.trades_with_fees == self.closed
 
     @property
+    def funding_complete(self) -> bool:
+        return self.mode != MODE_PAPER and self.closed > 0 and self.trades_with_funding == self.closed
+
+    @property
     def net_pnl(self) -> float | None:
-        """Gross minus fees, only when every trade in the group has both fee numbers. Never for a practice (simulated) group."""
-        return round(self.gross_pnl - self.fees, 8) if self.fees_complete else None
+        """Gross minus fees plus funding, only when every trade in the group has both fee numbers AND its funding known. Never for a practice (simulated) group."""
+        return round(self.gross_pnl - self.fees + self.funding, 8) if (self.fees_complete and self.funding_complete) else None
 
     def to_dict(self) -> dict:
         return {
             "mode": self.mode, "strategy": self.strategy, "pair": self.pair, "closed_trades": self.closed, "wins": self.wins, "losses": self.losses,
             "gross_pnl": round(self.gross_pnl, 8), "fees": round(self.fees, 8) if self.trades_with_fees else None, "trades_with_fees": self.trades_with_fees,
-            "fees_complete": self.fees_complete, "net_pnl": self.net_pnl, "simulated": self.mode == MODE_PAPER,
+            "fees_complete": self.fees_complete, "funding": round(self.funding, 8) if self.trades_with_funding else None, "trades_with_funding": self.trades_with_funding,
+            "funding_complete": self.funding_complete, "net_pnl": self.net_pnl, "simulated": self.mode == MODE_PAPER,
         }
 
 
@@ -77,6 +91,13 @@ def _add(group: Group, trade) -> None:
     if entry is not None and exit_ is not None and group.mode != MODE_PAPER:
         group.fees += entry + exit_
         group.trades_with_fees += 1
+    if group.mode != MODE_PAPER:
+        funding = _num(getattr(trade, "funding_quote", None))
+        if funding is not None:
+            group.funding += funding
+            group.trades_with_funding += 1
+        elif not funding_applies(trade):
+            group.trades_with_funding += 1  # a Spot trade has no funding: known, zero
 
 
 def build(trades, *, closed_status: str = "closed") -> dict:
@@ -121,8 +142,11 @@ def daily_summary_text(today: str, closed_today, quote: str) -> str:
         trades_text = f"{g.closed} trade{'s' if g.closed != 1 else ''} closed"
         if m == MODE_PAPER:
             lines.append(f"{names[m]}: {trades_text}, {g.gross_pnl:+.2f} {quote} (simulated, no fees or slippage)")
+        elif g.fees_complete and g.funding_complete:
+            lines.append(f"{names[m]}: {trades_text}, net {g.net_pnl:+.2f} {quote} after fees and funding (gross {g.gross_pnl:+.2f}, fees {g.fees:.2f}, funding {g.funding:+.2f})")
         elif g.fees_complete:
-            lines.append(f"{names[m]}: {trades_text}, net {g.net_pnl:+.2f} {quote} after fees ({g.gross_pnl:+.2f} before fees, fees {g.fees:.2f})")
+            known = f", funding known for {g.trades_with_funding} of {g.closed}" if g.trades_with_funding else ""
+            lines.append(f"{names[m]}: {trades_text}, {g.gross_pnl - g.fees:+.2f} {quote} after fees, before funding (gross {g.gross_pnl:+.2f}, fees {g.fees:.2f}){known}")
         else:
             known = f", fees known for {g.trades_with_fees} of {g.closed}" if g.trades_with_fees else ""
             lines.append(f"{names[m]}: {trades_text}, {g.gross_pnl:+.2f} {quote} before fees{known}")

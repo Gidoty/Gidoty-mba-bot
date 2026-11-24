@@ -58,7 +58,7 @@ def test_modes_are_never_added_together_and_each_is_grouped_by_strategy_and_pair
     assert live["total"]["closed_trades"] == 2 and live["total"]["gross_pnl"] == 1.0 and demo["total"]["gross_pnl"] == 7.0 and paper["total"]["gross_pnl"] == 50.0  # three separate totals
     assert [(g["strategy"], g["closed_trades"]) for g in live["by_strategy"]] == [("ema_cross_atr_v1", 1), ("rsi_mr_v1", 1)]  # an empty strategy id is the EMA strategy
     assert sorted((g["strategy"], g["pair"]) for g in live["by_pair"]) == [("ema_cross_atr_v1", "BTC/USDT"), ("rsi_mr_v1", "ETH/USDT")]
-    assert r["funding_note"].startswith("Futures funding")
+    assert r["funding_note"].startswith("Net is shown only when the real fees and the Futures funding")
 
 
 def test_net_exists_only_when_every_trade_has_both_real_fee_numbers():
@@ -92,7 +92,7 @@ def test_the_daily_summary_keeps_the_modes_apart_and_says_net_only_with_every_fe
     text = rp.daily_summary_text("2027-03-10", [T(pnl=2.0, entry_fee=0.1, exit_fee=0.1), T(demo=True, pnl=1.0), T(paper=True, pnl=9.0)], "USDT")
     lines = text.splitlines()
     assert lines[0] == "Daily summary (2027-03-10 UTC)"
-    assert "Live: 1 trade closed, net +1.80 USDT after fees (+2.00 before fees, fees 0.20)" in lines
+    assert "Live: 1 trade closed, net +1.80 USDT after fees and funding (gross +2.00, fees 0.20, funding +0.00)" in lines  # these test trades are Spot-like: no funding applies, known zero
     assert "Demo (no real money): 1 trade closed, +1.00 USDT before fees" in lines  # no fees captured: not net
     assert "Practice: 1 trade closed, +9.00 USDT (simulated, no fees or slippage)" in lines
     partial = rp.daily_summary_text("2027-03-10", [T(pnl=2.0, entry_fee=0.1, exit_fee=0.1), T(pnl=1.0)], "USDT")

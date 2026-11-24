@@ -325,7 +325,7 @@ def test_a_paper_trade_takes_profit_at_the_target_price(db, monkeypatch):
     settings, aid, base = paper_trade(ema_take_profit_r=2.0, atr_period=2)
     run_paper(monkeypatch, settings, aid, paper_rows(base, [(100, 112, 99, 111), (111, 125, 110, 124)]), 124.0)
     t = the_trade(aid)
-    assert t.status == "closed" and t.close_reason == "take_profit" and t.exit_price == pytest.approx(120.0) and t.pnl == pytest.approx(20.0)
+    assert t.status == "closed" and t.close_reason == "take_profit" and t.exit_price == pytest.approx(120.21) and t.pnl == pytest.approx(20.21)  # entry + 2 R + the cost buffer (both fees at 5 bps plus 11 bps slippage on 100): the target is net of costs (docs/safety/net_pnl.md)
 
 
 def test_a_paper_trade_ratchets_its_stop_and_exits_on_it_never_looser(db, monkeypatch):

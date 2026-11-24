@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { basisLabel, feesText, headline, resultText, strategyName, winRateText } from "./report.js";
+import { basisLabel, feesText, fundingText, grossText, headline, netText, resultText, strategyName, winRateText } from "./report.js";
 
 const live = { mode: "live", closed_trades: 4, wins: 3, losses: 1, gross_pnl: 10, fees: 1.5, trades_with_fees: 4, fees_complete: true, net_pnl: 8.5, simulated: false };
 
 test("net is shown only when every trade's real fees are known", () => {
-  assert.equal(basisLabel(live), "net, after fees");
+  assert.equal(basisLabel(live), "net, after fees and funding");
   assert.equal(headline(live), 8.5);
   const partial = { ...live, fees_complete: false, net_pnl: null, trades_with_fees: 2 };
   assert.equal(basisLabel(partial), "before fees");
@@ -37,4 +37,25 @@ test("a net figure without complete fees is not shown as net, whatever else arri
   const odd = { ...live, fees_complete: false, net_pnl: 8.5 };
   assert.equal(basisLabel(odd), "before fees");
   assert.equal(headline(odd), 10);
+});
+
+test("net also needs every trade's funding known, and funding is its own line", () => {
+  const withFunding = { ...live, funding: -0.4, trades_with_funding: 4, funding_complete: true, net_pnl: 8.1 };
+  assert.equal(basisLabel(withFunding), "net, after fees and funding");
+  assert.equal(netText(withFunding, "USDT"), "+8.10 USDT");
+  assert.equal(fundingText(withFunding), "-0.40");
+  assert.equal(grossText(withFunding), "+10.00");
+  const unknown = { ...withFunding, funding: -0.1, trades_with_funding: 3, funding_complete: false, net_pnl: null };
+  assert.equal(basisLabel(unknown), "after fees, before funding");
+  assert.equal(headline(unknown), 10); // gross, never an invented net
+  assert.equal(netText(unknown, "USDT"), "not known");
+  assert.equal(fundingText(unknown), "-0.10 (known for 3 of 4 trades)");
+  assert.equal(netText({ ...unknown, net_pnl: 8.5 }, "USDT"), "not known"); // a net number that arrives without complete funding is not shown
+});
+
+test("a practice group shows no funding line and no net", () => {
+  const paper = { mode: "paper", closed_trades: 5, gross_pnl: -3, fees: null, fees_complete: false, funding: null, funding_complete: false, net_pnl: -1, simulated: true };
+  assert.equal(fundingText(paper), "none (simulated)");
+  assert.equal(netText(paper, "USDT"), "not known");
+  assert.equal(fundingText({ ...live, funding: null, funding_complete: false }), "not captured");
 });

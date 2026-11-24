@@ -19,6 +19,7 @@ class ExitRules:
     trail_trigger_r: float = 0.0
     trail_atr: float = 2.0
     breakeven_r: float = 0.0
+    tp_buffer: float = 0.0  # price distance added to the take-profit level so the target is net of costs (both fees at the account's tier, assumed slippage); 0 = the plain level of PR #84
 
     @property
     def any_on(self) -> bool:
@@ -34,12 +35,13 @@ def r_distance(entry: float, initial_stop: float) -> float | None:
     return d if d > 0 else None
 
 
-def take_profit_level(side: str, entry: float, initial_stop: float, take_profit_r: float) -> float | None:
-    """The price at which take profit fires, or None when the rule is off or R is unusable. Always on the PROFIT side of the entry."""
+def take_profit_level(side: str, entry: float, initial_stop: float, take_profit_r: float, buffer: float = 0.0) -> float | None:
+    """The price at which take profit fires, or None when the rule is off or R is unusable. Always on the PROFIT side of the entry. `buffer` (never negative) moves it further into profit so the target is net of costs."""
     r = r_distance(entry, initial_stop)
     if take_profit_r <= 0 or r is None:
         return None
-    return entry + take_profit_r * r if side == "long" else entry - take_profit_r * r
+    buffer = max(0.0, buffer)
+    return entry + take_profit_r * r + buffer if side == "long" else entry - take_profit_r * r - buffer
 
 
 def take_profit_touched(side: str, level: float | None, price: float) -> bool:
@@ -65,7 +67,7 @@ def walk(side: str, entry: float, initial_stop: float, opened_ms: int, closed: l
     candles. `atr_values[i]` is the ATR at `closed[i]` (None allowed)."""
     stop = initial_stop
     r = r_distance(entry, initial_stop)
-    tp = take_profit_level(side, entry, initial_stop, rules.take_profit_r)
+    tp = take_profit_level(side, entry, initial_stop, rules.take_profit_r, rules.tp_buffer)
     long_side = side == "long"
     extreme = entry
     reason_of_stop = "stop_loss"
