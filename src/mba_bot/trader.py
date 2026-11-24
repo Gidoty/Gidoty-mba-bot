@@ -1017,10 +1017,12 @@ async def _auto_new_strategy_pass(session, account, client, settings: Settings, 
     scan order is entered through `_maybe_enter` exactly as an EMA or single-pair entry is (same guards, risk, stop); the others are recorded as `not_best_ranked`. The account's pair is set to the entered pair
     for the entry and put back if no trade opened (an Auto Select pair only ever changes together with an entry). Returns True once the strategy was evaluated."""
     hits: list[tuple[str, object, float]] = []
+    candle_of: dict[str, int] = {}  # observability only: the signal candle of each hit
     evaluated = False
     for pair in list(cache):
+        meta: dict = {}
         try:
-            got = await _live_strategy_signal(client, account, pair, strategy, settings, now=now, now_ms=now_ms, session=session, candles=cache.get(pair))
+            got = await _live_strategy_signal(client, account, pair, strategy, settings, now=now, now_ms=now_ms, session=session, candles=cache.get(pair), meta=meta)
         except exchange.WithdrawalPermissionDetected:
             raise
         except Exception:  # noqa: BLE001 - a failed read on one pair must not stop the other pairs or the cycle
@@ -1029,11 +1031,15 @@ async def _auto_new_strategy_pass(session, account, client, settings: Settings, 
         evaluated = True
         if got is not None:
             hits.append((pair, got[0], got[1]))
+            if "candle_ts" in meta:
+                candle_of[pair] = meta["candle_ts"]
     if not hits:
         return evaluated
-    pair, sig, price = hits[0]
-    for other, _s, _p in hits[1:]:
-        opportunity.record_not_taken(session, settings, account, strategy_id=strategy, pair=other, candle_ts=None, reason=opportunity.R_NOT_BEST, is_paper=False, now=now, detail={"picked": pair})  # observability only
+    pair, sig, price = hits[0]  # the pick is the first pair in scan order; nothing below changes it
+    picked_strength = opportunity.strength(strategy, sig)
+    for other, other_sig, _p in hits[1:]:
+        opportunity.record_not_taken(session, settings, account, strategy_id=strategy, pair=other, candle_ts=candle_of.get(other), reason=opportunity.R_NOT_BEST, is_paper=False, now=now,
+                                     detail={"picked": pair, "picked_strength": picked_strength, "strength": opportunity.strength(strategy, other_sig)})  # observability only
     previous = account.pair
     account.pair = pair
     await _maybe_enter(session, account, client, sig, price, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
@@ -1993,7 +1999,7 @@ async def _manage_rsi_trade(session, account, trade: Trade, closed: list, settin
     )
 
 
-async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session, candles: list | None = None):
+async def _live_strategy_signal(client, account, pair: str, strategy: str, settings: Settings, *, now, now_ms: int, session, candles: list | None = None, meta: dict | None = None):
     """(signal, price) for one strategy on one pair from closed candles, or None when it has no actionable, fresh signal. Read-only. `candles` (the Auto Select scan's candles for this pair this round) is used instead
     of a new fetch when the strategy's timeframe is the scan's; with None, or another timeframe, the candles are fetched as before."""
     allow_short = account.market_type == "futures"
@@ -2019,6 +2025,8 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
             return None
         sig = donchian.signal_from_candles(closed, _donchian_params(settings), allow_short=allow_short)
         opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
+        if meta is not None:
+            meta["candle_ts"] = closed[-1].timestamp  # observability only: which candle the verdict is about
         return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
     if strategy == rsi_mr.STRATEGY_ID:
         tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
@@ -2029,6 +2037,8 @@ async def _live_strategy_signal(client, account, pair: str, strategy: str, setti
             return None
         sig = rsi_mr.generate_signal(closed, _rsi_params(settings), allow_short=allow_short)
         opportunity.record_verdict(session, settings, account, strategy_id=strategy, pair=pair, candle_ts=closed[-1].timestamp, sig=sig, price=closed[-1].close, is_paper=False, now=now, tf=tf)  # observability only
+        if meta is not None:
+            meta["candle_ts"] = closed[-1].timestamp  # observability only
         return (sig, raw[-1].close) if (sig.side and fresh(closed, tf_ms, strategy)) else None
     candles = candles_from_ohlcv(await client.fetch_ohlcv(symbol, timeframe=settings.timeframe, limit=settings.ohlcv_limit))
     if not candles:
