@@ -5,7 +5,7 @@ Plan hash `9348815fefe80d40` (registered in commit 5464035 before any run). Data
 ## The answer
 1. **No rule set beats the current rules on net profit in both windows, on either timeframe.** Every option that was better than RS0 in one window was worse in the other. The pre-registered "best combination" was RS0 itself on 1h (nothing qualified on tune) and A3 on 15m (it was +23.5 R on tune and **-215.2 R against RS0 on confirm**).
 2. **The give-back rate does fall, as designed, and consistently.** Any stage 1 lock cuts it from 50% (tune) and 64% (confirm) on 1h to 2% to 6%, and from 56% and 64% on 15m to 9% to 14%. This happens almost by construction: once a trade has reached +1 R its stop sits at entry plus costs, so it can no longer close below that, except through a gap.
-3. **The price of that is winners cut short and, on most rule sets, net profit.** PR #84's rules (take profit, break-even, trail), the staged lock (B1), stage 1 beyond noise (P1), both trails (T1, M1), partial profit (I1) and the reversal gap exit (E2) lowered net R in both windows on 1h (and every rule set but A2 and A3 did on 15m in both windows).
+3. **The price of that is winners cut short and, on most rule sets, net profit.** PR #84's rules (take profit, break-even, trail), the staged lock (B1), stage 1 beyond noise (P1), both trails (T1, M1), partial profit (I1), the time stop (D1) and the reversal gap exit (E2) lowered net R in both windows on 1h (and every rule set but A2 and A3 did on 15m in both windows).
 4. **The same simple rule changed sign between windows.** Stage 1 at +1 R (A1) on 1h: -5.4 R against RS0 on tune, +33.2 R on confirm. With 139 to 371 trades per window and a baseline that is itself near zero (RS0: -0.033 R per trade on tune, +0.112 on confirm) that is what noise looks like. I did not compute confidence intervals. I would not switch anything on from this.
 5. **The baseline is the larger problem.** On 15m RS0 loses 380 R on tune and wins 27.6 R on confirm; no profit rule fixes a strategy whose edge after costs is about zero.
 
@@ -47,7 +47,7 @@ The cost is the winners cut short and the net R given up. Measured against the p
 - **Stage 1 placed beyond noise (P1), the staged lock (B1), the tiered trail (T1) and the time-tightened trail (M1) do NOT reduce the cost.** They cut more winners than A1 on 1h tune (49, 54, 40, 43 against 37) and were behind A1 in every window and timeframe.
 - **Partial profit (I1) does NOT.** It was behind A1 by 33 R to 121 R in every window and timeframe. Its extra order cost is small (1.0 R and 0.5 R on 1h, 8.4 R and 3.8 R on 15m); the loss is in what it gives up on the runner.
 - **Re-entry (J1) recovered the move less than half the time and did not pay consistently.** 1h: 32 of 74 re-entries (43%) on tune and 16 of 36 (44%) on confirm. Against A1 it was -16.9 R on tune and +11.7 R on confirm on 1h, and -92.5 R and -66.9 R on 15m, where each re-entry is another full round trip of costs.
-- **The reversal exits (E1, E2) and the time stop (D1)** gave an opposite sign between windows on 1h (E1: -19.1 then +11.9 R) and were worse on 15m in both.
+- **The reversal exits and the time stop.** E1 (close back across the fast EMA) flipped sign on 1h (-19.1 R on tune, +11.9 R on confirm). E2 and D1 were below RS0 in both windows on 1h (E2: -48.9 and -0.8 R; D1: -39.2 and -1.1 R). All three were below RS0 in both windows on 15m.
 
 ## Limits (read before using any of this)
 - Two windows, one strategy (EMA), four pairs. Donchian and RSI were not simulated, so the staged lock is unmeasured for them.
