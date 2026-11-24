@@ -362,7 +362,7 @@ def test_a_copy_that_fails_its_integrity_check_stops_the_deploy_and_puts_the_old
     old = box.head(box.server)
     head = box.new_commit({"README": "two\n"})
     r = box.run("deploy.sh", "--expect-head", head)
-    assert r.returncode == 1 and "integrity check FAILED" in (r.stdout + r.stderr) and box.head(box.server) == old and box.state.read_text().strip() == "active"
+    assert r.returncode == 1 and "FAILED" in (r.stdout + r.stderr) and box.head(box.server) == old and box.state.read_text().strip() == "active"
     assert box.run("backup_check.sh").returncode == 1  # the standalone script refuses too
 
 

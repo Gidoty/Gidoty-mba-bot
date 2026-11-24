@@ -11,11 +11,15 @@ dest="$BACKUP_DIR/mba_bot-$label-$(date -u +%Y%m%d-%H%M%S).db"
 "$PYTHON" - "$DB_PATH" "$dest" <<'PY'
 import os, sqlite3, sys
 src, dest = sys.argv[1], sys.argv[2]
-a = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=20)
-b = sqlite3.connect(dest)
-a.backup(b)  # the online backup API: a consistent copy even if the file is in WAL mode
-verdict = b.execute("PRAGMA integrity_check").fetchall()
-b.close(); a.close()
+try:
+    a = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=20)
+    b = sqlite3.connect(dest)
+    a.backup(b)  # the online backup API: a consistent copy even if the file is in WAL mode
+    verdict = b.execute("PRAGMA integrity_check").fetchall()
+    b.close(); a.close()
+except Exception as exc:  # a damaged page can stop the copy or the check itself: that is a failed check too
+    print(f"backup FAILED: the database could not be copied or checked ({type(exc).__name__})", file=sys.stderr)
+    sys.exit(1)
 os.chmod(dest, 0o600)
 if verdict != [("ok",)]:
     print("integrity check FAILED on the copy", file=sys.stderr)
