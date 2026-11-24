@@ -12,11 +12,13 @@ from ..db import session_scope
 from .. import pair_catalog
 from ..legal import legal_acceptance_current
 from ..models import Customer
+from ..operator_settings import effective_settings
 from .security import SESSION_COOKIE_NAME, TokenError, read_customer_id
 
 
 def get_settings() -> Settings:
-    return load_settings()
+    """The environment settings with the operator's database settings applied (operator_settings.py). With no rows stored this is exactly load_settings()."""
+    return effective_settings(load_settings())
 
 
 def get_db() -> Iterator[Session]:

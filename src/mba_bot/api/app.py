@@ -24,6 +24,7 @@ from .. import daily_limit
 from ..db import init_db
 from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
+from ..operator_settings import effective_settings
 from ..scheduler import run_forever
 from .ratelimit import RateLimitMiddleware
 from .routers import account, auth, billing, pairs, privacy, reports, telegram, trades
@@ -57,7 +58,7 @@ def _log_scheduler_task_ended(task: asyncio.Task) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = load_settings()
+    settings = effective_settings(load_settings(), startup=True)  # the operator's database settings, restart-needed ones included (operator_settings.py)
     if not settings.encryption_key:
         raise RuntimeError("ENCRYPTION_KEY is not set - generate one with `python -m mba_bot.crypto_utils`")
     if not settings.jwt_secret:
@@ -96,7 +97,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    settings = load_settings()
+    settings = effective_settings(load_settings(), startup=True)
     # F-06: with DISABLE_API_DOCS on, the interactive docs and the schema are not served at all.
     docs_off = {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.disable_api_docs else {}
     app = FastAPI(title="MBA Bot API", lifespan=lifespan, **docs_off)
