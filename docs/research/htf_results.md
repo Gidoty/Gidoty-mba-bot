@@ -20,7 +20,7 @@ Plan hash `235575505fe930be` (registered in commit `0f903b9` before any run). Da
 ## What it says
 - **The mechanism is real.** The cost per trade in R falls as the stop widens: about 0.15 to 0.20 R on 1h, 0.08 to 0.09 R on 4h (stop 2.8% to 3.8%) and 0.05 to 0.12 R on 1d (stop 7.7% to 10%). A trade costs less of the amount risked on a wider stop.
 - **EMA on 4h and 1d has positive point estimates in all four cells** (+0.24 to +0.72 R per trade) with gross edges of +0.32 to +0.83 R, much larger than on 1h in the same years. They are not distinguishable from zero: the intervals of the total run from about -100 to +570 R (4h) and -53 to +221 R (1d), and the gain comes from a few windows (the two or three best windows carry most of the total; 3 to 4 of 6 windows are positive). With 72 to 115 trades on 1d, a mean of +0.5 to +0.7 R has a bootstrap interval of roughly -0.3 to +2.6 R.
-- **Donchian on 4h and 1d** is near zero to slightly positive (+0.007 to +0.110 R) with intervals around zero, and **RSI on 4h** is -0.002 R: the strategies' signals earn little before costs and costs now take about half of the small gross.
+- **Donchian on 4h and 1d** is near zero to slightly positive (+0.007 to +0.110 R) with intervals around zero, and **RSI on 4h** is -0.002 R: the strategies' signals earn little before costs and costs take about half or more of the small gross.
 - **Trades per year is the practical limit.** One pair running EMA 4h makes about 36 trades a year (65 with the 12/26 set), EMA 1d about 5 to 9, Donchian 4h 42 to 70, RSI 4h about 10. A 100-trade pilot on one pair would take about 1.5 to 3 years on EMA 4h, 10 to 20 years on EMA 1d, and 1.4 to 2.4 years on Donchian 4h.
 
 ## Not done, and why
