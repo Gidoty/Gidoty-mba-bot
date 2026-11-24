@@ -418,6 +418,12 @@ class Settings:
     ema_trail_trigger_r: float = 0.0
     ema_trail_atr: float = 2.0
     ema_breakeven_r: float = 0.0
+    # Profit protection v2, Part B (docs/safety/profit_every_round.md). OFF by default. On: the trailing and break-even levels are worked out every round (5 minutes) from the running best price (trades.peak_price),
+    # not only when a candle closes. To bound the exchange calls, a stop is moved only if the new level is at least profit_move_min_improve_atr x ATR better than the one resting, and at most once per
+    # profit_move_min_interval_seconds (the first move that takes the stop off its loss level is exempt from the interval, never from the improvement).
+    profit_every_round: bool = False
+    profit_move_min_interval_seconds: int = 900
+    profit_move_min_improve_atr: float = 0.25
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -655,6 +661,9 @@ def load_settings() -> Settings:
         ema_trail_trigger_r=_r_multiple_from_env("EMA_TRAIL_TRIGGER_R"),
         ema_trail_atr=min(10.0, max(0.5, _env_float("EMA_TRAIL_ATR", 2.0))),
         ema_breakeven_r=_r_multiple_from_env("EMA_BREAKEVEN_R"),
+        profit_every_round=_env_bool("PROFIT_EVERY_ROUND", False),
+        profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
+        profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),

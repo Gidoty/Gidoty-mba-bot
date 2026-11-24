@@ -32,3 +32,19 @@ def trailing_level(*, side: str, entry: float, opened_ms: int, closed: list, p: 
                 cand = extreme + p.trail_atr * atr_values[i]
                 trail = cand if trail is None else min(trail, cand)
     return trail
+
+
+def latest_atr(closed: list, p: DonchianParams = DonchianParams()) -> float | None:
+    """The ATR of the latest closed candle, or None when there is not enough history."""
+    if not closed:
+        return None
+    vals = atr_series([c.high for c in closed], [c.low for c in closed], [c.close for c in closed], p.atr_period)
+    return vals[-1]
+
+
+def running_level(*, side: str, peak: float | None, atr: float | None, p: DonchianParams = DonchianParams()) -> float | None:
+    """The trailing level worked out from the RUNNING best price (every round, not only at a candle close): the best price since entry minus trail_atr x ATR for a long, plus for a short. None without both.
+    The caller never loosens a stop, so a level below the stop resting is simply not used."""
+    if peak is None or atr is None or atr <= 0:
+        return None
+    return peak - p.trail_atr * atr if side == "long" else peak + p.trail_atr * atr

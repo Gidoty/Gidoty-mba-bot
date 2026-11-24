@@ -106,3 +106,22 @@ def earned_stop(side: str, entry: float, initial_stop: float, opened_ms: int, cl
         return None  # the walk already ended in an exit: the stop that stood is the exit's business
     better = w.stop > initial_stop if side == "long" else w.stop < initial_stop
     return w.stop if better else None
+
+
+def running_level(side: str, entry: float, initial_stop: float, peak: float | None, rules: ExitRules, atr: float | None) -> tuple[float, str] | None:
+    """The stop level the RUNNING best price (`peak`, the highest price since entry for a long) has earned, with the close reason that goes with it: break-even (the entry price) once the peak is up
+    breakeven_r x R, the trailing level (peak minus trail_atr x ATR) once it is up trail_trigger_r x R, the better of the two when both apply. None when neither rule is on or earned. Unlike `walk`, which reads
+    closed candles, this reads the best price seen by the last round, so it can act inside a candle. The caller decides whether to move or exit (profit_protect.decide) and never loosens a stop."""
+    r = r_distance(entry, initial_stop)
+    if r is None or peak is None:
+        return None
+    long_side = side == "long"
+    gain = (peak - entry) if long_side else (entry - peak)
+    best: tuple[float, str] | None = None
+    if rules.breakeven_r > 0 and gain >= rules.breakeven_r * r:
+        best = (entry, "break_even_stop")
+    if rules.trail_trigger_r > 0 and gain >= rules.trail_trigger_r * r and atr is not None and atr > 0:
+        cand = peak - rules.trail_atr * atr if long_side else peak + rules.trail_atr * atr
+        if best is None or (cand > best[0] if long_side else cand < best[0]):
+            best = (cand, "trailing_stop")
+    return best
