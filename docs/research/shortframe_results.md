@@ -32,7 +32,7 @@ Registered plan hash `d8f9a600f51048b6` (commit 6bd510c, before any run). Candle
 
 ## Limits of this study (read before using it)
 * The strategies are the live rules unchanged, applied to shorter candles. A different design built for short horizons (for example a wider stop in ATR terms, a volatility filter, or limit-order entries that avoid the taker fee) is NOT tested here and could behave differently. This study shows only that the existing three, as they are, do not survive costs.
-* The 11 bps round-trip slippage and the 5 bps taker fee are assumptions (the fee guard's and the Futures standard); real fills at small size may be cheaper, a maker-fee design is not modelled, and funding is not modelled. Costs would have to fall by more than half on 15m and by more than 90% on 5m for any cell here to turn positive.
+* The 11 bps round-trip slippage and the 5 bps taker fee are assumptions (the fee guard's and the Futures standard); real fills at small size may be cheaper, a maker-fee design is not modelled, and funding is not modelled. For the best short-timeframe cell (RSI 30m, gross +0.126 R against 0.286 R of cost) costs would have to fall by more than half just to break even; for EMA 15m by about three quarters, and for the 5m cells by more than 95%.
 * One year of data, 8 months of it in the tuning window, one market regime sequence. Pairs are pooled with no slot limit.
 * Indicators are computed over the whole series (the live bot uses the latest 200 candles) and RSI exits use a 400-candle warm-up: small, named differences, covered by tests.
 * The confirmation window was never read, so nothing here was confirmed; the answer is "not even the tuning window clears the rule".
