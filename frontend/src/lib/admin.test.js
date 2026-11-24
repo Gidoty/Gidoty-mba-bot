@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { adminStage, ageText, codeProblem, pageCount, reasonProblem, resultLine, winRate } from "./admin.js";
+import { adminStage, ageText, codeProblem, giveBackLine, pageCount, reasonProblem, resultLine, winRate } from "./admin.js";
 
 test("the page shows only what /admin/me allows", () => {
   assert.equal(adminStage(null), "hidden");
@@ -54,4 +54,12 @@ test("win rate and paging", () => {
   assert.equal(winRate({ wins: 0, losses: 0 }), null);
   assert.equal(pageCount(122, 50), 3);
   assert.equal(pageCount(0, 50), 1);
+});
+
+test("funding and the give-back figures are worded as the server counted them", () => {
+  assert.equal(resultLine({ simulated: false, gross_pnl: 5, net_pnl: 4.1, fees_complete: true, funding_complete: true, funding: -0.4 }), "+4.10 USDT net after fees and funding (gross +5.00, funding -0.40)");
+  assert.equal(resultLine({ simulated: false, gross_pnl: 5, net_pnl: null, fees_complete: true, funding_complete: false, funding: null }), "+5.00 USDT gross, after fees, before funding");
+  assert.equal(giveBackLine({ trades_with_peak: 0 }), "");
+  assert.equal(giveBackLine({ trades_with_peak: 10, reached_1r: 4, gave_back_to_loss: 1, give_back_rate: 0.25, closed_far_below_peak: 3 }), "Give-back: 1 of 4 trades that reached +1R closed below entry net of costs (25%); 3 closed more than 1R below their best price (10 trades with a recorded best price)");
+  assert.equal(giveBackLine({ trades_with_peak: 5, reached_1r: 0, gave_back_to_loss: 0, give_back_rate: null, closed_far_below_peak: 0 }).includes("(-)"), true);
 });

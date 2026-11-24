@@ -166,6 +166,33 @@ def parse_strategy_guards_mode(raw: str | None) -> str:
     return value if value in ("observe", "enforce") else "off"
 
 
+def _r_multiple_from_env(name: str) -> float:
+    """A number of R (multiples of the initial stop distance) for a profit rule. Unset, empty, malformed, zero, negative or not finite is 0 = OFF, so a typo can never switch a rule on. Clamped to 0.25..50 when on."""
+    import math
+
+    raw = os.environ.get(name)
+    try:
+        value = float((raw or "0").strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(50.0, max(0.25, value))
+
+
+def _fraction_from_env(name: str) -> float:
+    """A fraction between 0.1 and 0.95. Unset, empty, malformed, zero, negative or not finite is 0 = OFF, so a typo can never switch the alert on."""
+    import math
+
+    try:
+        value = float((os.environ.get(name) or "0").strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(0.95, max(0.1, value))
+
+
 def parse_signups_mode(raw: str | None) -> str:
     """open | closed for creating NEW customer accounts (docs/commercial_readiness.md). Unset or empty is open, so nothing changes by default. Any other value that is not "open" is closed: a
     mistyped value must never leave registration open to strangers while the operator thinks it is shut."""
@@ -418,6 +445,10 @@ class Settings:
     foreign_order_check_minutes: float = 15.0
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
+    # Give-back alert (docs/safety/give_back_alarm.md): ONE owner alert per open live trade when it has given back this fraction of the profit at its best price, once the best price was at least
+    # giveback_alert_min_peak_r x R. 0 = OFF (the default). Alert only: no order, no stop move, nothing else changes.
+    giveback_alert_fraction: float = 0.0
+    giveback_alert_min_peak_r: float = 1.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -670,6 +701,8 @@ def load_settings() -> Settings:
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
+        giveback_alert_fraction=_fraction_from_env("GIVEBACK_ALERT_FRACTION"),
+        giveback_alert_min_peak_r=_r_multiple_from_env("GIVEBACK_ALERT_MIN_PEAK_R") or 1.0,
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),
