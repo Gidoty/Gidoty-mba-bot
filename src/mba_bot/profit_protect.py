@@ -28,3 +28,39 @@ def peak_from_candles(side: str, entry: float, opened_ms: int, candles: list, pr
             continue
         best = advance_peak(side, best, c.high if side == "long" else c.low)
     return advance_peak(side, best, price)
+
+
+# ---------------------------------------------------------------------------------------------------- Part B: one decision per round
+from dataclasses import dataclass  # noqa: E402
+
+
+@dataclass(frozen=True)
+class Decision:
+    """What to do with a protective-stop level worked out this round: `exit` (the price is already through the level, so the stop would trigger at once: leave through execute_exit), `move` (place the new stop
+    through move_stop) or `hold` (do nothing, with the reason)."""
+
+    action: str
+    why: str
+
+
+def decide(*, side: str, level: float | None, current_stop: float, price: float, entry: float, atr: float | None, r: float | None,
+           last_move_ms: int | None, now_ms: int, min_interval_s: float, min_improve_atr: float) -> Decision:
+    """The single decision for a stop level worked out from the running best price.
+    * No level, or a level that is not strictly better than the stop resting: hold. A stop is never loosened and never re-placed at the same level.
+    * The price is at or through the level (at or below it for a long): the lock was earned and is already lost, so exit. This is never delayed by the call limits below.
+    * Otherwise the move must be worth its exchange calls: at least `min_improve_atr` x ATR better than the stop resting (0.1 R when no ATR is known, nothing when neither is known), and at least `min_interval_s`
+      since the last move. The first move that takes the stop off its loss side of the entry (the stop still worse than the entry) is exempt from the interval, not from the improvement."""
+    if level is None or not level > 0:
+        return Decision("hold", "no_level")
+    if not is_better(side, level, current_stop):
+        return Decision("hold", "not_better")
+    if (side == "long" and price <= level) or (side == "short" and price >= level):
+        return Decision("exit", "price_through_level")
+    gain = abs(level - current_stop)
+    need = min_improve_atr * atr if atr and atr > 0 else (0.1 * r if r and r > 0 else 0.0)
+    if gain < need:
+        return Decision("hold", "improvement_too_small")
+    unlocked_yet = is_better(side, entry, current_stop)  # the resting stop is still worse than the entry: the trade has no profit lock
+    if not unlocked_yet and last_move_ms is not None and now_ms - last_move_ms < min_interval_s * 1000:
+        return Decision("hold", "too_soon")
+    return Decision("move", "ok")

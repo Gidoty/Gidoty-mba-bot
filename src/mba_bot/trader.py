@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import ema_exits, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -1927,6 +1927,13 @@ async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *
         return
     if ex is not None:
         return  # the stop or the trailing stop was touched: the exchange-side stop owns that exit
+    if settings.profit_every_round:
+        # Part B: the Donchian trail from the RUNNING best price (same distance, trail_atr x the latest closed ATR), every round, with the call limits.
+        atr_now = donchian_trail.latest_atr(closed, p)
+        peak = profit_protect.advance_peak(trade.side, trade.peak_price, current_price) or trade.entry_price
+        level_run = donchian_trail.running_level(side=trade.side, peak=peak, atr=atr_now, p=p)
+        await profit_live.running_step(ctx, trade, settings, level=level_run, label=donchian.EXIT_TRAIL, price=current_price, atr=atr_now, now_ms=now_ms)
+        return
     level = donchian_trail.trailing_level(side=trade.side, entry=trade.entry_price, opened_ms=opened_ms, closed=closed, p=p)
     if level is not None:
         await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=current_price)
@@ -2219,6 +2226,13 @@ async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int
         return
     if w.exit_reason in ("trailing_stop", "break_even_stop"):
         await lifecycle.execute_exit(ctx, trade, reason=w.exit_reason, price_hint=w.exit_price)
+        return
+    if settings.profit_every_round:
+        # Part B: the level the RUNNING best price has earned, every round (peak is refreshed before this runs); one decision with the call limits.
+        peak = profit_protect.advance_peak(trade.side, trade.peak_price, current_price) or trade.entry_price
+        got = ema_exits.running_level(trade.side, trade.entry_price, initial, peak, rules, atrs[-1] if atrs else None)
+        if got is not None:
+            await profit_live.running_step(ctx, trade, settings, level=got[0], label=got[1], price=current_price, atr=atrs[-1] if atrs else None, now_ms=now_ms)
         return
     level = ema_exits.earned_stop(trade.side, trade.entry_price, initial, opened_ms, closed, rules, atrs)
     if level is not None:

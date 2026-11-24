@@ -919,7 +919,7 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     moved = _cas(
         session, trade, (TRADE_OPEN,), TRADE_OPEN,
         stop_loss_price=stop, protection_attempt=old_attempt + 1, protective_order_id=verified.order_id, protective_kind=verified.kind,
-        protective_limit_price=verified.limit_price, protection_verified_at=ctx.now,
+        protective_limit_price=verified.limit_price, protection_verified_at=ctx.now, stop_moved_at=ctx.now,
     )
     if not moved:
         try:
