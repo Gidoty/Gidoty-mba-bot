@@ -911,6 +911,8 @@ async def _record_exit(
             "take_profit": "take profit",
             "break_even_stop": "break-even stop",
             "profit_lock": "profit lock",
+            "reversal_fast_ema": "EMA reversal (back across the fast EMA)",
+            "reversal_gap": "EMA reversal (fast/slow gap shrank)",
             "rsi_exit": "RSI back to 50",
             "time_stop": "time stop",
         }.get(reason, "closed")

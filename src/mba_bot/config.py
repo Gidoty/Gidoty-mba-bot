@@ -506,6 +506,10 @@ class Settings:
     # Profit protection v2, Part G (docs/safety/give_back_alarm.md): ONE owner alert per open live trade when it has given back this fraction of the profit at its best price, once the best price was at least
     # giveback_alert_min_peak_r x R. 0 = OFF (the default). Alert only: no order, no stop move, nothing else changes.
     giveback_alert_fraction: float = 0.0
+    # Profit protection v2, Part E (docs/safety/ema_reversal_exits.md): reversal exits for EMA trades, judged on closed candles. OFF by default.
+    ema_reversal_fast_cross: bool = False
+    ema_reversal_gap_fraction: float = 0.0
+    ema_reversal_min_profit_r: float = 0.5
     giveback_alert_min_peak_r: float = 1.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
@@ -758,6 +762,9 @@ def load_settings() -> Settings:
         donchian_max_hold_candles=_candles_from_env("DONCHIAN_MAX_HOLD_CANDLES"),
         profit_time_tighten_atr=_atr_multiple_from_env("PROFIT_TIME_TIGHTEN_ATR", 1.0) or 1.0,
         giveback_alert_fraction=_fraction_from_env("GIVEBACK_ALERT_FRACTION"),
+        ema_reversal_fast_cross=_env_bool("EMA_REVERSAL_FAST_CROSS", False),
+        ema_reversal_gap_fraction=_fraction_from_env("EMA_REVERSAL_GAP_FRACTION"),
+        ema_reversal_min_profit_r=_r_multiple_from_env("EMA_REVERSAL_MIN_PROFIT_R") or 0.5,
         giveback_alert_min_peak_r=_r_multiple_from_env("GIVEBACK_ALERT_MIN_PEAK_R") or 1.0,
         profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
         profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
