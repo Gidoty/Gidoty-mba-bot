@@ -1,0 +1,1557 @@
+{
+ "plan_hash": "90e3369f6230d1b5",
+ "results": {
+  "ema 4h s1": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 1087,
+    "taken": 129,
+    "dropped": 958,
+    "taken_share": 0.11867525298988041,
+    "taken_per_year": 42.990191605839414,
+    "total_net_r": 93.97397184052409,
+    "mean_net_r": 0.7284804018645278,
+    "total_block_ci": [
+     93.97397184052409,
+     -53.1647569101482,
+     399.4886066940952
+    ],
+    "dropped_total_net_r": 213.2964201650844,
+    "dropped_mean_net_r": 0.22264762021407558,
+    "losing_streak": 16,
+    "tail": {
+     "win_rate": 0.2248062015503876,
+     "median_r": -1.0121116310622165,
+     "top5_share_of_total": 1.5183705418501394,
+     "best_r": 88.25297624269474,
+     "worst_r": -1.2771272728865128
+    },
+    "pilot_months_100": 27.913343839039847,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 22.02533302016703,
+      "max_dd_equity": 0.10459612854857159,
+      "lowest_equity": 0.9545632409204219,
+      "final_equity": 1.462330365829044
+     },
+     "1.0": {
+      "max_dd_r": 22.02533302016703,
+      "max_dd_equity": 0.19882123637592797,
+      "lowest_equity": 0.9081689969339443,
+      "final_equity": 1.8892970322568974
+     },
+     "2.0": {
+      "max_dd_r": 22.02533302016703,
+      "max_dd_equity": 0.3599452635366699,
+      "lowest_equity": 0.8141827614055757,
+      "final_equity": 2.5477886294615657
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 1087,
+    "taken": 275,
+    "dropped": 812,
+    "taken_share": 0.2529898804047838,
+    "taken_per_year": 91.64575729927007,
+    "total_net_r": 98.4715195393783,
+    "mean_net_r": 0.3580782528704666,
+    "total_block_ci": [
+     98.47151953937832,
+     -103.32649575999929,
+     433.06764025649625
+    ],
+    "dropped_total_net_r": 208.7988724662302,
+    "dropped_mean_net_r": 0.2571414685544707,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.22545454545454546,
+     "median_r": -1.0140125435552187,
+     "top5_share_of_total": 1.6930205349503398,
+     "best_r": 88.25297624269474,
+     "worst_r": -1.2771272728865128
+    },
+    "pilot_months_100": 13.093895837222327,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 32.236665210825045,
+      "max_dd_equity": 0.1498629452872695,
+      "lowest_equity": 0.9708438398374518,
+      "final_equity": 1.4761556182634112
+     },
+     "1.0": {
+      "max_dd_r": 32.236665210825045,
+      "max_dd_equity": 0.2789482133278657,
+      "lowest_equity": 0.933666017925113,
+      "final_equity": 1.8797014681701836
+     },
+     "2.0": {
+      "max_dd_r": 32.236665210825045,
+      "max_dd_equity": 0.4848496296543341,
+      "lowest_equity": 0.8409475699705813,
+      "final_equity": 2.315863543355138
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 1087,
+    "taken": 392,
+    "dropped": 695,
+    "taken_share": 0.36062557497700093,
+    "taken_per_year": 130.6368613138686,
+    "total_net_r": 163.13264424002233,
+    "mean_net_r": 0.4161547046939345,
+    "total_block_ci": [
+     163.13264424002233,
+     -116.46692388604357,
+     605.0579396081635
+    ],
+    "dropped_total_net_r": 144.13774776558617,
+    "dropped_mean_net_r": 0.20739244282818153,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.2372448979591837,
+     "median_r": -1.0163730597391898,
+     "top5_share_of_total": 1.1873509682895032,
+     "best_r": 88.25297624269474,
+     "worst_r": -1.2771272728865128
+    },
+    "pilot_months_100": 9.185768763357501,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 45.60741525644797,
+      "max_dd_equity": 0.20508278142409742,
+      "lowest_equity": 0.9780392446256212,
+      "final_equity": 1.9792531840385923
+     },
+     "1.0": {
+      "max_dd_r": 45.60741525644797,
+      "max_dd_equity": 0.3699629181703472,
+      "lowest_equity": 0.9438235544073899,
+      "final_equity": 3.2102142574980133
+     },
+     "2.0": {
+      "max_dd_r": 45.60741525644797,
+      "max_dd_equity": 0.607658379114163,
+      "lowest_equity": 0.8462490501464396,
+      "final_equity": 5.701742679306108
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 1087,
+    "taken": 1087,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 362.2506843065693,
+    "total_net_r": 307.27039200560847,
+    "mean_net_r": 0.2826774535470179,
+    "total_block_ci": [
+     307.2703920056085,
+     -221.57428455698783,
+     1000.241364872146
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 27,
+    "tail": {
+     "win_rate": 0.24379024839006438,
+     "median_r": -1.0096334093703088,
+     "top5_share_of_total": 0.7681802349633801,
+     "best_r": 88.25297624269474,
+     "worst_r": -1.4324557487625753
+    },
+    "pilot_months_100": 3.3126231418915735,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 63.832653441816454,
+      "max_dd_equity": 0.275039718776963,
+      "lowest_equity": 0.9515442804512819,
+      "final_equity": 3.6958496583102156
+     },
+     "1.0": {
+      "max_dd_r": 63.832653441816454,
+      "max_dd_equity": 0.47700251097060153,
+      "lowest_equity": 0.9046513331170086,
+      "final_equity": 9.457853514795458
+     },
+     "2.0": {
+      "max_dd_r": 63.832653441816454,
+      "max_dd_equity": 0.7317142086059503,
+      "lowest_equity": 0.8155692104006017,
+      "final_equity": 27.88317429122802
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  },
+  "ema 4h s1 BNB": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 1087,
+    "taken": 129,
+    "dropped": 958,
+    "taken_share": 0.11867525298988041,
+    "taken_per_year": 42.990191605839414,
+    "total_net_r": 94.3301501338064,
+    "mean_net_r": 0.731241473905476,
+    "total_block_ci": [
+     94.3301501338064,
+     -52.791790401292616,
+     399.8461571681084
+    ],
+    "dropped_total_net_r": 215.7263349217868,
+    "dropped_mean_net_r": 0.22518406568036198,
+    "losing_streak": 16,
+    "tail": {
+     "win_rate": 0.2248062015503876,
+     "median_r": -1.009298257373005,
+     "top5_share_of_total": 1.512858754226147,
+     "best_r": 88.26031255541214,
+     "worst_r": -1.2728046712564722
+    },
+    "pilot_months_100": 27.913343839039847,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 21.93789734139061,
+      "max_dd_equity": 0.10420304898947996,
+      "lowest_equity": 0.9553427648298658,
+      "final_equity": 1.4649194806766328
+     },
+     "1.0": {
+      "max_dd_r": 21.93789734139061,
+      "max_dd_equity": 0.19811485765704429,
+      "lowest_equity": 0.9096556262246476,
+      "final_equity": 1.8959715252478666
+     },
+     "2.0": {
+      "max_dd_r": 21.93789734139061,
+      "max_dd_equity": 0.358807031992747,
+      "lowest_equity": 0.8168611164702019,
+      "final_equity": 2.5657857515653366
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 1087,
+    "taken": 275,
+    "dropped": 812,
+    "taken_share": 0.2529898804047838,
+    "taken_per_year": 91.64575729927007,
+    "total_net_r": 99.20334699902529,
+    "mean_net_r": 0.36073944363281923,
+    "total_block_ci": [
+     99.20334699902527,
+     -102.6013744320295,
+     433.70541890585173
+    ],
+    "dropped_total_net_r": 210.8531380565679,
+    "dropped_mean_net_r": 0.2596713522864137,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.22545454545454546,
+     "median_r": -1.0125312933616,
+     "top5_share_of_total": 1.6807686846896752,
+     "best_r": 88.26031255541214,
+     "worst_r": -1.2728046712564722
+    },
+    "pilot_months_100": 13.093895837222327,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 32.046454140502604,
+      "max_dd_equity": 0.1490522399787665,
+      "lowest_equity": 0.9722227521084675,
+      "final_equity": 1.4815458583614065
+     },
+     "1.0": {
+      "max_dd_r": 32.046454140502604,
+      "max_dd_equity": 0.27756920410110575,
+      "lowest_equity": 0.9363226946438414,
+      "final_equity": 1.8934272013840618
+     },
+     "2.0": {
+      "max_dd_r": 32.046454140502604,
+      "max_dd_equity": 0.48286791787622296,
+      "lowest_equity": 0.8457513881024686,
+      "final_equity": 2.34976789855172
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 1087,
+    "taken": 392,
+    "dropped": 695,
+    "taken_share": 0.36062557497700093,
+    "taken_per_year": 130.6368613138686,
+    "total_net_r": 164.1712727980367,
+    "mean_net_r": 0.4188042673419304,
+    "total_block_ci": [
+     164.1712727980367,
+     -115.33802807050601,
+     605.9524674547367
+    ],
+    "dropped_total_net_r": 145.88521225755647,
+    "dropped_mean_net_r": 0.20990678022669995,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.2372448979591837,
+     "median_r": -1.014156557957334,
+     "top5_share_of_total": 1.1800234037148807,
+     "best_r": 88.26031255541214,
+     "worst_r": -1.2728046712564722
+    },
+    "pilot_months_100": 9.185768763357501,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 45.365266434282105,
+      "max_dd_equity": 0.20411729570036308,
+      "lowest_equity": 0.9800280481579121,
+      "final_equity": 1.9895147271308482
+     },
+     "1.0": {
+      "max_dd_r": 45.365266434282105,
+      "max_dd_equity": 0.36842752677724444,
+      "lowest_equity": 0.9476687840677893,
+      "final_equity": 3.2435070058397
+     },
+     "2.0": {
+      "max_dd_r": 45.365266434282105,
+      "max_dd_equity": 0.6057334012500266,
+      "lowest_equity": 0.8531717823610644,
+      "final_equity": 5.820379131771706
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 1087,
+    "taken": 1087,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 362.2506843065693,
+    "total_net_r": 310.0564850555932,
+    "mean_net_r": 0.2852405566288806,
+    "total_block_ci": [
+     310.0564850555932,
+     -218.40359948252052,
+     1003.0060839455488
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 27,
+    "tail": {
+     "win_rate": 0.24379024839006438,
+     "median_r": -1.0076539780345488,
+     "top5_share_of_total": 0.7613754084991148,
+     "best_r": 88.26031255541214,
+     "worst_r": -1.4302333861701497
+    },
+    "pilot_months_100": 3.3126231418915735,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 63.458189887010505,
+      "max_dd_equity": 0.2736770039699734,
+      "lowest_equity": 0.951879025071428,
+      "final_equity": 3.7475349290836903
+     },
+     "1.0": {
+      "max_dd_r": 63.458189887010505,
+      "max_dd_equity": 0.4750284406992996,
+      "lowest_equity": 0.9052891345402738,
+      "final_equity": 9.723719127155267
+     },
+     "2.0": {
+      "max_dd_r": 63.458189887010505,
+      "max_dd_equity": 0.729672162897966,
+      "lowest_equity": 0.8167240962873739,
+      "final_equity": 29.46994453426693
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  },
+  "ema 4h s2": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 1942,
+    "taken": 221,
+    "dropped": 1721,
+    "taken_share": 0.11380020597322348,
+    "taken_per_year": 73.64986313868613,
+    "total_net_r": 41.150739290932854,
+    "mean_net_r": 0.1862024402304654,
+    "total_block_ci": [
+     41.150739290932854,
+     -39.82129159843348,
+     143.3115530431868
+    ],
+    "dropped_total_net_r": 267.93627299035967,
+    "dropped_mean_net_r": 0.15568638755976738,
+    "losing_streak": 11,
+    "tail": {
+     "win_rate": 0.2850678733031674,
+     "median_r": -0.5520974101361079,
+     "top5_share_of_total": 1.448981498398844,
+     "best_r": 22.096615385809425,
+     "worst_r": -1.111751836464098
+    },
+    "pilot_months_100": 16.29330929971104,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 19.89137513028954,
+      "max_dd_equity": 0.09615570142288477,
+      "lowest_equity": 0.9791782465502076,
+      "final_equity": 1.208334664216747
+     },
+     "1.0": {
+      "max_dd_r": 19.89137513028954,
+      "max_dd_equity": 0.18570005214141283,
+      "lowest_equity": 0.9584140308482361,
+      "final_equity": 1.4160581372584236
+     },
+     "2.0": {
+      "max_dd_r": 19.89137513028954,
+      "max_dd_equity": 0.3452390946443511,
+      "lowest_equity": 0.9171386642853706,
+      "final_equity": 1.7947664324006445
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 1942,
+    "taken": 432,
+    "dropped": 1510,
+    "taken_share": 0.22245108135942326,
+    "taken_per_year": 143.96715328467153,
+    "total_net_r": 41.78528346154261,
+    "mean_net_r": 0.0967251931980153,
+    "total_block_ci": [
+     41.785283461542605,
+     -65.79747859463866,
+     162.11775959836177
+    ],
+    "dropped_total_net_r": 267.3017288197499,
+    "dropped_mean_net_r": 0.1770210124634105,
+    "losing_streak": 19,
+    "tail": {
+     "win_rate": 0.28935185185185186,
+     "median_r": -0.5586371563606497,
+     "top5_share_of_total": 1.493497770722979,
+     "best_r": 22.096615385809425,
+     "worst_r": -1.188835241868295
+    },
+    "pilot_months_100": 8.335234618602176,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 20.73552294799514,
+      "max_dd_equity": 0.09943810240506568,
+      "lowest_equity": 0.9187933381536085,
+      "final_equity": 1.2032817567336282
+     },
+     "1.0": {
+      "max_dd_r": 20.73552294799514,
+      "max_dd_equity": 0.19067162357301903,
+      "lowest_equity": 0.8395261089470594,
+      "final_equity": 1.3842649644701277
+     },
+     "2.0": {
+      "max_dd_r": 20.73552294799514,
+      "max_dd_equity": 0.35026698262026157,
+      "lowest_equity": 0.6898694356828209,
+      "final_equity": 1.6230930264779293
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 1942,
+    "taken": 653,
+    "dropped": 1289,
+    "taken_share": 0.33625128733264675,
+    "taken_per_year": 217.61701642335765,
+    "total_net_r": 92.03847349093972,
+    "mean_net_r": 0.14094712632609452,
+    "total_block_ci": [
+     92.03847349093975,
+     -91.98316637935658,
+     322.64658278127325
+    ],
+    "dropped_total_net_r": 217.04853879035278,
+    "dropped_mean_net_r": 0.16838521240523877,
+    "losing_streak": 24,
+    "tail": {
+     "win_rate": 0.2771822358346095,
+     "median_r": -0.5801521675956607,
+     "top5_share_of_total": 1.1129337524107425,
+     "best_r": 33.29045957159689,
+     "worst_r": -1.188835241868295
+    },
+    "pilot_months_100": 5.514274663455038,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 40.848696627032766,
+      "max_dd_equity": 0.18647976388453025,
+      "lowest_equity": 0.8394998990330083,
+      "final_equity": 1.5052079687211095
+     },
+     "1.0": {
+      "max_dd_r": 40.848696627032766,
+      "max_dd_equity": 0.34096761608892445,
+      "lowest_equity": 0.6982796870547839,
+      "final_equity": 2.0634868492450633
+     },
+     "2.0": {
+      "max_dd_r": 40.848696627032766,
+      "max_dd_equity": 0.5727752981992025,
+      "lowest_equity": 0.4704638222545354,
+      "final_equity": 3.052145619816539
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 1942,
+    "taken": 1942,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 647.1856751824818,
+    "total_net_r": 309.0870122812925,
+    "mean_net_r": 0.15915912063918256,
+    "total_block_ci": [
+     309.0870122812926,
+     -202.02505980674394,
+     1025.9502635170509
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 25,
+    "tail": {
+     "win_rate": 0.2760041194644696,
+     "median_r": -0.590506236715807,
+     "top5_share_of_total": 0.7849836270813029,
+     "best_r": 90.86457184044606,
+     "worst_r": -1.4324557487625753
+    },
+    "pilot_months_100": 1.854181954292554,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 76.83056192804591,
+      "max_dd_equity": 0.3225802094019804,
+      "lowest_equity": 0.7404443670039536,
+      "final_equity": 3.67496001907963
+     },
+     "1.0": {
+      "max_dd_r": 76.83056192804591,
+      "max_dd_equity": 0.545869444322035,
+      "lowest_equity": 0.5387487632760837,
+      "final_equity": 9.127104635539377
+     },
+     "2.0": {
+      "max_dd_r": 76.83056192804591,
+      "max_dd_equity": 0.8020065245595391,
+      "lowest_equity": 0.2711512685166656,
+      "final_equity": 23.76844378458048
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  },
+  "ema 4h s2 BNB": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 1942,
+    "taken": 221,
+    "dropped": 1721,
+    "taken_share": 0.11380020597322348,
+    "taken_per_year": 73.64986313868613,
+    "total_net_r": 41.77554016213158,
+    "mean_net_r": 0.18902959349380805,
+    "total_block_ci": [
+     41.775540162131584,
+     -39.09489951587801,
+     143.90081809544634
+    ],
+    "dropped_total_net_r": 272.2055663453416,
+    "dropped_mean_net_r": 0.15816709258880976,
+    "losing_streak": 11,
+    "tail": {
+     "win_rate": 0.2850678733031674,
+     "median_r": -0.5511374284145034,
+     "top5_share_of_total": 1.4279166230445852,
+     "best_r": 22.100514810392685,
+     "worst_r": -1.1082703095076518
+    },
+    "pilot_months_100": 16.29330929971104,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 19.677086100287916,
+      "max_dd_equity": 0.0951855640599969,
+      "lowest_equity": 0.9793519943936425,
+      "final_equity": 1.2121086404029267
+     },
+     "1.0": {
+      "max_dd_r": 19.677086100287916,
+      "max_dd_equity": 0.18394875233499874,
+      "lowest_equity": 0.9587547900714475,
+      "final_equity": 1.4249050064183413
+     },
+     "2.0": {
+      "max_dd_r": 19.677086100287916,
+      "max_dd_equity": 0.34241156590592514,
+      "lowest_equity": 0.9177933786045033,
+      "final_equity": 1.8172200486980434
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 1942,
+    "taken": 432,
+    "dropped": 1510,
+    "taken_share": 0.22245108135942326,
+    "taken_per_year": 143.96715328467153,
+    "total_net_r": 42.97216113809839,
+    "mean_net_r": 0.09947259522707962,
+    "total_block_ci": [
+     42.972161138098386,
+     -64.55012656875235,
+     163.16509009648445
+    ],
+    "dropped_total_net_r": 271.00894536937477,
+    "dropped_mean_net_r": 0.17947612276117533,
+    "losing_streak": 19,
+    "tail": {
+     "win_rate": 0.28935185185185186,
+     "median_r": -0.5555195636184982,
+     "top5_share_of_total": 1.4527443970864669,
+     "best_r": 22.100514810392685,
+     "worst_r": -1.1867520612623677
+    },
+    "pilot_months_100": 8.335234618602176,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 20.58823745345019,
+      "max_dd_equity": 0.09877346252448838,
+      "lowest_equity": 0.9198711945475451,
+      "final_equity": 1.210435434944214
+     },
+     "1.0": {
+      "max_dd_r": 20.58823745345019,
+      "max_dd_equity": 0.18947432098828632,
+      "lowest_equity": 0.8414995453940619,
+      "final_equity": 1.4007587039572231
+     },
+     "2.0": {
+      "max_dd_r": 20.58823745345019,
+      "max_dd_equity": 0.34833550022243276,
+      "lowest_equity": 0.6931258526206913,
+      "final_equity": 1.6619616745990777
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 1942,
+    "taken": 653,
+    "dropped": 1289,
+    "taken_share": 0.33625128733264675,
+    "taken_per_year": 217.61701642335765,
+    "total_net_r": 93.86977371297962,
+    "mean_net_r": 0.14375156770747263,
+    "total_block_ci": [
+     93.86977371297962,
+     -90.07271885209009,
+     324.5918260861876
+    ],
+    "dropped_total_net_r": 220.11133279449356,
+    "dropped_mean_net_r": 0.1707613132618259,
+    "losing_streak": 24,
+    "tail": {
+     "win_rate": 0.2771822358346095,
+     "median_r": -0.5755524753651187,
+     "top5_share_of_total": 1.0915874720876348,
+     "best_r": 33.30157920716419,
+     "worst_r": -1.1867520612623677
+    },
+    "pilot_months_100": 5.514274663455038,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 40.53739302804844,
+      "max_dd_equity": 0.18521009091002305,
+      "lowest_equity": 0.8412505125158839,
+      "final_equity": 1.5190255237387933
+     },
+     "1.0": {
+      "max_dd_r": 40.53739302804844,
+      "max_dd_equity": 0.33890480494765796,
+      "lowest_equity": 0.7011994446316676,
+      "final_equity": 2.101488142806625
+     },
+     "2.0": {
+      "max_dd_r": 40.53739302804844,
+      "max_dd_equity": 0.5700854821044352,
+      "lowest_equity": 0.4744195668893962,
+      "final_equity": 3.165387250688731
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 1942,
+    "taken": 1942,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 647.1856751824818,
+    "total_net_r": 313.98110650747316,
+    "mean_net_r": 0.16167925154864735,
+    "total_block_ci": [
+     313.9811065074733,
+     -196.61627107456053,
+     1030.7256660439082
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 25,
+    "tail": {
+     "win_rate": 0.2760041194644696,
+     "median_r": -0.5876057035872753,
+     "top5_share_of_total": 0.7728580506533769,
+     "best_r": 90.87214702647813,
+     "worst_r": -1.4302333861701497
+    },
+    "pilot_months_100": 1.854181954292554,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 76.19273837218344,
+      "max_dd_equity": 0.3204130954308724,
+      "lowest_equity": 0.7434814685318797,
+      "final_equity": 3.765808769131384
+     },
+     "1.0": {
+      "max_dd_r": 76.19273837218344,
+      "max_dd_equity": 0.5429545755179872,
+      "lowest_equity": 0.5431829219539492,
+      "final_equity": 9.583326498814072
+     },
+     "2.0": {
+      "max_dd_r": 76.19273837218344,
+      "max_dd_equity": 0.7994480722691291,
+      "lowest_equity": 0.2756452513894945,
+      "final_equity": 26.200546844379815
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  },
+  "ema 1d s1": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 160,
+    "taken": 27,
+    "dropped": 133,
+    "taken_share": 0.16875,
+    "taken_per_year": 8.99794708029197,
+    "total_net_r": -7.904464939852893,
+    "mean_net_r": -0.29275796073529237,
+    "total_block_ci": [
+     -7.904464939852892,
+     -26.12007308144313,
+     18.896492655663632
+    ],
+    "dropped_total_net_r": 90.8678374598558,
+    "dropped_mean_net_r": 0.6832168230064346,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.14814814814814814,
+     "median_r": -0.9955532000503732,
+     "top5_share_of_total": null,
+     "best_r": 7.833602523734962,
+     "worst_r": -1.1014646709376232
+    },
+    "pilot_months_100": 133.3637538976348,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 11.499208620893315,
+      "max_dd_equity": 0.05600271348861818,
+      "lowest_equity": 0.9494821098396408,
+      "final_equity": 0.9601472320693929
+     },
+     "1.0": {
+      "max_dd_r": 11.499208620893315,
+      "max_dd_equity": 0.10911294716851039,
+      "lowest_equity": 0.9011356781609642,
+      "final_equity": 0.9198403110446204
+     },
+     "2.0": {
+      "max_dd_r": 11.499208620893315,
+      "max_dd_equity": 0.20719704560875685,
+      "lowest_equity": 0.8106738226257403,
+      "final_equity": 0.8389694870487654
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 160,
+    "taken": 43,
+    "dropped": 117,
+    "taken_share": 0.26875,
+    "taken_per_year": 14.330063868613138,
+    "total_net_r": 27.50985915810581,
+    "mean_net_r": 0.6397641664675771,
+    "total_block_ci": [
+     27.50985915810581,
+     -28.83165692294388,
+     132.0782737666197
+    ],
+    "dropped_total_net_r": 55.4535133618971,
+    "dropped_mean_net_r": 0.4739616526657872,
+    "losing_streak": 17,
+    "tail": {
+     "win_rate": 0.20930232558139536,
+     "median_r": -0.9699248807304848,
+     "top5_share_of_total": 1.8322087773268172,
+     "best_r": 28.345274151379094,
+     "worst_r": -1.119004198873367
+    },
+    "pilot_months_100": 83.74003151711953,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 14.31587536788001,
+      "max_dd_equity": 0.06923227484112615,
+      "lowest_equity": 0.9475898944538285,
+      "final_equity": 1.1343158147054042
+     },
+     "1.0": {
+      "max_dd_r": 14.31587536788001,
+      "max_dd_equity": 0.133961121645518,
+      "lowest_equity": 0.8972080298352326,
+      "final_equity": 1.2611544073892584
+     },
+     "2.0": {
+      "max_dd_r": 14.31587536788001,
+      "max_dd_equity": 0.25098908414527843,
+      "lowest_equity": 0.8024353394784509,
+      "final_equity": 1.4872594251081008
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 160,
+    "taken": 58,
+    "dropped": 102,
+    "taken_share": 0.3625,
+    "taken_per_year": 19.328923357664234,
+    "total_net_r": 35.507504627738506,
+    "mean_net_r": 0.6121983556506639,
+    "total_block_ci": [
+     35.507504627738506,
+     -26.91988844208119,
+     138.12237165887228
+    ],
+    "dropped_total_net_r": 47.45586789226441,
+    "dropped_mean_net_r": 0.46525360678690597,
+    "losing_streak": 9,
+    "tail": {
+     "win_rate": 0.27586206896551724,
+     "median_r": -0.9496053169612171,
+     "top5_share_of_total": 1.6042984501012116,
+     "best_r": 28.345274151379094,
+     "worst_r": -1.5648003140093025
+    },
+    "pilot_months_100": 62.083126814416204,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 7.776294831997671,
+      "max_dd_equity": 0.038464771143762566,
+      "lowest_equity": 0.9947550738083253,
+      "final_equity": 1.1791923645942197
+     },
+     "1.0": {
+      "max_dd_r": 7.776294831997671,
+      "max_dd_equity": 0.07608110888104869,
+      "lowest_equity": 0.9884422580915485,
+      "final_equity": 1.3597910602219743
+     },
+     "2.0": {
+      "max_dd_r": 7.776294831997671,
+      "max_dd_equity": 0.1486912281309496,
+      "lowest_equity": 0.9660635878813488,
+      "final_equity": 1.7139339512578249
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 160,
+    "taken": 160,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 53.32116788321167,
+    "total_net_r": 82.9633725200029,
+    "mean_net_r": 0.5185210782500181,
+    "total_block_ci": [
+     82.9633725200029,
+     -61.31659151529135,
+     298.82791311670223
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 20,
+    "tail": {
+     "win_rate": 0.2375,
+     "median_r": -0.9522255248995631,
+     "top5_share_of_total": 1.2415136395565225,
+     "best_r": 28.345274151379094,
+     "worst_r": -1.5648003140093025
+    },
+    "pilot_months_100": 22.505133470225875,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 41.188897815161965,
+      "max_dd_equity": 0.18784334015107307,
+      "lowest_equity": 0.8168754613304464,
+      "final_equity": 1.4647603661748705
+     },
+     "1.0": {
+      "max_dd_r": 41.188897815161965,
+      "max_dd_equity": 0.3431296938093682,
+      "lowest_equity": 0.6644268394647531,
+      "final_equity": 2.02266309648815
+     },
+     "2.0": {
+      "max_dd_r": 41.188897815161965,
+      "max_dd_equity": 0.5754063273537953,
+      "lowest_equity": 0.4341645975967656,
+      "final_equity": 3.3393907898462625
+     }
+    },
+    "max_open": 9,
+    "open_risk_pct_max": 9.0
+   }
+  },
+  "ema 1d s1 BNB": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 160,
+    "taken": 27,
+    "dropped": 133,
+    "taken_share": 0.16875,
+    "taken_per_year": 8.99794708029197,
+    "total_net_r": -7.879988572893298,
+    "mean_net_r": -0.2918514286256777,
+    "total_block_ci": [
+     -7.879988572893299,
+     -26.096192234748557,
+     18.92255498900076
+    ],
+    "dropped_total_net_r": 90.99971625028915,
+    "dropped_mean_net_r": 0.6842083928593169,
+    "losing_streak": 13,
+    "tail": {
+     "win_rate": 0.14814814814814814,
+     "median_r": -0.9946214583794065,
+     "top5_share_of_total": null,
+     "best_r": 7.835639961375197,
+     "worst_r": -1.1004581439029444
+    },
+    "pilot_months_100": 133.3637538976348,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 11.487978532102225,
+      "max_dd_equity": 0.05594947122784366,
+      "lowest_equity": 0.9495411694822993,
+      "final_equity": 0.9602647042043113
+     },
+     "1.0": {
+      "max_dd_r": 11.487978532102225,
+      "max_dd_equity": 0.10901200311336623,
+      "lowest_equity": 0.9012482349357341,
+      "final_equity": 0.9200653940594324
+     },
+     "2.0": {
+      "max_dd_r": 11.487978532102225,
+      "max_dd_equity": 0.20701575808139705,
+      "lowest_equity": 0.8108779947132868,
+      "final_equity": 0.8393803927381258
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 160,
+    "taken": 43,
+    "dropped": 117,
+    "taken_share": 0.26875,
+    "taken_per_year": 14.330063868613138,
+    "total_net_r": 27.54963728337673,
+    "mean_net_r": 0.640689239148296,
+    "total_block_ci": [
+     27.54963728337673,
+     -28.795847554928848,
+     132.12257738284777
+    ],
+    "dropped_total_net_r": 55.57009039401913,
+    "dropped_mean_net_r": 0.4749580375557191,
+    "losing_streak": 17,
+    "tail": {
+     "win_rate": 0.20930232558139536,
+     "median_r": -0.9692404917543429,
+     "top5_share_of_total": 1.8298661092909936,
+     "best_r": 28.3479150585476,
+     "worst_r": -1.1180907444961672
+    },
+    "pilot_months_100": 83.74003151711953,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 14.301189804617845,
+      "max_dd_equity": 0.06916363243740042,
+      "lowest_equity": 0.9476717129308648,
+      "final_equity": 1.1345391947764074
+     },
+     "1.0": {
+      "max_dd_r": 14.301189804617845,
+      "max_dd_equity": 0.13383282398156038,
+      "lowest_equity": 0.8973634799542519,
+      "final_equity": 1.2616472590575412
+     },
+     "2.0": {
+      "max_dd_r": 14.301189804617845,
+      "max_dd_equity": 0.2507651969672622,
+      "lowest_equity": 0.8027152913739958,
+      "final_equity": 1.4884088008658543
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 160,
+    "taken": 58,
+    "dropped": 102,
+    "taken_share": 0.3625,
+    "taken_per_year": 19.328923357664234,
+    "total_net_r": 35.562893081679746,
+    "mean_net_r": 0.6131533289944784,
+    "total_block_ci": [
+     35.562893081679746,
+     -26.877191540574,
+     138.17561504096327
+    ],
+    "dropped_total_net_r": 47.55683459571611,
+    "dropped_mean_net_r": 0.4662434764285893,
+    "losing_streak": 9,
+    "tail": {
+     "win_rate": 0.27586206896551724,
+     "median_r": -0.9489022756088221,
+     "top5_share_of_total": 1.602077932983689,
+     "best_r": 28.3479150585476,
+     "worst_r": -1.5636660751102291
+    },
+    "pilot_months_100": 62.083126814416204,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 7.7587568517110155,
+      "max_dd_equity": 0.038380273246449326,
+      "lowest_equity": 0.9947588069874796,
+      "final_equity": 1.179516211041115
+     },
+     "1.0": {
+      "max_dd_r": 7.7587568517110155,
+      "max_dd_equity": 0.0759183652494847,
+      "lowest_equity": 0.9886996198263502,
+      "final_equity": 1.360532937654281
+     },
+     "2.0": {
+      "max_dd_r": 7.7587568517110155,
+      "max_dd_equity": 0.14838993472106676,
+      "lowest_equity": 0.966566207956614,
+      "final_equity": 1.7157855003954705
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 160,
+    "taken": 160,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 53.32116788321167,
+    "total_net_r": 83.11972767739586,
+    "mean_net_r": 0.5194982979837242,
+    "total_block_ci": [
+     83.11972767739587,
+     -61.20483515896228,
+     298.9730976594095
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 20,
+    "tail": {
+     "win_rate": 0.2375,
+     "median_r": -0.9513568189586766,
+     "top5_share_of_total": 1.2393191631581137,
+     "best_r": 28.3479150585476,
+     "worst_r": -1.5636660751102291
+    },
+    "pilot_months_100": 22.505133470225875,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 41.117679192256496,
+      "max_dd_equity": 0.18755343979713024,
+      "lowest_equity": 0.8171717862604911,
+      "final_equity": 1.4658973914205007
+     },
+     "1.0": {
+      "max_dd_r": 41.117679192256496,
+      "max_dd_equity": 0.34265955720552177,
+      "lowest_equity": 0.6649100951870351,
+      "final_equity": 2.0257857166542697
+     },
+     "2.0": {
+      "max_dd_r": 41.117679192256496,
+      "max_dd_equity": 0.5747952111957938,
+      "lowest_equity": 0.4347995688462025,
+      "final_equity": 3.3496193420619766
+     }
+    },
+    "max_open": 9,
+    "open_risk_pct_max": 9.0
+   }
+  },
+  "ema 1d s2": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 280,
+    "taken": 36,
+    "dropped": 244,
+    "taken_share": 0.12857142857142856,
+    "taken_per_year": 11.997262773722627,
+    "total_net_r": 7.268528114154723,
+    "mean_net_r": 0.20190355872652008,
+    "total_block_ci": [
+     7.268528114154723,
+     -16.457275392412576,
+     34.73141002568344
+    ],
+    "dropped_total_net_r": 94.12241155485029,
+    "dropped_mean_net_r": 0.38574758833955036,
+    "losing_streak": 4,
+    "tail": {
+     "win_rate": 0.3333333333333333,
+     "median_r": -0.5796447832386724,
+     "top5_share_of_total": 2.8140770596596956,
+     "best_r": 5.959334401558132,
+     "worst_r": -1.0407708547534325
+    },
+    "pilot_months_100": 100.0228154232261,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 6.965312880760969,
+      "max_dd_equity": 0.0343352978294208,
+      "lowest_equity": 0.9876585894942969,
+      "final_equity": 1.0354687025753508
+     },
+     "1.0": {
+      "max_dd_r": 6.965312880760969,
+      "max_dd_equity": 0.06770158716869135,
+      "lowest_equity": 0.9747662926198164,
+      "final_equity": 1.0690827899556672
+     },
+     "2.0": {
+      "max_dd_r": 6.965312880760969,
+      "max_dd_equity": 0.13160753821797266,
+      "lowest_equity": 0.9475061579304693,
+      "final_equity": 1.1301626479504343
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 280,
+    "taken": 70,
+    "dropped": 210,
+    "taken_share": 0.25,
+    "taken_per_year": 23.328010948905106,
+    "total_net_r": -4.747410521006565,
+    "mean_net_r": -0.06782015030009379,
+    "total_block_ci": [
+     -4.747410521006567,
+     -35.374233813143846,
+     32.53195566195086
+    ],
+    "dropped_total_net_r": 106.13835019001158,
+    "dropped_mean_net_r": 0.5054207151905313,
+    "losing_streak": 8,
+    "tail": {
+     "win_rate": 0.2857142857142857,
+     "median_r": -0.7806958455373754,
+     "top5_share_of_total": null,
+     "best_r": 5.959334401558132,
+     "worst_r": -1.1566302342884205
+    },
+    "pilot_months_100": 51.440305074802,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 18.35236834681657,
+      "max_dd_equity": 0.08861389757193683,
+      "lowest_equity": 0.9446672263025788,
+      "final_equity": 0.9744709277290393
+     },
+     "1.0": {
+      "max_dd_r": 18.35236834681657,
+      "max_dd_equity": 0.17106293085680913,
+      "lowest_equity": 0.8898023426209485,
+      "final_equity": 0.9456449940071733
+     },
+     "2.0": {
+      "max_dd_r": 18.35236834681657,
+      "max_dd_equity": 0.3183546825510273,
+      "lowest_equity": 0.7827754524631171,
+      "final_equity": 0.8798569508081374
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 280,
+    "taken": 93,
+    "dropped": 187,
+    "taken_share": 0.33214285714285713,
+    "taken_per_year": 30.992928832116785,
+    "total_net_r": 49.25469580363405,
+    "mean_net_r": 0.5296203849853124,
+    "total_block_ci": [
+     49.25469580363405,
+     -35.09572086035985,
+     209.19960004835463
+    ],
+    "dropped_total_net_r": 52.136243865370965,
+    "dropped_mean_net_r": 0.278803443130326,
+    "losing_streak": 7,
+    "tail": {
+     "win_rate": 0.3010752688172043,
+     "median_r": -0.6474849928360049,
+     "top5_share_of_total": 1.3940565937758327,
+     "best_r": 42.2344973846671,
+     "worst_r": -1.1566302342884205
+    },
+    "pilot_months_100": 38.718509196087524,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 16.67475765260435,
+      "max_dd_equity": 0.08023485372205108,
+      "lowest_equity": 0.9703805324734637,
+      "final_equity": 1.249246575880656
+     },
+     "1.0": {
+      "max_dd_r": 16.67475765260435,
+      "max_dd_equity": 0.15447909406134397,
+      "lowest_equity": 0.9398636380063264,
+      "final_equity": 1.501149346733877
+     },
+     "2.0": {
+      "max_dd_r": 16.67475765260435,
+      "max_dd_equity": 0.28661427924772165,
+      "lowest_equity": 0.8768750293233099,
+      "final_equity": 1.9935616900666575
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 280,
+    "taken": 280,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 93.31204379562043,
+    "total_net_r": 101.39093966900501,
+    "mean_net_r": 0.36211049881787505,
+    "total_block_ci": [
+     101.39093966900502,
+     -73.78888830017243,
+     329.4796452152427
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 19,
+    "tail": {
+     "win_rate": 0.275,
+     "median_r": -0.5849882821096496,
+     "top5_share_of_total": 1.0664236066429233,
+     "best_r": 42.2344973846671,
+     "worst_r": -1.1566302342884205
+    },
+    "pilot_months_100": 12.8600762687005,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 37.18509014699462,
+      "max_dd_equity": 0.17050831378709075,
+      "lowest_equity": 0.893045208645437,
+      "final_equity": 1.5899172050298458
+     },
+     "1.0": {
+      "max_dd_r": 37.18509014699462,
+      "max_dd_equity": 0.3133366514079108,
+      "lowest_equity": 0.7942074840844128,
+      "final_equity": 2.345729630323253
+     },
+     "2.0": {
+      "max_dd_r": 37.18509014699462,
+      "max_dd_equity": 0.5322838809598214,
+      "lowest_equity": 0.6205447175901021,
+      "final_equity": 4.281426216730721
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  },
+  "ema 1d s2 BNB": {
+   "1 slot": {
+    "slots": "1 slot",
+    "signals": 280,
+    "taken": 36,
+    "dropped": 244,
+    "taken_share": 0.12857142857142856,
+    "taken_per_year": 11.997262773722627,
+    "total_net_r": 7.303285777237488,
+    "mean_net_r": 0.202869049367708,
+    "total_block_ci": [
+     7.303285777237488,
+     -16.419057398587604,
+     34.75660185462539
+    ],
+    "dropped_total_net_r": 94.35312844912167,
+    "dropped_mean_net_r": 0.3866931493816462,
+    "losing_streak": 4,
+    "tail": {
+     "win_rate": 0.3333333333333333,
+     "median_r": -0.5785364889471261,
+     "top5_share_of_total": 2.8015708841309377,
+     "best_r": 5.960933657353759,
+     "worst_r": -1.0394235363342783
+    },
+    "pilot_months_100": 100.0228154232261,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 6.952504706360832,
+      "max_dd_equity": 0.034273281734570005,
+      "lowest_equity": 0.987725226329845,
+      "final_equity": 1.035648410609907
+     },
+     "1.0": {
+      "max_dd_r": 6.952504706360832,
+      "max_dd_equity": 0.06758150064361179,
+      "lowest_equity": 0.9748980445311207,
+      "final_equity": 1.0694534431680505
+     },
+     "2.0": {
+      "max_dd_r": 6.952504706360832,
+      "max_dd_equity": 0.13138253974722225,
+      "lowest_equity": 0.9477631972106758,
+      "final_equity": 1.1309449231159963
+     }
+    },
+    "max_open": 1,
+    "open_risk_pct_max": 1.0
+   },
+   "2 slots": {
+    "slots": "2 slots",
+    "signals": 280,
+    "taken": 70,
+    "dropped": 210,
+    "taken_share": 0.25,
+    "taken_per_year": 23.328010948905106,
+    "total_net_r": -4.682997823734397,
+    "mean_net_r": -0.0668999689104914,
+    "total_block_ci": [
+     -4.6829978237343965,
+     -35.30882357478602,
+     32.601582364223056
+    ],
+    "dropped_total_net_r": 106.33941205009356,
+    "dropped_mean_net_r": 0.5063781526194931,
+    "losing_streak": 8,
+    "tail": {
+     "win_rate": 0.2857142857142857,
+     "median_r": -0.7798308412858507,
+     "top5_share_of_total": null,
+     "best_r": 5.960933657353759,
+     "worst_r": -1.1554082638019794
+    },
+    "pilot_months_100": 51.440305074802,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 18.301085294033953,
+      "max_dd_equity": 0.08837993360166663,
+      "lowest_equity": 0.9449228808834201,
+      "final_equity": 0.9747847759015137
+     },
+     "1.0": {
+      "max_dd_r": 18.301085294033953,
+      "max_dd_equity": 0.17063680179717056,
+      "lowest_equity": 0.890284340940061,
+      "final_equity": 0.9462542226289571
+     },
+     "2.0": {
+      "max_dd_r": 18.301085294033953,
+      "max_dd_equity": 0.3176519178614121,
+      "lowest_equity": 0.7836251219769509,
+      "final_equity": 0.880991472258208
+     }
+    },
+    "max_open": 2,
+    "open_risk_pct_max": 2.0
+   },
+   "3 slots": {
+    "slots": "3 slots",
+    "signals": 280,
+    "taken": 93,
+    "dropped": 187,
+    "taken_share": 0.33214285714285713,
+    "taken_per_year": 30.992928832116785,
+    "total_net_r": 49.34222496394538,
+    "mean_net_r": 0.5305615587521009,
+    "total_block_ci": [
+     49.34222496394538,
+     -34.999218559646195,
+     209.29004322799466
+    ],
+    "dropped_total_net_r": 52.31418926241378,
+    "dropped_mean_net_r": 0.27975502279365655,
+    "losing_streak": 7,
+    "tail": {
+     "win_rate": 0.3010752688172043,
+     "median_r": -0.6464635555889097,
+     "top5_share_of_total": 1.3917529638349775,
+     "best_r": 42.2380277691376,
+     "worst_r": -1.1554082638019794
+    },
+    "pilot_months_100": 38.718509196087524,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 16.647992072294933,
+      "max_dd_equity": 0.0801114166036424,
+      "lowest_equity": 0.9705322526523006,
+      "final_equity": 1.2497889126476915
+     },
+     "1.0": {
+      "max_dd_r": 16.647992072294933,
+      "max_dd_equity": 0.1542515021693489,
+      "lowest_equity": 0.9401579263965085,
+      "final_equity": 1.502445228752191
+     },
+     "2.0": {
+      "max_dd_r": 16.647992072294933,
+      "max_dd_equity": 0.2862280113222663,
+      "lowest_equity": 0.8774257611598482,
+      "final_equity": 1.9969776931580203
+     }
+    },
+    "max_open": 3,
+    "open_risk_pct_max": 3.0
+   },
+   "unlimited": {
+    "slots": "unlimited",
+    "signals": 280,
+    "taken": 280,
+    "dropped": 0,
+    "taken_share": 1.0,
+    "taken_per_year": 93.31204379562043,
+    "total_net_r": 101.65641422635916,
+    "mean_net_r": 0.363058622236997,
+    "total_block_ci": [
+     101.65641422635916,
+     -73.51398998195168,
+     329.76436714342356
+    ],
+    "dropped_total_net_r": 0,
+    "dropped_mean_net_r": null,
+    "losing_streak": 19,
+    "tail": {
+     "win_rate": 0.275,
+     "median_r": -0.584190774287081,
+     "top5_share_of_total": 1.0637498165993355,
+     "best_r": 42.2380277691376,
+     "worst_r": -1.1554082638019794
+    },
+    "pilot_months_100": 12.8600762687005,
+    "dd": {
+     "0.5": {
+      "max_dd_r": 37.106432362462826,
+      "max_dd_equity": 0.17018127920154924,
+      "lowest_equity": 0.8934370351829835,
+      "final_equity": 1.5920178459414405
+     },
+     "1.0": {
+      "max_dd_r": 37.106432362462826,
+      "max_dd_equity": 0.3127938484738023,
+      "lowest_equity": 0.7949056302923779,
+      "final_equity": 2.351906752999304
+     },
+     "2.0": {
+      "max_dd_r": 37.106432362462826,
+      "max_dd_equity": 0.5315406328868582,
+      "lowest_equity": 0.6216397539603882,
+      "final_equity": 4.303872739662974
+     }
+    },
+    "max_open": 10,
+    "open_risk_pct_max": 10.0
+   }
+  }
+ }
+}
