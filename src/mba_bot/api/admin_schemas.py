@@ -121,6 +121,24 @@ class SkipsPanel(BaseModel):
     reasons: list[SkipReason]
 
 
+class OpenTradeRow(BaseModel):
+    bot_code: str
+    pair: str | None = None
+    strategy: str
+    side: str
+    status: str
+    opened_at: datetime
+    entry_price: float
+    initial_stop_price: float | None = None
+    stop_loss_price: float
+    peak_price: float | None = None
+    peak_r: float | None = None
+
+
+class OpenTradesPanel(BaseModel):
+    trades: list[OpenTradeRow]
+
+
 class PaymentRow(BaseModel):
     provider: str
     status: str
