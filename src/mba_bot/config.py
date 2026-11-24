@@ -508,6 +508,12 @@ class Settings:
     giveback_alert_fraction: float = 0.0
     # Profit protection v2, Part E (docs/safety/ema_reversal_exits.md): reversal exits for EMA trades, judged on closed candles. OFF by default.
     ema_reversal_fast_cross: bool = False
+    # Profit protection v2, Part J (docs/safety/reentry.md): one re-entry after a protective exit when the trend resumes. OFF by default. Counted in candles of the EMA timeframe.
+    reentry_enabled: bool = False
+    reentry_cooldown_candles: int = 2
+    reentry_window_candles: int = 48
+    reentry_max_per_trend: int = 1
+    reentry_above_exit_atr: float = 1.0
     ema_reversal_gap_fraction: float = 0.0
     ema_reversal_min_profit_r: float = 0.5
     giveback_alert_min_peak_r: float = 1.0
@@ -763,6 +769,11 @@ def load_settings() -> Settings:
         profit_time_tighten_atr=_atr_multiple_from_env("PROFIT_TIME_TIGHTEN_ATR", 1.0) or 1.0,
         giveback_alert_fraction=_fraction_from_env("GIVEBACK_ALERT_FRACTION"),
         ema_reversal_fast_cross=_env_bool("EMA_REVERSAL_FAST_CROSS", False),
+        reentry_enabled=_env_bool("REENTRY_ENABLED", False),
+        reentry_cooldown_candles=min(1000, max(1, _env_int("REENTRY_COOLDOWN_CANDLES", 2))),
+        reentry_window_candles=min(10_000, max(1, _env_int("REENTRY_WINDOW_CANDLES", 48))),
+        reentry_max_per_trend=min(5, max(1, _env_int("REENTRY_MAX_PER_TREND", 1))),
+        reentry_above_exit_atr=_atr_multiple_from_env("REENTRY_ABOVE_EXIT_ATR", 1.0) or 1.0,
         ema_reversal_gap_fraction=_fraction_from_env("EMA_REVERSAL_GAP_FRACTION"),
         ema_reversal_min_profit_r=_r_multiple_from_env("EMA_REVERSAL_MIN_PROFIT_R") or 0.5,
         giveback_alert_min_peak_r=_r_multiple_from_env("GIVEBACK_ALERT_MIN_PEAK_R") or 1.0,

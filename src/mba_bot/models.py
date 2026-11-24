@@ -358,6 +358,8 @@ class Trade(Base):
     # The best price reached since the entry (maximum favourable excursion): the highest price for a long, the lowest for a short, from the live price and the candle highs and lows after the entry. Only ever moves in
     # the favourable direction. NULL on a trade opened before this column existed until the first round that manages it (docs/safety/profit_peak_tracking.md). Observation and exit management only: never read when deciding an entry.
     peak_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The trade this one RE-ENTERED after (docs/safety/reentry.md): set only on an entry the re-entry rule made after a protective exit, NULL on every ordinary entry. A chain of links is one trend.
+    reentry_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # When the protective stop was last moved by a profit rule (lifecycle.move_stop). Used only to space moves out (docs/safety/profit_every_round.md). NULL = never moved.
     stop_moved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # The slot a LIVE trade holds (0, 1 or 2); NULL for paper. Unique among an account's non-terminal live trades, so the database still limits an account to its slots.
