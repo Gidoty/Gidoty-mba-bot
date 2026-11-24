@@ -175,6 +175,15 @@ def _atr_multiple_from_env(name: str, default: float = 0.0) -> float:
     return min(10.0, max(0.5, value))
 
 
+def _candles_from_env(name: str) -> int:
+    """A number of candles. Unset, empty, malformed, zero or negative is 0 = OFF, so a typo can never switch a time stop on; on is clamped to 1..10000."""
+    try:
+        value = int((os.environ.get(name) or "0").strip())
+    except ValueError:
+        return 0
+    return 0 if value <= 0 else min(10_000, value)
+
+
 def parse_trail_tiers(raw: str | None) -> tuple[tuple[float, float], ...]:
     """PROFIT_TRAIL_TIERS, for example "0:3,2:2,4:1.5": from +0R trail 3 ATR, from +2R 2 ATR, from +4R 1.5 ATR. Sorted by the R level, each level 0..50, each distance 0.5..10 ATR, no repeated level. Anything wrong in
     any token (a typo, a missing colon, a number out of range, a level repeated) gives NO tiers (the plain PROFIT_TRAIL_ATR is used), never a partial list."""
@@ -475,6 +484,12 @@ class Settings:
     profit_trail_tiers: tuple = ()
     profit_tighten_after_candles: int = 0
     profit_tighten_trail_atr: float = 0.0
+    # Profit protection v2, Part D (docs/safety/profit_time_stop.md): a maximum holding time per strategy, in candles of that strategy's own timeframe, like RSI_MR_TIME_STOP_CANDLES. 0 = OFF (the default).
+    # At the limit a trade that is in profit net of costs has its stop tightened to profit_time_tighten_atr x ATR below the best price (never below entry plus the cost buffer); a trade that is flat or in loss exits
+    # through lifecycle.execute_exit with the close reason time_stop. RSI keeps its own time stop (RSI_MR_TIME_STOP_CANDLES) and is not changed.
+    ema_max_hold_candles: int = 0
+    donchian_max_hold_candles: int = 0
+    profit_time_tighten_atr: float = 1.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -722,6 +737,9 @@ def load_settings() -> Settings:
         profit_trail_tiers=parse_trail_tiers(os.environ.get("PROFIT_TRAIL_TIERS")),
         profit_tighten_after_candles=max(0, min(10_000, _env_int("PROFIT_TIGHTEN_AFTER_CANDLES", 0))),
         profit_tighten_trail_atr=_atr_multiple_from_env("PROFIT_TIGHTEN_TRAIL_ATR"),
+        ema_max_hold_candles=_candles_from_env("EMA_MAX_HOLD_CANDLES"),
+        donchian_max_hold_candles=_candles_from_env("DONCHIAN_MAX_HOLD_CANDLES"),
+        profit_time_tighten_atr=_atr_multiple_from_env("PROFIT_TIME_TIGHTEN_ATR", 1.0) or 1.0,
         profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
         profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),

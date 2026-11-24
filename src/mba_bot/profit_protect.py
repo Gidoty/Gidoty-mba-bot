@@ -146,3 +146,23 @@ def staged_level(*, side: str, entry: float, initial_stop: float, peak: float | 
     if not cands:
         return None
     return max(cands, key=lambda c: c[0]) if long_side else min(cands, key=lambda c: c[0])
+
+
+# ---------------------------------------------------------------------------------------------------- Part D: maximum holding time
+def time_decision(*, side: str, entry: float, price: float, peak: float | None, atr: float | None, held_candles: float, limit_candles: int, buffer: float, tighten_atr: float) -> tuple[str, float | None] | None:
+    """What the maximum holding time says. None while the limit is off (0) or not reached. At the limit:
+      * the price is not beyond the entry by more than the cost buffer (flat or in loss NET of costs): ("exit", None), leave through lifecycle.execute_exit with the close reason time_stop;
+      * otherwise (in profit net of costs): ("tighten", level), the stop to tighten to: the best price minus tighten_atr x ATR, never worse than the entry plus the buffer (so a stop-out is at or above zero net).
+    The caller passes the level to profit_protect.decide, which never loosens a stop and exits if the price is already through it."""
+    if limit_candles <= 0 or held_candles < limit_candles or not entry > 0 or not price > 0:
+        return None
+    net_ok = price > entry + buffer if side == "long" else price < entry - buffer
+    if not net_ok:
+        return ("exit", None)
+    floor = entry + buffer if side == "long" else entry - buffer
+    level = floor
+    best = advance_peak(side, peak, price)  # the best price so far, never worse than the price now
+    if atr is not None and atr > 0 and tighten_atr > 0:
+        wide = best - tighten_atr * atr if side == "long" else best + tighten_atr * atr
+        level = max(floor, wide) if side == "long" else min(floor, wide)
+    return ("tighten", level)

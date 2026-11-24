@@ -375,6 +375,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             # Only a PAPER trade reaches here: live trades returned above.
             _track_peak(session, open_trade, candles, current_price, now_ms=now_ms)  # the best price since entry (observation only)
             _paper_staged_ratchet(open_trade, rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])), current_price, settings, tf_ms=rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0]), atr_period=settings.atr_period, now_ms=now_ms, account=account)
+            _tfms = rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])
+            if await _paper_time_stop(session, account, open_trade, rsi_mr.closed_only(candles, now_ms, _tfms), current_price, settings, notifier, tf_ms=_tfms, atr_period=settings.atr_period, now_ms=now_ms, limit=settings.ema_max_hold_candles, now=now):
+                await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+                return
             await _maybe_exit(
                 session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now,
                 settings=settings, take_profit=_paper_ema_rules(open_trade, candles, settings, now_ms),
@@ -1721,6 +1725,8 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
         if multi_trade.strategy_of(t) == donchian.STRATEGY_ID:
             _track_peak(session, t, await don_closed_for(pair), None, now_ms=now_ms)
             _paper_staged_ratchet(t, await don_closed_for(pair), None, settings, tf_ms=don_tf_ms, atr_period=don_p.atr_period, now_ms=now_ms, account=account)
+            if await _paper_time_stop(session, account, t, await don_closed_for(pair), None, settings, notifier, tf_ms=don_tf_ms, atr_period=don_p.atr_period, now_ms=now_ms, limit=settings.donchian_max_hold_candles, now=now):
+                continue
             await _manage_donchian_trade(session, account, t, await don_closed_for(pair), settings, notifier, p=don_p, tf_ms=don_tf_ms, now=now)
             continue
         if multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID:
@@ -1735,6 +1741,9 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             continue
         _track_peak(session, t, candles, candles[-1].close, now_ms=int(now.timestamp() * 1000))
         _paper_staged_ratchet(t, rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])), candles[-1].close, settings, tf_ms=rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0]), atr_period=settings.atr_period, now_ms=now_ms, account=account)
+        _tfms = rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])
+        if await _paper_time_stop(session, account, t, rsi_mr.closed_only(candles, now_ms, _tfms), candles[-1].close, settings, notifier, tf_ms=_tfms, atr_period=settings.atr_period, now_ms=now_ms, limit=settings.ema_max_hold_candles, now=now):
+            continue
         await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
                           settings=settings, multi_label=True, take_profit=_paper_ema_rules(t, candles, settings, int(now.timestamp() * 1000)))
 
@@ -1918,6 +1927,7 @@ async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *
         p = _donchian_params(settings)
         tf, _ = rsi_mr.normalize_timeframe(settings.donchian_timeframe)
         await _live_staged_lock(ctx, trade, settings, closed=seen[0], tf_ms=rsi_mr.timeframe_ms(tf), atr_period=p.atr_period, price=current_price, now_ms=now_ms)
+        await _live_time_stop(ctx, trade, settings, closed=seen[0], tf_ms=rsi_mr.timeframe_ms(tf), atr_period=p.atr_period, price=current_price, now_ms=now_ms, limit=settings.donchian_max_hold_candles)
 
 
 async def _live_donchian_rules(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float, seen: list) -> None:
@@ -2222,6 +2232,35 @@ def _paper_staged_ratchet(trade: Trade, closed: list, price: float | None, setti
         trade.stop_loss_price = target
 
 
+async def _paper_time_stop(session, account, trade: Trade, closed: list, price: float | None, settings: Settings, notifier, *, tf_ms: int, atr_period: int, now_ms: int, limit: int, now) -> bool:
+    """PAPER EMA and Donchian trades, maximum holding time on (Part D, off by default). At the limit: in profit net of costs the stop is ratcheted to the tightened level (never loosened; set at the price if the
+    price is already through it, a market exit); flat or in loss the trade is closed at the price with the close reason time_stop. Returns True when the trade was closed here."""
+    if limit <= 0 or not closed or not tf_ms or trade.status != TRADE_OPEN:
+        return False
+    price = price if price is not None else closed[-1].close
+    atrs = atr_series([c.high for c in closed], [c.low for c in closed], [c.close for c in closed], atr_period)
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    held = max(0.0, now_ms - int(opened.timestamp() * 1000)) / tf_ms
+    peak = profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
+    buf = profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(account, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+    got = profit_protect.time_decision(side=trade.side, entry=trade.entry_price, price=price, peak=peak, atr=atrs[-1] if atrs else None, held_candles=held, limit_candles=limit, buffer=buf, tighten_atr=settings.profit_time_tighten_atr)
+    if got is None:
+        return False
+    if got[0] == "tighten":
+        target = min(got[1], price) if trade.side == "long" else max(got[1], price)
+        if profit_protect.is_better(trade.side, target, trade.stop_loss_price):
+            trade.stop_loss_price = target
+        return False
+    pnl = (price - trade.entry_price) * trade.quantity if trade.side == "long" else (trade.entry_price - price) * trade.quantity
+    trade.exit_price, trade.pnl, trade.status, trade.closed_at, trade.close_reason = price, pnl, "closed", now, "time_stop"
+    account.paper_balance += pnl
+    session.commit()  # durable before the (network) notification
+    pair = trade.pair or account.pair
+    await notifier.send(account.notification_target, f"[PAPER] Exited {trade.side.upper()} {pair} (time stop)\n" + pnl_labels.exit_line(trade.entry_price, price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
+                        + f"\nStrategy: {multi_trade.strategy_of(trade)}")
+    return True
+
+
 def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int):
     """(rules, closed candles, ATR values, opened_ms) for an EMA trade's exit rules, or None when no rule is on, the trade is not an EMA trade, or it has no initial stop to measure R from."""
     rules = ema_exits.rules_from_settings(settings)
@@ -2254,6 +2293,7 @@ async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int
         tf, _ = rsi_mr.normalize_timeframe(settings.timeframe)
         closed = rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(tf))
         await _live_staged_lock(ctx, trade, settings, closed=closed, tf_ms=rsi_mr.timeframe_ms(tf), atr_period=settings.atr_period, price=current_price, now_ms=now_ms)
+        await _live_time_stop(ctx, trade, settings, closed=closed, tf_ms=rsi_mr.timeframe_ms(tf), atr_period=settings.atr_period, price=current_price, now_ms=now_ms, limit=settings.ema_max_hold_candles)
 
 
 def _fee_bps_for(account, settings: Settings) -> float:
@@ -2276,6 +2316,27 @@ async def _live_staged_lock(ctx, trade: Trade, settings: Settings, *, closed: li
     got = profit_protect.staged_level(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, peak=peak, atr=atr, held_candles=held, rules=rules, buffer=buf)
     if got is not None:
         await profit_live.running_step(ctx, trade, settings, level=got[0], label=got[1], price=price, atr=atr, now_ms=now_ms)
+
+
+async def _live_time_stop(ctx, trade: Trade, settings: Settings, *, closed: list, tf_ms: int, atr_period: int, price: float, now_ms: int, limit: int) -> None:
+    """The maximum holding time (Part D, docs/safety/profit_time_stop.md), for a healthy, protected live EMA or Donchian trade; off at 0. At the limit a trade that is in profit net of costs has its stop tightened
+    (lifecycle.move_stop, through profit_protect.decide: never loosened, call limits, exit if the price is already through the level); a trade that is flat or in loss exits through lifecycle.execute_exit with the
+    close reason time_stop."""
+    if limit <= 0 or trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not closed or not tf_ms:
+        return
+    atrs = atr_series([c.high for c in closed], [c.low for c in closed], [c.close for c in closed], atr_period)
+    atr = atrs[-1] if atrs else None
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    held = max(0.0, now_ms - int(opened.timestamp() * 1000)) / tf_ms
+    peak = profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
+    buf = profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(ctx.account, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+    got = profit_protect.time_decision(side=trade.side, entry=trade.entry_price, price=price, peak=peak, atr=atr, held_candles=held, limit_candles=limit, buffer=buf, tighten_atr=settings.profit_time_tighten_atr)
+    if got is None:
+        return
+    if got[0] == "exit":
+        await lifecycle.execute_exit(ctx, trade, reason="time_stop", price_hint=price)
+        return
+    await profit_live.running_step(ctx, trade, settings, level=got[1], label="time_stop", price=price, atr=atr, now_ms=now_ms)
 
 
 async def _live_ema_rules(ctx, trade: Trade, settings: Settings, *, now_ms: int, candles: list, current_price: float) -> None:
