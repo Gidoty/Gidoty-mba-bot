@@ -497,6 +497,9 @@ class Settings:
     login_throttle_enabled: bool = False
     login_max_failures: int = 5
     login_lockout_seconds: int = 900
+    # Browser guards (docs/security/browser_guards.md), both False = off (default): refuse an unsafe request that comes from another site, and add the standard security headers to answers.
+    csrf_origin_check: bool = False
+    security_headers: bool = False
     # F-06: switch off /docs, /redoc and /openapi.json.
     disable_api_docs: bool = False
     # WAL + busy timeout for SQLite. PREPARED ONLY: do not enable without the runbook.
@@ -594,6 +597,8 @@ def load_settings() -> Settings:
         login_throttle_enabled=_env_bool("LOGIN_THROTTLE_ENABLED", False),
         login_max_failures=max(1, _env_int("LOGIN_MAX_FAILURES", 5)),
         login_lockout_seconds=max(1, _env_int("LOGIN_LOCKOUT_SECONDS", 900)),
+        csrf_origin_check=_env_bool("CSRF_ORIGIN_CHECK", False),
+        security_headers=_env_bool("SECURITY_HEADERS", False),
         disable_api_docs=_env_bool("DISABLE_API_DOCS", False),
         sqlite_wal=_env_bool("SQLITE_WAL", False),
         sqlite_busy_timeout_ms=max(1000, _env_int("SQLITE_BUSY_TIMEOUT_MS", 15000)),
