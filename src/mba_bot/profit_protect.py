@@ -64,3 +64,85 @@ def decide(*, side: str, level: float | None, current_stop: float, price: float,
     if not unlocked_yet and last_move_ms is not None and now_ms - last_move_ms < min_interval_s * 1000:
         return Decision("hold", "too_soon")
     return Decision("move", "ok")
+
+
+# ---------------------------------------------------------------------------------------------------- Part C: the staged profit lock
+@dataclass(frozen=True)
+class LockRules:
+    """The staged lock's parameters, every one OFF at 0 (docs/safety/profit_staged_lock.md). R is the distance from the entry to the initial stop."""
+
+    stage1_r: float = 0.0
+    stage1_atr: float = 0.0
+    stage2_r: float = 0.0
+    stage2_lock_r: float = 1.0
+    trail_start_r: float = 0.0
+    trail_atr: float = 2.0
+    trail_tiers: tuple = ()  # ((from_r, atr_multiple), ...) ascending by from_r
+    tighten_after_candles: int = 0
+    tighten_trail_atr: float = 0.0
+
+    @property
+    def stage2_on(self) -> bool:
+        """Stage 2 is on only if its lock is below its activation: a lock at or above the level that earns it would sit beyond the best price."""
+        return self.stage2_r > 0 and 0 < self.stage2_lock_r < self.stage2_r
+
+    @property
+    def any_on(self) -> bool:
+        return self.stage1_r > 0 or self.stage2_on or self.trail_start_r > 0
+
+
+def lock_rules_from_settings(settings) -> LockRules:
+    return LockRules(
+        stage1_r=settings.profit_lock_stage1_r, stage1_atr=settings.profit_lock_stage1_atr, stage2_r=settings.profit_lock_stage2_r, stage2_lock_r=settings.profit_lock_stage2_lock_r,
+        trail_start_r=settings.profit_trail_start_r, trail_atr=settings.profit_trail_atr, trail_tiers=tuple(settings.profit_trail_tiers),
+        tighten_after_candles=settings.profit_tighten_after_candles, tighten_trail_atr=settings.profit_tighten_trail_atr,
+    )
+
+
+def cost_buffer(entry: float, *, fee_bps_per_side: float, slippage_bps_round_trip: float, funding_paid_per_unit: float = 0.0) -> float:
+    """The price distance a stop must sit beyond the entry to be at or above zero NET: both fees at `fee_bps_per_side`, the assumed round-trip slippage, and the funding paid so far per unit (a funding amount
+    RECEIVED, a negative number, is ignored: it never shrinks the buffer). Always at least 0."""
+    return max(0.0, entry * (2.0 * fee_bps_per_side + slippage_bps_round_trip) / 10_000.0) + max(0.0, funding_paid_per_unit)
+
+
+def trail_multiplier(rules: LockRules, gain_r: float, held_candles: float) -> float:
+    """The trail distance in ATRs at this profit and holding time: the tier whose from_r the profit has reached (the tightest tier reached, tiers sorted ascending), else the plain `trail_atr`; once the trade has
+    been held tighten_after_candles candles it is also capped at tighten_trail_atr. Never below 0.5 ATR."""
+    mult = rules.trail_atr
+    for from_r, m in rules.trail_tiers:
+        if gain_r >= from_r:
+            mult = m
+    if rules.tighten_after_candles > 0 and rules.tighten_trail_atr > 0 and held_candles >= rules.tighten_after_candles:
+        mult = min(mult, rules.tighten_trail_atr)
+    return max(0.5, mult)
+
+
+def staged_level(*, side: str, entry: float, initial_stop: float, peak: float | None, atr: float | None, held_candles: float, rules: LockRules, buffer: float) -> tuple[float, str] | None:
+    """The best stop level the staged lock has earned from the running best price `peak`, with its close reason, or None. Each stage is judged on the PEAK (the best the trade has done), not on where the price is now.
+      stage 1 -> "break_even_stop"   entry +/- buffer, or the better of that and peak -/+ stage1_atr x ATR
+      stage 2 -> "profit_lock"       entry +/- stage2_lock_r x R
+      trail   -> "trailing_stop"     peak -/+ multiplier x ATR
+    The most favourable earned level wins. A level that is not strictly on the loss side of the peak is dropped: a stop can only lock a level the trade has already gone beyond (when R is smaller than the cost buffer,
+    stage 1 simply waits until the gain exceeds the buffer). This function never looks at the stop resting: profit_protect.decide never loosens it."""
+    r = abs(entry - initial_stop)
+    if peak is None or not r > 0 or not rules.any_on:
+        return None
+    long_side = side == "long"
+    gain = (peak - entry) if long_side else (entry - peak)
+    gain_r = gain / r
+    cands: list[tuple[float, str]] = []
+    if rules.stage1_r > 0 and gain_r >= rules.stage1_r:
+        lvl = entry + buffer if long_side else entry - buffer
+        if rules.stage1_atr > 0 and atr is not None and atr > 0:
+            wide = peak - rules.stage1_atr * atr if long_side else peak + rules.stage1_atr * atr
+            lvl = max(lvl, wide) if long_side else min(lvl, wide)
+        cands.append((lvl, "break_even_stop"))
+    if rules.stage2_on and gain_r >= rules.stage2_r:
+        cands.append((entry + rules.stage2_lock_r * r if long_side else entry - rules.stage2_lock_r * r, "profit_lock"))
+    if rules.trail_start_r > 0 and gain_r >= rules.trail_start_r and atr is not None and atr > 0:
+        m = trail_multiplier(rules, gain_r, held_candles)
+        cands.append((peak - m * atr if long_side else peak + m * atr, "trailing_stop"))
+    cands = [c for c in cands if is_better(side, peak, c[0])]  # on the loss side of the best price
+    if not cands:
+        return None
+    return max(cands, key=lambda c: c[0]) if long_side else min(cands, key=lambda c: c[0])
