@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import ema_exits, ema_reversal, fee_tier, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, ema_reversal, fee_tier, reentry, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -64,6 +64,43 @@ def _ema_generate(candles: list, settings: Settings) -> StrategySignal:
         atr_flat_threshold=settings.atr_flat_threshold,
         atr_rolling_window=settings.atr_rolling_window,
     )
+
+
+def _reentry_signal(session, account, settings: Settings, signal, sig_candles: list, pair: str, *, now_ms: int, is_paper: bool):
+    """Part J (docs/safety/reentry.md), single-slot accounts, off by default. When the EMA strategy shows NO crossover, decide whether ONE re-entry should be tried: the same pair and side as the account's last closed
+    EMA trade, if that trade left through a protective exit and the trend has resumed (reentry.decide). Returns (a crossover-shaped StrategySignal for the ordinary `_maybe_enter`, the previous trade) or None. It never
+    enters anything itself: the caller sends the signal through the same guards, risk, stop, protection check and fee guard as any entry. A flat market, a stale candle (older than EMA_ENTRY_WINDOW_MINUTES) and a trade
+    of any other strategy never qualify. Never raises."""
+    try:
+        rules = reentry.rules_from_settings(settings)
+        if not rules.enabled or signal.signal != SignalType.NONE or "flat" in (signal.reason or "") or not sig_candles:
+            return None
+        tf, _ = rsi_mr.normalize_timeframe(settings.timeframe)
+        tf_ms = rsi_mr.timeframe_ms(tf)
+        closed = rsi_mr.closed_only(sig_candles, now_ms, tf_ms)
+        if not closed:
+            return None
+        age_ms = now_ms - (closed[-1].timestamp + tf_ms)
+        if not 0 <= age_ms <= int(settings.ema_entry_window_minutes * 60_000):
+            return None  # the same freshness rule as a crossover entry
+        prev = session.query(Trade).filter(Trade.account_id == account.id, Trade.status == "closed", Trade.is_paper == is_paper, Trade.pair == pair, Trade.closed_at.is_not(None)).order_by(Trade.closed_at.desc()).first()
+        if prev is None or multi_trade.strategy_of(prev) != multi_trade.EMA_STRATEGY_ID or (prev.side == "short" and account.market_type != "futures"):
+            return None
+        closed_at = prev.closed_at if prev.closed_at.tzinfo else prev.closed_at.replace(tzinfo=timezone.utc)
+        since = sum(1 for c in closed if c.timestamp >= int(closed_at.timestamp() * 1000))  # closed candles that STARTED after the exit
+        links, cur = 0, prev
+        while cur is not None and cur.reentry_of and links < 10:
+            links += 1
+            cur = session.get(Trade, cur.reentry_of)
+        ok, _why = reentry.decide(rules=rules, side=prev.side, prev_reason=prev.close_reason, prev_exit_price=prev.exit_price, candles_since_exit=since, reentries_so_far=links,
+                                  fast=signal.fast_ema, slow=signal.slow_ema, last_close=closed[-1].close, atr=signal.atr)
+        if not ok:
+            return None
+        kind = SignalType.BULLISH_CROSSOVER if prev.side == "long" else SignalType.BEARISH_CROSSOVER
+        return dataclasses.replace(signal, signal=kind, reason=f"re-entry after {prev.close_reason}"), prev
+    except Exception:  # noqa: BLE001 - a re-entry decision must never stop the cycle
+        logger.exception("account %s: the re-entry check failed; no re-entry is tried", getattr(account, "id", "?"))
+        return None
 
 
 def _ema_entry_stale(session, settings: Settings, account, signal, signal_candles: list, pair: str, *, now: datetime, now_ms: int, is_paper: bool) -> bool:
@@ -365,9 +402,19 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             elif _ema_entry_stale(session, settings, account, signal, sig_candles, scan_pair, now=now, now_ms=now_ms, is_paper=is_paper):
                 pass  # a closed-candle crossover that is too old to enter at a fair price; logged once per candle
             else:
+                entry_signal, prev_trade = signal, None
+                again = _reentry_signal(session, account, settings, signal, sig_candles, scan_pair, now_ms=now_ms, is_paper=is_paper)  # off by default; an ordinary entry below, same guards
+                if again is not None:
+                    entry_signal, prev_trade = again
+                known_ids = {t.id for t in list_open_trades(session, account.id)}
                 await _maybe_enter(
-                    session, account, client, signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
+                    session, account, client, entry_signal, current_price, settings, notifier, is_paper=is_paper, now=now, tctx=tctx, is_demo=is_demo
                 )
+                if prev_trade is not None:
+                    for t in list_open_trades(session, account.id):
+                        if t.id not in known_ids:
+                            t.reentry_of = prev_trade.id  # the link to the trade this one followed (a record only)
+                            session.commit()
             if not is_paper and settings.live_rsi_mr:
                 if rsi_mr.STRATEGY_ID in auto_new:
                     if not list_open_trades(session, account.id):
