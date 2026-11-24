@@ -28,7 +28,7 @@ from ..operator_settings import effective_settings
 from ..scheduler import run_forever
 from .browser_guards import OriginCheckMiddleware, SecurityHeadersMiddleware
 from .ratelimit import RateLimitMiddleware
-from .routers import account, auth, billing, pairs, privacy, reports, statements, telegram, trades
+from .routers import account, auth, billing, email_auth, pairs, privacy, reports, statements, telegram, trades
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ def create_app() -> FastAPI:
         logger.warning("the interactive API docs are being served on a production-looking deployment; set DISABLE_API_DOCS=true")
 
     app.include_router(auth.router)
+    app.include_router(email_auth.router)
     app.include_router(account.router)
     app.include_router(trades.router)
     app.include_router(telegram.router)
