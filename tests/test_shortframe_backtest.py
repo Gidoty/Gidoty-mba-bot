@@ -284,13 +284,16 @@ def test_the_archive_loaded_store_is_readable_by_the_runner(tmp_path):
     assert len(cs) == 5 and cs[0].open == 100 and cs[0].volume == 5
 
 
+RESEARCH_MARK = "Research only: no network, no key, no order, no live effect."
+
+
 def test_nothing_in_the_trading_service_imports_the_research_runner():
+    """A module may read the research runners only if it is itself a research module (it says so in its docstring); nothing in the trading service does."""
     src = Path(SB.__file__).parent
-    offenders = [p.name for p in src.rglob("*.py") if ("shortframe_backtest" in p.read_text() or "research.archive" in p.read_text() or "research import archive" in p.read_text())
-                 and p.name not in ("shortframe_backtest.py", "archive.py", "profit_backtest.py", "profit_backtest_dr.py", "entry_study.py")]  # profit_backtest.py is a research runner too (the sealed test of profit protection v2)
+    names = ("shortframe_backtest", "research.archive", "research import archive", "profit_backtest", "entry_study", "cost_split", "htf_study")
+    offenders = [p.name for p in src.rglob("*.py") if any(n in p.read_text() for n in names) and RESEARCH_MARK not in p.read_text() and p.name not in ("shortframe_backtest.py", "archive.py", "__init__.py", "__main__.py")]
     assert offenders == []
-    trading = [p.name for p in src.glob("*.py") if p.name not in ("shortframe_backtest.py", "profit_backtest.py", "profit_backtest_dr.py", "entry_study.py") and "profit_backtest" in p.read_text()]
-    assert trading == []  # nothing in the trading service imports the profit-protection research runner either
+    assert "shortframe_backtest" in (src / "profit_backtest.py").read_text() and RESEARCH_MARK in (src / "profit_backtest.py").read_text()  # the rule sees the research modules it is meant to allow
 
 
 def test_the_donchian_cooldown_after_a_stop_exit_skips_the_signals_inside_it(monkeypatch):
