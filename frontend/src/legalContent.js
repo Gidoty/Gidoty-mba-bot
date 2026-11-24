@@ -6,13 +6,13 @@
 // RISK_DISCLOSURE_VERSION in src/mba_bot/legal.py (a test checks it). Change the text, change the date here and there, and every customer is asked
 // to accept again.
 
-export const TERMS_VERSION = "2026-11-21";
+export const TERMS_VERSION = "2026-11-23";
 export const PRIVACY_VERSION = "2026-11-21";
 export const RISK_DISCLOSURE_VERSION = "2026-11-21";
 
 export const TERMS_OF_SERVICE = {
   title: "Terms of Service",
-  effectiveDate: "21 November 2026",
+  effectiveDate: "23 November 2026",
   version: TERMS_VERSION,
   intro: [
     'These Terms govern your use of the Metabridge Academy automated cryptocurrency trading bot, its website and dashboard, and its notifications (together, the "Service").',
@@ -118,6 +118,7 @@ export const TERMS_OF_SERVICE = {
       body: [
         "Binance charges its own trading commissions and, on Futures, funding payments to your exchange account. We do not set or receive them. Figures we show are \"before fees\" unless we say they are net, which we do only when the real exchange fees of every trade in the figure are known. Funding payments are not included in any figure. Practice figures are simulated.",
         "Paid access is a monthly subscription. The price and the currency are shown on the Activate screen before you pay: by card in naira through Paystack, or in USDT through NOWPayments. A card subscription renews by itself every month until you cancel it. A USDT payment buys one month and does not renew by itself: you pay again each month. If you bought one-time access before monthly subscriptions existed, that access has no end date.",
+        "Card payments are processed by Paystack, which may add its own processing fee at checkout; the total is shown on Paystack's payment page before you pay.",
         "Where access is sold as a subscription, cancelling stops the next charge, and your access continues until the end of the period you have already paid for.",
         "To cancel a card subscription, use the manage-subscription link in the e-mails Paystack sends you, or e-mail us and we will cancel it for you. A USDT subscription ends by itself if you do not pay again.",
         "If a payment is late, your access continues for a grace period (currently 5 days) after the paid period ends. We send reminders on the dashboard and, if you linked Telegram, on Telegram.",

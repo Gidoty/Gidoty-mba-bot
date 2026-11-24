@@ -20,7 +20,7 @@ from .models import LegalAcceptance, TradingAccount
 
 # The version of each document is its own effective date. Bumping one means the text changed: every customer must accept it again (nothing reuses an old row). The matching `effectiveDate` in
 # frontend/src/legalContent.js must change with it (a test checks the two agree).
-TERMS_VERSION = "2026-11-21"
+TERMS_VERSION = "2026-11-23"
 PRIVACY_VERSION = "2026-11-21"
 RISK_DISCLOSURE_VERSION = "2026-11-21"
 

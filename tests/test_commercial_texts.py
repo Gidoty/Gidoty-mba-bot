@@ -180,3 +180,23 @@ def test_the_data_requests_migration_is_one_idempotent_table_on_top_of_the_alert
     assert {c["name"] for c in inspect(eng).get_columns("data_requests")} == {"id", "customer_id", "kind", "status", "requested_at", "handled_at"}
     run(mig.downgrade)
     assert inspect(eng).get_table_names() == []
+
+
+# ------------------------------------------------------------------------------------------------ the Paystack fee sentence and the Terms version (24 Nov 2026)
+FEE_SENTENCE = "Card payments are processed by Paystack, which may add its own processing fee at checkout; the total is shown on Paystack's payment page before you pay."
+
+
+def test_terms_section_11_has_the_one_paystack_fee_sentence_and_only_the_terms_changed_version():
+    terms, privacy, risk = _doc("TERMS_OF_SERVICE"), _doc("PRIVACY_POLICY"), _doc("RISK_DISCLOSURE")
+    assert terms.count(FEE_SENTENCE) == 1 and FEE_SENTENCE not in privacy and FEE_SENTENCE not in risk
+    section_11 = terms[terms.index('heading: "11. Fees and paid access"'):terms.index('heading: "12. Security"')]
+    assert FEE_SENTENCE in section_11
+    assert legal.TERMS_VERSION == "2026-11-23" and legal.PRIVACY_VERSION == "2026-11-21" and legal.RISK_DISCLOSURE_VERSION == "2026-11-21"
+    assert 'effectiveDate: "23 November 2026"' in terms and 'effectiveDate: "21 November 2026"' in privacy and 'effectiveDate: "21 November 2026"' in risk
+
+
+def test_the_activate_screen_carries_no_fee_text_and_the_notice_lives_only_after_the_click():
+    billing_js = (ROOT / "frontend/src/lib/billing.js").read_text()
+    card = (ROOT / "frontend/src/components/SubscribeCard.jsx").read_text()
+    assert "FEE_NOTE" not in billing_js and "adds its own fee" not in billing_js + card
+    assert billing_js.count("CARD_FEE_NOTICE") == 1 and "{CARD_FEE_NOTICE}" in card  # defined once, drawn only inside the confirm step (the node test pins the click flow)
