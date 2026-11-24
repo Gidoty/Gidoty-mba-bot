@@ -7,6 +7,8 @@ customer's bad data or exchange error never stops another customer's loop.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import logging
 import sys
 from dataclasses import dataclass, replace as dc_replace
@@ -14,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import ema_exits, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, fee_tier, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -2261,9 +2263,9 @@ async def _paper_time_stop(session, account, trade: Trade, closed: list, price: 
     return True
 
 
-def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int):
+def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int, tp_buffer: float = 0.0):
     """(rules, closed candles, ATR values, opened_ms) for an EMA trade's exit rules, or None when no rule is on, the trade is not an EMA trade, or it has no initial stop to measure R from."""
-    rules = ema_exits.rules_from_settings(settings)
+    rules = dataclasses.replace(ema_exits.rules_from_settings(settings), tp_buffer=max(0.0, tp_buffer))
     if not rules.any_on or multi_trade.strategy_of(trade) != multi_trade.EMA_STRATEGY_ID or not trade.initial_stop_price:
         return None
     closed = _ema_signal_candles(candles, settings, now_ms) if settings.ema_closed_candle_only else rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0]))
@@ -2274,16 +2276,23 @@ def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: in
     return rules, closed, atrs, int(opened.timestamp() * 1000)
 
 
+def _paper_tp_buffer(trade: Trade, settings: Settings) -> float:
+    """The take-profit cost buffer for a PAPER trade: both fees at the ASSUMED rate plus the assumed slippage (a paper trade has no account tier to read). Zero when take profit is off."""
+    if settings.ema_take_profit_r <= 0:
+        return 0.0
+    return profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(None, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+
+
 def _paper_ema_rules(trade: Trade, candles: list, settings: Settings, now_ms: int) -> float | None:
     """PAPER EMA trades, rules on: ratchet the trade's stop to the level the closed candles have earned (never loosened) and return the take-profit price, or None. Nothing happens with every rule off."""
-    got = _ema_rule_inputs(trade, candles, settings, now_ms)
+    got = _ema_rule_inputs(trade, candles, settings, now_ms, tp_buffer=_paper_tp_buffer(trade, settings))
     if got is None:
         return None
     rules, closed, atrs, opened_ms = got
     level = ema_exits.earned_stop(trade.side, trade.entry_price, trade.initial_stop_price, opened_ms, closed, rules, atrs)
     if level is not None and ((trade.side == "long" and level > trade.stop_loss_price) or (trade.side == "short" and level < trade.stop_loss_price)):
         trade.stop_loss_price = level
-    return ema_exits.take_profit_level(trade.side, trade.entry_price, trade.initial_stop_price, rules.take_profit_r)
+    return ema_exits.take_profit_level(trade.side, trade.entry_price, trade.initial_stop_price, rules.take_profit_r, rules.tp_buffer)
 
 
 async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int, candles: list, current_price: float) -> None:
@@ -2297,8 +2306,18 @@ async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int
 
 
 def _fee_bps_for(account, settings: Settings) -> float:
-    """The taker fee per side, in basis points, used for the cost buffer: the assumption FEE_GUARD_FEE_BPS (5 bps). Part F replaces it with the account's real tier when that is known."""
+    """The ASSUMED taker fee per side in basis points (FEE_GUARD_FEE_BPS, 5 by default): used where no exchange is at hand (paper trades) and as the fallback when the real tier cannot be read."""
     return settings.fee_guard_fee_bps
+
+
+async def _live_cost_buffer(ctx, trade: Trade, settings: Settings, *, with_funding: bool) -> float:
+    """The price distance a stop must sit beyond the entry to be at or above zero NET (docs/safety/net_pnl.md): both fees at the account's REAL taker rate when it can be read (cached 24 hours), else the assumed
+    FEE_GUARD_FEE_BPS; the assumed round-trip slippage; and, for a Futures trade, the funding paid so far per unit (re-read at most every 30 minutes; a failed read counts as what is stored). Never raises."""
+    bps, _source = await fee_tier.taker_bps(ctx.venue, ctx.account.id, assumed_bps=_fee_bps_for(ctx.account, settings))
+    funding_per_unit = 0.0
+    if with_funding and trade.quantity > 0:
+        funding_per_unit = (await lifecycle.refresh_funding(ctx, trade)) / trade.quantity
+    return profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=bps, slippage_bps_round_trip=settings.fee_guard_slippage_bps, funding_paid_per_unit=funding_per_unit)
 
 
 async def _live_staged_lock(ctx, trade: Trade, settings: Settings, *, closed: list, tf_ms: int, atr_period: int, price: float, now_ms: int) -> None:
@@ -2312,7 +2331,9 @@ async def _live_staged_lock(ctx, trade: Trade, settings: Settings, *, closed: li
     opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
     held = max(0.0, now_ms - int(opened.timestamp() * 1000)) / tf_ms
     peak = profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
-    buf = profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(ctx.account, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+    r_now = abs(trade.entry_price - trade.initial_stop_price)
+    gain_r = ((peak - trade.entry_price) if trade.side == "long" else (trade.entry_price - peak)) / r_now if r_now > 0 else 0.0
+    buf = await _live_cost_buffer(ctx, trade, settings, with_funding=rules.stage1_r > 0 and gain_r >= rules.stage1_r)  # the reads only happen once stage 1 could act
     got = profit_protect.staged_level(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, peak=peak, atr=atr, held_candles=held, rules=rules, buffer=buf)
     if got is not None:
         await profit_live.running_step(ctx, trade, settings, level=got[0], label=got[1], price=price, atr=atr, now_ms=now_ms)
@@ -2329,7 +2350,9 @@ async def _live_time_stop(ctx, trade: Trade, settings: Settings, *, closed: list
     opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
     held = max(0.0, now_ms - int(opened.timestamp() * 1000)) / tf_ms
     peak = profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
-    buf = profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(ctx.account, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+    if held < limit:
+        return
+    buf = await _live_cost_buffer(ctx, trade, settings, with_funding=True)  # only read once the limit is reached
     got = profit_protect.time_decision(side=trade.side, entry=trade.entry_price, price=price, peak=peak, atr=atr, held_candles=held, limit_candles=limit, buffer=buf, tighten_atr=settings.profit_time_tighten_atr)
     if got is None:
         return
@@ -2348,13 +2371,14 @@ async def _live_ema_rules(ctx, trade: Trade, settings: Settings, *, now_ms: int,
     Never raises into the cycle's trading decisions beyond what execute_exit and move_stop themselves do."""
     if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED:
         return
-    got = _ema_rule_inputs(trade, candles, settings, now_ms)
+    tp_buffer = await _live_cost_buffer(ctx, trade, settings, with_funding=False) if settings.ema_take_profit_r > 0 else 0.0  # the take-profit target is net of costs at the account's real fee tier
+    got = _ema_rule_inputs(trade, candles, settings, now_ms, tp_buffer=tp_buffer)
     if got is None:
         return
     rules, closed, atrs, opened_ms = got
     initial = trade.initial_stop_price
     w = ema_exits.walk(trade.side, trade.entry_price, initial, opened_ms, closed, rules, atrs)
-    tp = ema_exits.take_profit_level(trade.side, trade.entry_price, initial, rules.take_profit_r)
+    tp = ema_exits.take_profit_level(trade.side, trade.entry_price, initial, rules.take_profit_r, rules.tp_buffer)
     forming = [c for c in candles if c.timestamp >= opened_ms and c not in closed]  # the candle still forming (never the one the entry happened in: its start is before the entry)
     touched_now = ema_exits.take_profit_touched(trade.side, tp, current_price) or any(ema_exits.take_profit_touched(trade.side, tp, c.high if trade.side == "long" else c.low) for c in forming)
     if w.exit_reason == "stop_loss":

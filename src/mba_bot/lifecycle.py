@@ -569,12 +569,45 @@ async def _protect_or_emergency(
 
 async def _fee_from_fills(venue, trade: Trade, *, order_side: str, quantity: float) -> float | None:
     """The actual commission of a fill in the quote currency from the account's own trade records (docs/safety/fee_capture.md), or None. A read, wrapped so that a failed or odd answer can never
-    change what the trade lifecycle does: the fee is recorded for reporting only."""
+    change what the trade lifecycle does: the fee is recorded for reporting only. A commission paid in another asset (BNB) is added to `venue.fee_other_total` as paid (docs/safety/net_pnl.md)."""
     try:
         since = int(_aware(trade.opened_at).timestamp() * 1000) - 120_000 if trade.opened_at else 0
-        return await venue.fills_fee_quote(order_side=order_side, since_ms=since, max_quantity=quantity)
+        venue.last_fee_other = {}
+        fee = await venue.fills_fee_quote(order_side=order_side, since_ms=since, max_quantity=quantity)
+        total = getattr(venue, "fee_other_total", None)
+        if isinstance(total, dict):
+            for asset, amount in (venue.last_fee_other or {}).items():
+                total[asset] = total.get(asset, 0.0) + amount
+        return fee
     except Exception:  # noqa: BLE001
         return None
+
+
+async def read_funding(ctx: LiveContext, trade: Trade) -> float | None:
+    """The Futures funding of this trade so far (signed from the account's side: negative = paid), from the account's own income history, or None when it cannot be read. A Spot trade has none (0.0).
+    Read-only; never raises, never changes a trade, never delays an exit decision (docs/safety/net_pnl.md)."""
+    try:
+        if ctx.venue.market_type != "futures":
+            return 0.0
+        start = int(_aware(trade.opened_at).timestamp() * 1000) - 60_000 if trade.opened_at else 0
+        end = int(ctx.now.timestamp() * 1000) + 60_000
+        return await ctx.venue.funding_income(start_ms=start, end_ms=end)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("account %s: could not read the funding income (%s)", ctx.account.id, type(exc).__name__)
+        return None
+
+
+async def refresh_funding(ctx: LiveContext, trade: Trade, *, min_interval_seconds: float = 1800.0) -> float:
+    """The funding PAID so far on an open trade (a positive number; funding received counts as 0), re-read at most every `min_interval_seconds`. Used only for the cost buffer of the staged profit lock; a
+    failed read returns what is stored (or 0.0): it never blocks anything."""
+    stored = trade.funding_quote
+    last = _aware(trade.funding_read_at) if trade.funding_read_at else None
+    if ctx.venue.market_type == "futures" and (last is None or (ctx.now - last).total_seconds() >= min_interval_seconds):
+        read = await read_funding(ctx, trade)
+        if read is not None:
+            _set(ctx.session, trade, funding_quote=read, funding_read_at=ctx.now)
+            stored = read
+    return max(0.0, -(stored or 0.0))
 
 
 async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
@@ -688,6 +721,7 @@ async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade, *, want_fee: bool
 
 
 async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_price: float, protection: str) -> bool:
+    ctx.venue.fee_other_total = {}  # commissions paid in BNB or another asset the bot does not value, collected as the fee reads below run
     fills, exit_fee_quote = await _exit_fills_and_fees(ctx, trade)
     extra: dict = {}
     if ctx.venue.market_type == "futures" and trade.entry_fee_quote is None and fills:
@@ -701,6 +735,14 @@ async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_pri
     else:
         exit_price, qty = fallback_price, trade.quantity
         exit_fee_quote = None  # a price assumed from the fallback has no fills behind it, so no fee is claimed
+    other = {a: v for a, v in (getattr(ctx.venue, "fee_other_total", None) or {}).items() if v > 0}
+    if other:
+        extra["fee_asset"] = next(iter(other)) if len(other) == 1 else "MIXED"
+        extra["fee_asset_amount"] = sum(other.values()) if len(other) == 1 else None
+    funding = await read_funding(ctx, trade)  # a failed read leaves NULL (unknown); it can never keep the trade open
+    if funding is not None:
+        extra["funding_quote"] = funding
+        extra["funding_read_at"] = ctx.now
     pnl = _pnl(trade.side, trade.entry_price, exit_price, qty)
     moved = _cas(
         ctx.session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION, TRADE_CLOSING), TRADE_CLOSED,

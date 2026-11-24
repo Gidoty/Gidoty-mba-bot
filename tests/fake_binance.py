@@ -124,6 +124,8 @@ class FakeBinance:
 
         self.orders: dict[str, dict] = {}
         self.fills: list[dict] = []  # account trade history
+        self.funding_rows: list[dict] = []  # the account's FUNDING_FEE income rows ({"timestamp", "amount"}), signed from the account's side
+        self.taker_fee: float | None = None  # the account's real taker rate as a fraction (None = the endpoint is not available)
         self.calls: list[tuple] = []
         self.violations: list[str] = []  # contract breaches the bot made
         self.faults: list[dict] = []
@@ -291,6 +293,18 @@ class FakeBinance:
         if symbols:
             return [own]
         return [own] + [dict(p) for p in self.other_positions]  # account-wide, like the real call
+
+    async def fetch_funding_history(self, symbol=None, since=None, limit=None, params=None):
+        self._record("fetch_funding_history")
+        self._fault("fetch_funding_history", None, "before")
+        return [dict(r) for r in self.funding_rows if since is None or r["timestamp"] >= since]
+
+    async def fetch_trading_fee(self, symbol, params=None):
+        self._record("fetch_trading_fee")
+        self._fault("fetch_trading_fee", None, "before")
+        if self.taker_fee is None:
+            raise ccxt.NotSupported("no commission endpoint")
+        return {"symbol": symbol, "maker": self.taker_fee / 2, "taker": self.taker_fee}
 
     async def fetch_my_trades(self, symbol=None, since=None, limit=None, params=None):
         self._record("fetch_my_trades")

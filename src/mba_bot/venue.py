@@ -257,6 +257,19 @@ def fee_quote_of(fee_entries, *, base: str | None, quote: str | None, price: flo
     return total
 
 
+def fee_other_of(fee_entries, *, base: str | None, quote: str | None) -> dict[str, float]:
+    """The commission paid in an asset that is neither the quote nor the base asset (for example BNB), by asset. Only finite, positive amounts. Recorded as paid, never valued."""
+    out: dict[str, float] = {}
+    for entry in (fee_entries or []):
+        if not isinstance(entry, dict):
+            continue
+        cost, currency = _f(entry.get("cost")), entry.get("currency")
+        if cost is None or cost != cost or cost in (float("inf"), float("-inf")) or cost <= 0 or not currency or currency in (quote, base):
+            continue
+        out[str(currency)] = out.get(str(currency), 0.0) + cost
+    return out
+
+
 def order_from_ccxt(order: Any, *, base: str | None = None, quote: str | None = None) -> OrderInfo:
     if not isinstance(order, dict):
         raise ValueError("unexpected order shape")
@@ -332,6 +345,39 @@ class Venue:
         self.quote = pair.split("/", 1)[1].split(":")[0] if "/" in pair else None
         self.market: dict | None = None
         self.rules: MarketRules | None = None
+        self.last_fee_other: dict[str, float] = {}
+        self.fee_other_total: dict[str, float] = {}
+
+    async def funding_income(self, *, start_ms: int, end_ms: int) -> float | None:
+        """Read-only. The sum of the account's FUNDING_FEE income on this symbol between `start_ms` and `end_ms`, in the quote currency, signed from the account's side (negative = paid). Futures only: a Spot venue has no
+        funding and returns 0.0. Uses ccxt's `fetch_funding_history`, which on Binance USD-M is `GET /fapi/v1/income` with incomeType=FUNDING_FEE (UNVERIFIED against the live exchange); it needs only the key's normal
+        READ permission (no trading or withdrawal right, UNVERIFIED). Returns None unless the answer is a clean list. Never raises into a decision: the callers catch."""
+        if self.market_type != "futures":
+            return 0.0
+        rows = await self.client.fetch_funding_history(self.symbol, start_ms, None, {"endTime": end_ms})
+        if not isinstance(rows, list):
+            return None
+        total = 0.0
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            amount = _f(row.get("amount"))
+            if amount is None or amount != amount or amount in (float("inf"), float("-inf")):
+                return None
+            ts = _f(row.get("timestamp"))
+            if ts is not None and not start_ms <= ts <= end_ms:
+                continue
+            total += amount
+        return total
+
+    async def taker_fee_rate(self) -> float | None:
+        """Read-only. The account's real taker commission rate for this symbol as a fraction (0.0005 = 5 bps), from ccxt's `fetch_trading_fee` (on Binance USD-M `GET /fapi/v1/commissionRate`, on Spot
+        `GET /sapi/v1/asset/tradeFee`, both UNVERIFIED here, both read permission only). None unless it is a finite number between 0 and 1 percent."""
+        info = await self.client.fetch_trading_fee(self.symbol)
+        rate = _f(info.get("taker")) if isinstance(info, dict) else None
+        if rate is None or rate != rate or not 0.0 <= rate <= 0.01:
+            return None
+        return rate
 
     # -- setup / capability -------------------------------------------------
 
@@ -343,12 +389,16 @@ class Venue:
         fills = [t for t in (trades or []) if isinstance(t, dict) and t.get("side") == order_side]
         fills.sort(key=lambda t: t.get("timestamp") or 0, reverse=True)
         covered, total = 0.0, 0.0
+        self.last_fee_other = {}  # a commission in BNB or another asset the bot does not value, as paid, for the covered fills (read by lifecycle after this call; never used to decide anything)
         for t in fills:
             amount = _f(t.get("amount")) or 0.0
             price = _f(t.get("price"))
             if amount <= 0 or not price or covered >= max_quantity - 1e-12:
                 continue
             fee = t.get("fees") if isinstance(t.get("fees"), list) and t.get("fees") else ([t.get("fee")] if isinstance(t.get("fee"), dict) else [])
+            take_share = min(amount, max_quantity - covered) / amount
+            for asset, cost in fee_other_of(fee, base=self.base, quote=self.quote).items():
+                self.last_fee_other[asset] = self.last_fee_other.get(asset, 0.0) + cost * take_share
             part = fee_quote_of(fee, base=self.base, quote=self.quote, price=price)
             if part is None:
                 return None

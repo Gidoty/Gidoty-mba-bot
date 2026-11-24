@@ -58,6 +58,9 @@ class ResultGroup(BaseModel):
     fees: float | None
     trades_with_fees: int
     fees_complete: bool
+    funding: float | None = None
+    trades_with_funding: int = 0
+    funding_complete: bool = False
     net_pnl: float | None
     simulated: bool
     label: str

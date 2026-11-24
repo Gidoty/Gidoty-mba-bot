@@ -224,8 +224,10 @@ def health_panel(db: Session, now: datetime, *, commit: str | None = None) -> di
 def _label(g: reporting.Group) -> str:
     if g.mode == reporting.MODE_PAPER:
         return "Simulated, no fees or slippage"
+    if g.fees_complete and g.funding_complete:
+        return "Net after fees and funding (every one known)"
     if g.fees_complete:
-        return "Net after fees (every fee known)"
+        return f"After fees, before funding (funding known for {g.trades_with_funding} of {g.closed})"
     known = f", fees known for {g.trades_with_fees} of {g.closed}" if g.trades_with_fees else ""
     return f"Before fees{known}"
 
@@ -235,6 +237,7 @@ def _group(mode: str, strategy: str, r) -> reporting.Group:
     g.closed, g.wins, g.losses = int(r.closed), int(r.wins), int(r.losses)
     g.gross_pnl = float(r.gross or 0.0)
     g.fees, g.trades_with_fees = float(r.fees or 0.0), int(r.with_fees)
+    g.funding, g.trades_with_funding = float(r.funding or 0.0), int(r.with_funding)
     return g
 
 
@@ -242,7 +245,7 @@ def _group_dict(g: reporting.Group) -> dict:
     d = g.to_dict()
     d["label"] = _label(g)
     d["mode_label"] = reporting.MODE_LABEL[g.mode]
-    return {k: d[k] for k in ("mode", "strategy", "closed_trades", "wins", "losses", "gross_pnl", "fees", "trades_with_fees", "fees_complete", "net_pnl", "simulated", "label", "mode_label")}
+    return {k: d[k] for k in ("mode", "strategy", "closed_trades", "wins", "losses", "gross_pnl", "fees", "trades_with_fees", "fees_complete", "funding", "trades_with_funding", "funding_complete", "net_pnl", "simulated", "label", "mode_label")}
 
 
 def _result_columns():
@@ -256,6 +259,9 @@ def _result_columns():
         func.coalesce(func.sum(Trade.pnl), 0.0).label("gross"),
         func.coalesce(func.sum(case((has_fees, Trade.entry_fee_quote + Trade.exit_fee_quote), else_=0.0)), 0.0).label("fees"),
         func.coalesce(func.sum(case((has_fees, 1), else_=0)), 0).label("with_fees"),
+        func.coalesce(func.sum(case((and_(mode != reporting.MODE_PAPER, Trade.funding_quote.is_not(None)), Trade.funding_quote), else_=0.0)), 0.0).label("funding"),
+        # a trade's funding is KNOWN when it was read, or when it is a Spot trade (Spot stops are "stop_loss" or "stop_loss_limit"; Futures stops start with "stop_market"): see reporting.funding_applies
+        func.coalesce(func.sum(case((and_(mode != reporting.MODE_PAPER, or_(Trade.funding_quote.is_not(None), func.coalesce(Trade.protective_kind, "").notlike("stop_market%"))), 1), else_=0)), 0).label("with_funding"),
     )
     return mode, strategy, aggs
 

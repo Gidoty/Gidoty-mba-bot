@@ -27,7 +27,7 @@ KILL_SWITCH_REVISION = "e5b9c2d7f1a4"  # the kill switch tables
 SUBSCRIPTION_REVISION = "f6c3a9d1b8e2"  # subscription billing tables (Stage 0), on top of the kill switch
 TOKENS_REVISION = "a7d4e1c9b3f5"  # subscription_tokens (Stage 1)
 NOTICES_REVISION = "b8e5f2a0c4d6"  # billing_notices (customer reminders)
-LATEST_HEAD = "e5b2c8d4f1a7"  # head now also includes trading_accounts.live_slot and the per-slot live trade index (B7), on top of trades.initial_stop_price b7f3d5a9c2e4 (B5b)
+LATEST_HEAD = "a7d3e9f1c5b2"  # head now also includes trading_accounts.live_slot and the per-slot live trade index (B7), on top of trades.initial_stop_price b7f3d5a9c2e4 (B5b)
 PROTECTIVE_REVISION = "b3f1c9a2d7e4"
 NEW_COLUMNS = {
     "pair", "entry_order_id", "exit_order_id", "protective_order_id", "protective_kind", "protective_limit_price",
@@ -245,7 +245,8 @@ def test_alembic_has_a_single_head_and_the_new_revision_parents_the_old_one():
     assert script.get_revision("a1d6c3e8b5f7").down_revision == "d9b5f7c2e4a6"  # the admin dashboard tables
     assert script.get_revision("c3f8a2d5b7e9").down_revision == "b2e7d4a9c6f1"  # the data requests table, on top of the alert marks migration
     assert script.get_revision("d4a1b7c3e9f2").down_revision == "c3f8a2d5b7e9"  # the peak price column (profit protection, Part A)
-    assert script.get_revision(LATEST_HEAD).down_revision == "d4a1b7c3e9f2"  # when the stop was last moved (Part B)
+    assert script.get_revision("e5b2c8d4f1a7").down_revision == "d4a1b7c3e9f2"  # when the stop was last moved (Part B)
+    assert script.get_revision(LATEST_HEAD).down_revision == "e5b2c8d4f1a7"  # funding and fee asset (Part F)
 
 
 # =========================== single-instance lock ===========================
