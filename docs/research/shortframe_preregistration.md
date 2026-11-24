@@ -35,4 +35,4 @@ Trades, trades per day, average holding time, win rate, gross and net expectancy
 4. Only if a cell qualified: once, `python -m mba_bot.shortframe_backtest confirm --root research_data --out research_out/shortframe --confirm --reason "<why>" --expect-plan-hash d8f9a600f51048b6`.
 
 ## Results
-Appended below after the runs, with the commit that holds them.
+See `docs/research/shortframe_results.md`: no cell cleared the rule on the tuning window, so the confirmation window was not read.
