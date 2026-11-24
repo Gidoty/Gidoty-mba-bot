@@ -1,0 +1,28 @@
+# Pre-registration: profit protection v2 sealed test
+
+Registered before any run. **Plan hash `9348815fefe80d40`** (`python -m mba_bot.profit_backtest plan`). The hash covers the protocol text, pairs, timeframes, windows, every cost, every rule set and its parameters, the combination rule and the SHA-256 of every source file the test reads: `profit_backtest.py`, `profit_protect.py`, `ema_exits.py`, `ema_reversal.py`, `reentry.py`, `reporting.py`, `shortframe_backtest.py`, `strategy.py`, `indicators.py`, `research/archive.py`, `research/funding_archive.py`. If any of them changes, the hash changes and the confirmation window refuses to open.
+
+## The question
+On the same candles, what do the profit rules change for the EMA strategy (`ema_cross_atr_v1`: EMA 20/50 crossover, 2 ATR initial stop, exit on the opposite crossover) after real costs? Does a rule that reduces give-backs pay for the winners it cuts short? Show both sides of the trade-off. **A result here is a measurement on two windows, not evidence that a rule will make money.**
+
+## What is simulated
+- Pairs BTC, ETH, BNB, XRP (USD-M). Timeframes 1h and 15m. Candles and funding rates come from Binance's public archive (`data.binance.vision`, no key). `fapi.binance.com` was refused (HTTP 451) from the build environment, so the archive reader is used, as in the short-timeframe study (PR #85). UNVERIFIED: that archive klines match the live API bit for bit.
+- Tune window 2025-11-01 to 2026-07-01. One untouched confirmation window 2026-07-04 to 2026-09-15, read once (a one-look ledger beside the data, written BEFORE the window is read; a second look needs `--second-look` and is labelled contaminated).
+- Caveat on the tune window: the EMA baseline on these windows was already seen in PR #85 (net -0.030 R per trade on 1h, -0.241 on 15m, before funding). The confirmation window has never been read by any study.
+- Entries: the EMA signal on a closed candle, entry at the next open (the same code as PR #85's simulation; a test checks that the baseline reproduces it trade for trade).
+- Costs on every order leg: taker fee 5 bps per side (the standard USD-M rate; the real tier of an account is not known here), the fee guard's 11 bps round-trip slippage, funding at the historical rate of every settlement the position was open for (a long pays a positive rate, a short receives it; a partial exit reduces the weight that pays), and 2 bps of the leg's notional extra for every order beyond the entry and one exit (a partial exit; an assumption, stated). A re-entry is a full extra round trip with all of it.
+- Conventions: stop judged first inside a candle (wins ties), a candle that opens beyond a level fills at its open, a stop level earned by a candle applies from the NEXT candle, a price already through an earned level at the candle close leaves at that close, unfinished trades at the window end are not counted.
+
+## Rule sets (all parameters are in the plan hash)
+- **RS0** current rules (nothing added). **RS84** PR #84: take profit 3 R (net of costs), break-even at 1 R, trail from 1.5 R by 2 ATR.
+- Each option alone, on top of RS0: **A1/A2/A3** stage 1 at +1 / +1.5 / +2 R (stop to entry plus the cost buffer: both fees, slippage, nothing else); **B1** staged lock (stage 1 at 1 R, +1 R locked at +2 R, then a 2 ATR trail); **P1** stage 1 placed at the better of entry plus buffer and best price minus 2 ATR; **T1** tiered trail from +1 R (3 ATR, 2 ATR from +2 R, 1.5 ATR from +4 R); **M1** trail 3 ATR from +1 R, 1.5 ATR after 24 candles held; **D1** time stop at 72 candles (tighten if in profit net of costs, exit otherwise); **E1** exit on a close back across the fast EMA after +0.5 R; **E2** exit when the fast/slow gap has shrunk by 50% of its peak; **I1** partial profit (half at +1.5 R, the rest to entry plus costs, then a 2 ATR trail from +2 R); **J1** stage 1 at +1 R and one re-entry after a protective exit.
+- **BEST**: chosen per timeframe from the TUNE numbers only, by the rule fixed in `choose_best` (an option qualifies if its pooled net total R beats RS0's AND its give-back rate is not higher; the best qualifying option of each family is taken and combined; none qualifying means BEST equals RS0). It is rebuilt from the saved tuning numbers at confirmation, never re-chosen.
+- NOT simulated: Donchian and RSI (the staged lock for them is unmeasured here); the 5-minute rounds (these runs act at candle closes, a conservative reading of rules that act every round); Part B's minimum improvement and interval per stop move; exchange stop fills other than the assumed slippage; the account's real fee tier.
+
+## What is reported, per timeframe and rule set (pairs pooled)
+Trades, average net R, profit factor, net total R and the change against RS0, return at 0.5% risk per trade, maximum drawdown, longest losing streak, give-back rate (trades whose best price reached +1 R and that closed below the entry net of costs, by `reporting.giveback_flags`), winners cut short (a rule trade with net R above zero whose same entry in RS0 ended later with a higher net R), re-entries and how many recovered (net R above zero), cost share of the gross edge, funding R, extra-order R.
+
+## How the answer is read (fixed now)
+- A rule set **lowers net profit** if its pooled net total R on a window is below RS0's. It is stated as such, whatever its give-back rate.
+- The trade-off is shown, not decided: change in net R against change in give-back rate and in winners cut short. A rule that lowers the give-back rate and also lowers net R is a cost the owner may accept; the numbers say how large.
+- No parameter is tuned after the results are seen. If a rule set does not help, that is the answer.
