@@ -1,0 +1,3 @@
+# Cost sensitivity: registration
+
+Plan hash `915faca89a86f2ed`, committed before the run. A descriptive re-pricing of the SAME trades as the cost split (no trade added or removed, no window opened). Scenarios and the fee schedule are fixed in `cost_sensitivity.py` and pinned in the hash: regular taker 5.0 / maker 2.0 bps; VIP 1 4.0 / 1.6; VIP 2 3.5 / 1.4; VIP 3 3.2 / 1.2; BNB takes 10% off; slippage 5.5 bps per side on market fills, none on a maker entry; exits (stops included) always market orders; missed-fill rates 0%, 20%, 40% read two ways (random subset; the best-gross trades missed). **All fee numbers are UNVERIFIED** (from the published schedule as I know it); VIP tiers need volumes far above a pilot account's.
