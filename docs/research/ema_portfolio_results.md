@@ -27,8 +27,8 @@ Every interval spans zero. The one-slot total is below the unlimited total in al
 ## Risk assumed
 - 1.0% of equity per trade. With unlimited slots up to 9 or 10 positions are open at once, an open risk of 9% to 10% of equity; that is above the account maximum (2.0% per trade) and the paper total-risk cap (2.0%), so the unlimited rows are a description of the signals, not something the bot could place. With 1 slot the open risk is 1%, with 3 slots up to 3%.
 - Drawdown at 1% risk (peak to trough of closed-trade equity): 4h 20/50 20% (1 slot) to 48% (unlimited); 1d cells 7% to 34%. The JSON has 0.5% and 2.0%.
-- Longest run of losing trades in closing order: 11 to 27 on 4h (4 to 20 on 1d). The win rate is 22% to 33% and the median trade is -0.55 to -1.02 R. A few winners carry the total: removing the 5 best trades makes the rest of the total negative in most rows (share above 100%).
-- Final equity multiples (1.07 to 9.5) are what these simulated trades would have done in these three years at 1% risk. They are in-sample, driven by a few trades, and are not an estimate of anything to come.
+- Longest run of losing trades in closing order: 11 to 27 on 4h (4 to 20 on 1d). The win rate is 15% to 33% and the median trade is -0.55 to -1.02 R. A few winners carry the total: removing the 5 best trades makes the rest of the total negative in most rows (share above 100%).
+- Final equity multiples (0.92 to 9.5) are what these simulated trades would have done in these three years at 1% risk. They are in-sample, driven by a few trades, and are not an estimate of anything to come.
 
 ## Where I am unsure
 - Auto Select ranks EMA signals by its own score in the live code; this study uses scan order (first signal in time, then catalog order). A different pick rule changes which trades are taken.
