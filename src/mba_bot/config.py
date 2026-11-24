@@ -553,6 +553,8 @@ class Settings:
     strategy_donchian_available: bool = False
     strategy_rsi_available: bool = False
     new_account_strategies: str = "ema_only"  # ema_only | ema_donchian | ema_rsi | ema_donchian_rsi
+    # Customer status line (docs/safety/health_and_status.md): False = off (default), GET /api/account/status-line answers 404.
+    status_line: bool = False
     subscription_billing_enabled: bool = False
     # Hourly recovery of a Paystack renewal whose webhook never arrived (docs/security/billing_paystack_subscriptions.md). OFF by default: it makes read-only calls with the live Paystack key, and the operator
     # enables anything that uses a secret key by hand. Read only while SUBSCRIPTION_BILLING_ENABLED is on.
@@ -808,6 +810,7 @@ def load_settings() -> Settings:
         strategy_donchian_available=_env_bool("STRATEGY_DONCHIAN_AVAILABLE", False),
         strategy_rsi_available=_env_bool("STRATEGY_RSI_AVAILABLE", False),
         new_account_strategies=parse_new_account_strategies(os.environ.get("NEW_ACCOUNT_STRATEGIES")),
+        status_line=_env_bool("STATUS_LINE", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         paystack_renewal_reconcile=_env_bool("PAYSTACK_RENEWAL_RECONCILE", False),
         subscription_grace_days=_grace_days_from_env(),

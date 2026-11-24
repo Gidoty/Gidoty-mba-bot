@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ... import exchange, pair_catalog, pnl_labels, strategy_availability
+from ... import exchange, kill_switch, pair_catalog, pnl_labels, status_line, strategy_availability
 from ... import leverage as leverage_module
 from ...billing.entitlement import is_entitled
 from ...botcode import assign_unique_bot_code
@@ -1066,3 +1066,21 @@ def put_strategies(body: dict, customer: Customer = Depends(require_legal_accept
         raise HTTPException(status.HTTP_409_CONFLICT, "You have a trade open. Change this after it has closed.")
     account.extra_strategies = value
     return _strategies_out(account, settings)
+
+
+# --- /api/account/status-line: one plain sentence about the bot (docs/safety/health_and_status.md). STATUS_LINE off (default): the route does not exist (404). Reads only. ---
+@router.get("/status-line")
+def get_status_line(customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict:
+    if not settings.status_line:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    account = _require_account(customer)
+    now = datetime.now(timezone.utc)
+    runtime = _to_account_out(account, has_paid=_paid(customer, settings), db=db, settings=settings).runtime_status
+    tz = account_loss.zone(settings.account_day_timezone) or account_loss.zone("Africa/Lagos")
+    facts = status_line.Facts(
+        runtime_status=runtime, needs_telegram=account.notification_channel == "telegram" and not account.notification_target, last_scanned_at=account.last_scanned_at,
+        last_check_ok=account.last_error is None, poll_interval_seconds=settings.poll_interval_seconds, kill_engaged=kill_switch.check(db, settings).engaged,
+        daily_loss_pause=account_loss.active_pause(db, account.id, now, tz) is not None, total_loss_stop=account_loss.active_total_stop(db, account.id) is not None,
+        open_position=bool(list_open_trades(db, account.id)),
+    )
+    return status_line.build(facts, now)
