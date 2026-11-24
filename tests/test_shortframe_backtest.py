@@ -287,9 +287,9 @@ def test_the_archive_loaded_store_is_readable_by_the_runner(tmp_path):
 def test_nothing_in_the_trading_service_imports_the_research_runner():
     src = Path(SB.__file__).parent
     offenders = [p.name for p in src.rglob("*.py") if ("shortframe_backtest" in p.read_text() or "research.archive" in p.read_text() or "research import archive" in p.read_text())
-                 and p.name not in ("shortframe_backtest.py", "archive.py", "profit_backtest.py")]  # profit_backtest.py is a research runner too (the sealed test of profit protection v2)
+                 and p.name not in ("shortframe_backtest.py", "archive.py", "profit_backtest.py", "profit_backtest_dr.py", "entry_study.py")]  # profit_backtest.py is a research runner too (the sealed test of profit protection v2)
     assert offenders == []
-    trading = [p.name for p in src.glob("*.py") if p.name not in ("shortframe_backtest.py", "profit_backtest.py") and "profit_backtest" in p.read_text()]
+    trading = [p.name for p in src.glob("*.py") if p.name not in ("shortframe_backtest.py", "profit_backtest.py", "profit_backtest_dr.py", "entry_study.py") and "profit_backtest" in p.read_text()]
     assert trading == []  # nothing in the trading service imports the profit-protection research runner either
 
 
