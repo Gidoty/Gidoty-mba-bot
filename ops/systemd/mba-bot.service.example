@@ -1,0 +1,17 @@
+# TEMPLATE of the CURRENT single-process unit, kept so the rollback target is written down. Compare it with the unit actually installed on the server before relying on it (the server's file is the truth).
+[Unit]
+Description=MBA Bot (API and scheduler in one process)
+After=network-online.target
+
+[Service]
+Type=simple
+User=mba
+WorkingDirectory=/opt/mba-bot
+EnvironmentFile=/opt/mba-bot/.env
+Environment=PYTHONPATH=/opt/mba-bot/src
+ExecStart=/opt/mba-bot/.venv/bin/python -m uvicorn mba_bot.api.app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

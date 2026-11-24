@@ -173,6 +173,12 @@ def parse_signups_mode(raw: str | None) -> str:
     return "open" if value in ("", "open") else "closed"
 
 
+def parse_process_role(raw: str | None) -> str:
+    """all (default) | api | worker. Anything else, including a typo, is all: today's single process."""
+    value = (raw or "").strip().lower()
+    return value if value in ("api", "worker") else "all"
+
+
 def parse_guard_mode(raw: str | None) -> str:
     """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
     value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
@@ -303,6 +309,11 @@ class Settings:
     # Single-instance guard (main.py); a second scheduler process refuses
     # to start while this file is locked.
     lock_file: str = "./mba_bot.lock"
+    # Process split (docs/safety/process_split.md): `all` (default) = one process serves HTTP and runs the scheduler, exactly as today. `api` = HTTP and the billing jobs only, no trading. `worker` = the trading
+    # scheduler only, no HTTP (started by `python -m mba_bot.worker`). Anything else is `all`. The two roles need SQLITE_WAL=1. The scheduler lock (`lock_file`) is shared by `all` and the worker, so two
+    # schedulers can never run; the API has its own lock file.
+    process_role: str = "all"
+    api_lock_file: str = "./mba_api.lock"
     # Scheduler concurrency (scheduler.py). Accounts are processed
     # concurrently - network I/O overlaps - but at most this many cycles run at
     # once, because each one holds a database connection for its whole
@@ -619,6 +630,8 @@ def load_settings() -> Settings:
         recovery_interval_seconds=_env_int("RECOVERY_INTERVAL_SECONDS", 15),
         stop_limit_monitor_interval_seconds=_env_int("STOP_LIMIT_MONITOR_INTERVAL_SECONDS", 15),
         lock_file=os.environ.get("MBA_BOT_LOCK_FILE", "./mba_bot.lock"),
+        process_role=parse_process_role(os.environ.get("PROCESS_ROLE")),
+        api_lock_file=os.environ.get("MBA_API_LOCK_FILE", "./mba_api.lock"),
         max_concurrent_cycles=max(1, _env_int("MAX_CONCURRENT_CYCLES", 6)),
         cycle_watchdog_seconds=max(1, _env_int("CYCLE_WATCHDOG_SECONDS", 120)),
         futures_pair_expansion=_env_bool("FUTURES_PAIR_EXPANSION", False),

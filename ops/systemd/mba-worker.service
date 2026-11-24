@@ -1,0 +1,26 @@
+# TEMPLATE, NOT INSTALLED. Owner-run (docs/safety/process_split.md): copy to /etc/systemd/system/, adjust the three paths, `systemctl daemon-reload`.
+# The trading worker: the scheduler (rounds, recovery, stop-limit monitor) and no HTTP. Restart it ONLY through the live-trade gate (ops/deploy/deploy.sh or `python -m mba_bot.restart_gate`).
+[Unit]
+Description=MBA Bot trading worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mba
+WorkingDirectory=/opt/mba-bot
+# The same file for both units. It must NOT set PROCESS_ROLE (each unit decides its own role; a value in the file would apply to both and the wrong process refuses to start).
+EnvironmentFile=/opt/mba-bot/.env
+Environment=PYTHONPATH=/opt/mba-bot/src
+Environment=SQLITE_WAL=1
+ExecStartPre=/opt/mba-bot/.venv/bin/python -m mba_bot.worker --check
+ExecStart=/opt/mba-bot/.venv/bin/python -m mba_bot.worker
+Restart=on-failure
+RestartSec=10
+# A round in progress is cancelled on stop; protective stops stay on the exchange. Give it time to leave cleanly.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+# NOTE: no PartOf= or BindsTo= on the API unit: restarting the API must never restart this one.
+
+[Install]
+WantedBy=multi-user.target
