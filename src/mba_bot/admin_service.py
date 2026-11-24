@@ -343,6 +343,33 @@ def skips_panel(db: Session, now: datetime) -> dict:
     return {"days": 7, "reasons": [{"reason": r[0], "skips": int(r[1]), "accounts": r[2]} for r in rows]}
 
 
+# ------------------------------------------------------------------------------------------------ open trades (read only)
+def r_reached(side: str, entry: float, initial_stop: float | None, price: float | None) -> float | None:
+    """How many R `price` is in profit (negative in loss): the distance from the entry in the trade's favour, over the distance from the entry to the INITIAL stop. None when R cannot be measured."""
+    if not initial_stop or price is None or entry <= 0:
+        return None
+    r = abs(entry - initial_stop)
+    if r <= 0:
+        return None
+    return ((price - entry) if side == "long" else (entry - price)) / r
+
+
+def open_trades_panel(db: Session, now: datetime) -> dict:
+    """Every open or in-progress trade with its entry, resting stop, best price since entry (peak) and what that peak was in R. Identified by bot code, never by customer (no names, no emails)."""
+    rows = db.execute(
+        select(Trade, TradingAccount.bot_code).join(TradingAccount, TradingAccount.id == Trade.account_id).where(Trade.status.in_(NON_TERMINAL_TRADE_STATUSES), Trade.is_paper.is_(False)).order_by(Trade.opened_at.desc()).limit(200)
+    ).all()
+    out = []
+    for t, bot in rows:
+        peak_r = r_reached(t.side, t.entry_price, t.initial_stop_price, t.peak_price)
+        out.append({
+            "bot_code": bot or "unknown", "pair": t.pair, "strategy": t.strategy_id or reporting.EMA_ID, "side": t.side, "status": t.status, "opened_at": t.opened_at,
+            "entry_price": t.entry_price, "initial_stop_price": t.initial_stop_price, "stop_loss_price": t.stop_loss_price, "peak_price": t.peak_price,
+            "peak_r": None if peak_r is None else round(peak_r, 2),
+        })
+    return {"trades": out}
+
+
 # ------------------------------------------------------------------------------------------------ billing (read only)
 def billing_panel(db: Session, now: datetime, settings) -> dict:
     grace_days = settings.subscription_grace_days

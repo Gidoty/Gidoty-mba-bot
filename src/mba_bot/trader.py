@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import ema_exits, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -228,6 +228,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                 (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
                     open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             )  # an RSI trade is exited by its own rules below, never by an EMA crossover
+            _track_peak(session, open_trade, candles, candles[-1].close, now_ms=now_ms)  # the best price since entry (observation only)
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
             if not rsi_trade and not don_trade and open_trade.status == TRADE_OPEN:
                 await _live_ema_manage(ctx, open_trade, settings, now_ms=now_ms, candles=candles, current_price=candles[-1].close)  # take profit, trailing stop, break-even (all off by default)
@@ -372,6 +373,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                     await _live_rsi_entry(session, account, client, settings, notifier, now=now, now_ms=now_ms, is_demo=is_demo)  # lowest priority: only if EMA took no entry
         else:
             # Only a PAPER trade reaches here: live trades returned above.
+            _track_peak(session, open_trade, candles, current_price, now_ms=now_ms)  # the best price since entry (observation only)
             await _maybe_exit(
                 session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now,
                 settings=settings, take_profit=_paper_ema_rules(open_trade, candles, settings, now_ms),
@@ -1716,9 +1718,11 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
     for t in open_trades:
         pair = t.pair or account.pair
         if multi_trade.strategy_of(t) == donchian.STRATEGY_ID:
+            _track_peak(session, t, await don_closed_for(pair), None, now_ms=now_ms)
             await _manage_donchian_trade(session, account, t, await don_closed_for(pair), settings, notifier, p=don_p, tf_ms=don_tf_ms, now=now)
             continue
         if multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID:
+            _track_peak(session, t, await rsi_closed_for(pair), None, now_ms=now_ms)
             await _manage_rsi_trade(session, account, t, await rsi_closed_for(pair), settings, notifier, p=rsi_p, tf_ms=rsi_tf_ms, now=now)
             continue
         candles = await candles_for(pair)
@@ -1726,6 +1730,7 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
             await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
             continue
+        _track_peak(session, t, candles, candles[-1].close, now_ms=int(now.timestamp() * 1000))
         await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
                           settings=settings, multi_label=True, take_profit=_paper_ema_rules(t, candles, settings, int(now.timestamp() * 1000)))
 
@@ -2074,6 +2079,7 @@ async def _process_live_multi(session, account, client, live_trades: list[Trade]
             logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
             continue
         price = candles[-1].close
+        _track_peak(session, t, candles, price, now_ms=now_ms)  # the best price since entry (observation only)
         if strategy == donchian.STRATEGY_ID:
             await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
             if t.status == TRADE_OPEN:
@@ -2135,12 +2141,32 @@ async def _process_multi_live(session, account, client, live_trades: list[Trade]
         if not candles:
             logger.warning("account %s: no OHLCV data returned for %s", account.id, pair)
             continue
+        _track_peak(session, t, candles, candles[-1].close, now_ms=int(now.timestamp() * 1000))
         signal = _ema_generate(_ema_signal_candles(candles, settings, int(now.timestamp() * 1000)), settings)
         opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
         await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=candles[-1].close)
     account.last_error = None
     account.last_error_at = None
     await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+
+
+def _track_peak(session, trade: Trade, candles: list, price: float | None, *, now_ms: int) -> None:
+    """Record the best price reached since the entry on `trade` (live or paper, any strategy): from the live price and the highs and lows of the candles that started after the entry. It only moves in the
+    favourable direction. It is observation only (docs/safety/profit_peak_tracking.md): it never decides an entry or an exit by itself, it never raises into the cycle, and a failed write is rolled back and logged."""
+    try:
+        if trade.status not in (TRADE_OPEN, "pending", "closing", "attention") or not trade.entry_price:
+            return
+        opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+        new = profit_protect.peak_from_candles(trade.side, trade.entry_price, int(opened.timestamp() * 1000), candles, price, trade.peak_price)
+        if trade.peak_price is None or profit_protect.is_better(trade.side, new, trade.peak_price):
+            trade.peak_price = new
+            session.commit()
+    except Exception:  # noqa: BLE001 - an observation must never stop trade management
+        logger.exception("trade %s: could not record the peak price", getattr(trade, "id", "?"))
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int):
