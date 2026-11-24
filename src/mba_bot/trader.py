@@ -231,6 +231,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                     open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             _track_peak(session, open_trade, candles, candles[-1].close, now_ms=now_ms)  # the best price since entry (observation only)
+            await _giveback_alert(session, account, open_trade, candles[-1].close, settings, now=now)  # one owner alert, alert only (off by default)
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
             if not rsi_trade and not don_trade and open_trade.status == TRADE_OPEN:
                 await _live_ema_manage(ctx, open_trade, settings, now_ms=now_ms, candles=candles, current_price=candles[-1].close)  # take profit, trailing stop, break-even (all off by default)
@@ -2125,6 +2126,7 @@ async def _process_live_multi(session, account, client, live_trades: list[Trade]
             continue
         price = candles[-1].close
         _track_peak(session, t, candles, price, now_ms=now_ms)  # the best price since entry (observation only)
+        await _giveback_alert(session, account, t, price, settings, now=now)
         if strategy == donchian.STRATEGY_ID:
             await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
             if t.status == TRADE_OPEN:
@@ -2212,6 +2214,30 @@ def _track_peak(session, trade: Trade, candles: list, price: float | None, *, no
             session.rollback()
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _giveback_alert(session, account, trade: Trade, price: float | None, settings: Settings, *, now) -> None:
+    """ONE owner alert per open LIVE trade that has given back GIVEBACK_ALERT_FRACTION of the profit at its best price, once that best price was at least GIVEBACK_ALERT_MIN_PEAK_R x R (Part G,
+    docs/safety/give_back_alarm.md). Off at 0. Alert only: no order, no stop move, no change to anything. Claimed once per trade in the database (alert_marks), so a restart or a second process does not repeat it. Text
+    holds the bot code, the pair and numbers, never a name, an email or a key. Never raises."""
+    try:
+        frac = settings.giveback_alert_fraction
+        if frac <= 0 or trade.is_paper or trade.status != TRADE_OPEN or not trade.initial_stop_price or trade.peak_price is None or price is None:
+            return
+        r = abs(trade.entry_price - trade.initial_stop_price)
+        if r <= 0:
+            return
+        long_side = trade.side == "long"
+        peak_gain = (trade.peak_price - trade.entry_price) if long_side else (trade.entry_price - trade.peak_price)
+        now_gain = (price - trade.entry_price) if long_side else (trade.entry_price - price)
+        if peak_gain < settings.giveback_alert_min_peak_r * r or peak_gain <= 0 or (peak_gain - now_gain) / peak_gain < frac:
+            return
+        if not protection_guard.claim_alert(session, account.id, trade.pair or account.pair, f"giveback:{trade.id}", now=now, repeat_hours=24.0 * 365 * 10):
+            return
+        await strategy_guards.alert_owner(settings, f"Give-back: bot {account.bot_code or 'unknown'} {trade.pair or account.pair} {trade.side}: best price was {peak_gain / r:+.1f} R, now {now_gain / r:+.1f} R "
+                                          f"({(peak_gain - now_gain) / peak_gain * 100:.0f}% of the peak profit given back). Alert only, nothing was changed.")
+    except Exception:  # noqa: BLE001 - an alert must never stop trade management
+        logger.exception("trade %s: could not send the give-back alert", getattr(trade, "id", "?"))
 
 
 def _paper_staged_ratchet(trade: Trade, closed: list, price: float | None, settings: Settings, *, tf_ms: int, atr_period: int, now_ms: int, account=None) -> None:

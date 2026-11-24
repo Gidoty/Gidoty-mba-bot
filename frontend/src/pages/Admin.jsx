@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { Card, CardTitle, ErrorBanner, LoadingBlock, PageHeader, Pill, Seg, StatTile } from "../components/ui.jsx";
 import { FormField, inputClass, primaryButton, secondaryButton } from "../components/form.jsx";
-import { KILL_SWITCH_TEXT, MODE_TEXT, REASON_MAX, REFRESH_MS, WINDOWS, adminStage, ageText, codeProblem, killSwitchTone, pageCount, reasonProblem, resultLine, winRate } from "../lib/admin.js";
+import { KILL_SWITCH_TEXT, MODE_TEXT, REASON_MAX, REFRESH_MS, WINDOWS, adminStage, ageText, codeProblem, killSwitchTone, pageCount, reasonProblem, giveBackLine, resultLine, winRate } from "../lib/admin.js";
 
 // Read-only admin dashboard. It shows what the server sends and nothing else: no credentials, no network address, no full email unless the admin asks for one with a reason. The page is reachable only when
 // GET /api/admin/me says the signed-in customer is an admin; every panel asks the server again, and a 401 sends the admin back to the sign-in step (the admin session lasts 15 minutes from the last request).
@@ -180,6 +180,7 @@ function GroupRow({ g }) {
       </span>
       <span className="text-fg">{resultLine(g)}</span>
       <span className="text-xs text-muted">{g.label}</span>
+      {giveBackLine(g) ? <span className="text-xs text-muted">{giveBackLine(g)}</span> : null}
     </li>
   );
 }

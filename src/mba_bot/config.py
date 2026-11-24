@@ -184,6 +184,19 @@ def _candles_from_env(name: str) -> int:
     return 0 if value <= 0 else min(10_000, value)
 
 
+def _fraction_from_env(name: str) -> float:
+    """A fraction between 0.1 and 0.95. Unset, empty, malformed, zero, negative or not finite is 0 = OFF, so a typo can never switch the alert on."""
+    import math
+
+    try:
+        value = float((os.environ.get(name) or "0").strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(0.95, max(0.1, value))
+
+
 def parse_trail_tiers(raw: str | None) -> tuple[tuple[float, float], ...]:
     """PROFIT_TRAIL_TIERS, for example "0:3,2:2,4:1.5": from +0R trail 3 ATR, from +2R 2 ATR, from +4R 1.5 ATR. Sorted by the R level, each level 0..50, each distance 0.5..10 ATR, no repeated level. Anything wrong in
     any token (a typo, a missing colon, a number out of range, a level repeated) gives NO tiers (the plain PROFIT_TRAIL_ATR is used), never a partial list."""
@@ -490,6 +503,10 @@ class Settings:
     ema_max_hold_candles: int = 0
     donchian_max_hold_candles: int = 0
     profit_time_tighten_atr: float = 1.0
+    # Profit protection v2, Part G (docs/safety/give_back_alarm.md): ONE owner alert per open live trade when it has given back this fraction of the profit at its best price, once the best price was at least
+    # giveback_alert_min_peak_r x R. 0 = OFF (the default). Alert only: no order, no stop move, nothing else changes.
+    giveback_alert_fraction: float = 0.0
+    giveback_alert_min_peak_r: float = 1.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -740,6 +757,8 @@ def load_settings() -> Settings:
         ema_max_hold_candles=_candles_from_env("EMA_MAX_HOLD_CANDLES"),
         donchian_max_hold_candles=_candles_from_env("DONCHIAN_MAX_HOLD_CANDLES"),
         profit_time_tighten_atr=_atr_multiple_from_env("PROFIT_TIME_TIGHTEN_ATR", 1.0) or 1.0,
+        giveback_alert_fraction=_fraction_from_env("GIVEBACK_ALERT_FRACTION"),
+        giveback_alert_min_peak_r=_r_multiple_from_env("GIVEBACK_ALERT_MIN_PEAK_R") or 1.0,
         profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
         profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
