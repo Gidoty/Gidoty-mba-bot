@@ -213,17 +213,18 @@ def test_a_normal_customer_and_an_admin_without_the_second_factor_cannot_write(e
 
 # ---------------------------------------------------------------- settings changes
 def test_a_setting_change_writes_the_row_and_the_log_with_old_new_who_and_reason(env):
+    env_poll = f"env:{load_settings().poll_interval_seconds}"
     r = post(env, "/settings/set", key="poll_interval_seconds", value="120", reason="shorter rounds for the test")
-    assert r.status_code == 200 and r.json() == {"ok": True, "action": "set", "old": "env:300", "new": "120", "restart_required": False}
+    assert r.status_code == 200 and r.json() == {"ok": True, "action": "set", "old": env_poll, "new": "120", "restart_required": False}
     r2 = post(env, "/settings/set", key="rate_limit_per_minute", value="60", reason="tighter limit after the incident")
     assert r2.json()["restart_required"] is True
     log = changes()
-    assert log[0] == ("setting", "set", "poll_interval_seconds", "env:300", "120", "shorter rounds for the test", env.admin_id)
-    assert log[1][1:5] == ("set", "rate_limit_per_minute", "env:120", "60")
+    assert log[0] == ("setting", "set", "poll_interval_seconds", env_poll, "120", "shorter rounds for the test", env.admin_id)
+    assert log[1][1:5] == ("set", "rate_limit_per_minute", f"env:{load_settings().rate_limit_per_minute}", "60")
     with session_scope() as s:
         assert s.get(OperatorSetting, "poll_interval_seconds").updated_by == env.admin_id
     r3 = post(env, "/settings/reset", key="poll_interval_seconds", reason="back to the environment value")
-    assert r3.status_code == 200 and changes()[-1][1:5] == ("reset", "poll_interval_seconds", "120", "env:300")
+    assert r3.status_code == 200 and changes()[-1][1:5] == ("reset", "poll_interval_seconds", "120", env_poll)
     assert post(env, "/settings/reset", key="poll_interval_seconds").status_code == 422  # nothing stored
 
 
