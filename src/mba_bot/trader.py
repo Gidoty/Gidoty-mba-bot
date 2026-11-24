@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import ema_exits, fee_tier, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, ema_reversal, fee_tier, profit_live, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -380,6 +380,11 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             _paper_staged_ratchet(open_trade, rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])), current_price, settings, tf_ms=rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0]), atr_period=settings.atr_period, now_ms=now_ms, account=account)
             _tfms = rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])
             if await _paper_time_stop(session, account, open_trade, rsi_mr.closed_only(candles, now_ms, _tfms), current_price, settings, notifier, tf_ms=_tfms, atr_period=settings.atr_period, now_ms=now_ms, limit=settings.ema_max_hold_candles, now=now):
+                await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+                return
+            _rev = _reversal_reason(open_trade, rsi_mr.closed_only(candles, now_ms, _tfms), settings, now_ms, current_price)
+            if _rev is not None:
+                await _paper_close_at_price(session, account, open_trade, current_price, _rev, "EMA reversal", settings, notifier, now=now)
                 await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
                 return
             await _maybe_exit(
@@ -1747,6 +1752,10 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
         _tfms = rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])
         if await _paper_time_stop(session, account, t, rsi_mr.closed_only(candles, now_ms, _tfms), candles[-1].close, settings, notifier, tf_ms=_tfms, atr_period=settings.atr_period, now_ms=now_ms, limit=settings.ema_max_hold_candles, now=now):
             continue
+        _rev = _reversal_reason(t, rsi_mr.closed_only(candles, now_ms, _tfms), settings, now_ms, candles[-1].close)
+        if _rev is not None:
+            await _paper_close_at_price(session, account, t, candles[-1].close, _rev, "EMA reversal", settings, notifier, now=now)
+            continue
         await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
                           settings=settings, multi_label=True, take_profit=_paper_ema_rules(t, candles, settings, int(now.timestamp() * 1000)))
 
@@ -2279,14 +2288,19 @@ async def _paper_time_stop(session, account, trade: Trade, closed: list, price: 
         if profit_protect.is_better(trade.side, target, trade.stop_loss_price):
             trade.stop_loss_price = target
         return False
+    await _paper_close_at_price(session, account, trade, price, "time_stop", "time stop", settings, notifier, now=now)
+    return True
+
+
+async def _paper_close_at_price(session, account, trade: Trade, price: float, reason: str, label: str, settings: Settings, notifier, *, now) -> None:
+    """Close a PAPER trade at `price` (a market exit) with a close reason, record the result and tell the customer. Paper only."""
     pnl = (price - trade.entry_price) * trade.quantity if trade.side == "long" else (trade.entry_price - price) * trade.quantity
-    trade.exit_price, trade.pnl, trade.status, trade.closed_at, trade.close_reason = price, pnl, "closed", now, "time_stop"
+    trade.exit_price, trade.pnl, trade.status, trade.closed_at, trade.close_reason = price, pnl, "closed", now, reason
     account.paper_balance += pnl
     session.commit()  # durable before the (network) notification
     pair = trade.pair or account.pair
-    await notifier.send(account.notification_target, f"[PAPER] Exited {trade.side.upper()} {pair} (time stop)\n" + pnl_labels.exit_line(trade.entry_price, price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
+    await notifier.send(account.notification_target, f"[PAPER] Exited {trade.side.upper()} {pair} ({label})\n" + pnl_labels.exit_line(trade.entry_price, price, pnl, on=bool(settings.pnl_labels), paper=True, quote=pnl_labels.quote_of(pair))
                         + f"\nStrategy: {multi_trade.strategy_of(trade)}")
-    return True
 
 
 def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int, tp_buffer: float = 0.0):
@@ -2329,6 +2343,7 @@ async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int
         closed = rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(tf))
         await _live_staged_lock(ctx, trade, settings, closed=closed, tf_ms=rsi_mr.timeframe_ms(tf), atr_period=settings.atr_period, price=current_price, now_ms=now_ms)
         await _live_time_stop(ctx, trade, settings, closed=closed, tf_ms=rsi_mr.timeframe_ms(tf), atr_period=settings.atr_period, price=current_price, now_ms=now_ms, limit=settings.ema_max_hold_candles)
+        await _live_ema_reversal(ctx, trade, settings, closed=closed, now_ms=now_ms, price=current_price)
 
 
 def _fee_bps_for(account, settings: Settings) -> float:
@@ -2363,6 +2378,27 @@ async def _live_staged_lock(ctx, trade: Trade, settings: Settings, *, closed: li
     got = profit_protect.staged_level(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, peak=peak, atr=atr, held_candles=held, rules=rules, buffer=buf)
     if got is not None:
         await profit_live.running_step(ctx, trade, settings, level=got[0], label=got[1], price=price, atr=atr, now_ms=now_ms)
+
+
+def _reversal_reason(trade: Trade, closed: list, settings: Settings, now_ms: int, price: float | None = None) -> str | None:
+    """The reversal exit reason for an open EMA trade from the CLOSED candles (Part E), or None. Only an EMA trade, only with a rule on and an initial stop to measure R from."""
+    rules = ema_reversal.rules_from_settings(settings)
+    if not rules.any_on or multi_trade.strategy_of(trade) != multi_trade.EMA_STRATEGY_ID or not trade.initial_stop_price or not closed:
+        return None
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    peak = profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
+    return ema_reversal.evaluate(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, opened_ms=int(opened.timestamp() * 1000), closed=closed,
+                                 fast_period=settings.ema_fast_period, slow_period=settings.ema_slow_period, peak=peak, rules=rules)
+
+
+async def _live_ema_reversal(ctx, trade: Trade, settings: Settings, *, closed: list, now_ms: int, price: float) -> None:
+    """A healthy, protected LIVE EMA trade with a reversal rule on (Part E, off by default): a closed candle back across the fast EMA after the trade was in profit, or the fast/slow gap shrunk by the set fraction
+    of its peak, exits through lifecycle.execute_exit, the only live exit path. Never raises beyond what execute_exit does."""
+    if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED:
+        return
+    reason = _reversal_reason(trade, closed, settings, now_ms, price)
+    if reason is not None:
+        await lifecycle.execute_exit(ctx, trade, reason=reason, price_hint=price)
 
 
 async def _live_time_stop(ctx, trade: Trade, settings: Settings, *, closed: list, tf_ms: int, atr_period: int, price: float, now_ms: int, limit: int) -> None:
