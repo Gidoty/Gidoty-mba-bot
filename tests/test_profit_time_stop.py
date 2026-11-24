@@ -106,7 +106,7 @@ def test_a_trade_in_profit_at_the_limit_is_tightened_through_move_stop_not_close
 
 
 def test_nothing_happens_before_the_limit_or_with_the_limit_off(db, monkeypatch):
-    client, settings, aid, base = live(monkeypatch, ema_max_hold_candles=9)  # opened 8.5 candles ago
+    client, settings, aid, base = live(monkeypatch, ema_max_hold_candles=12)  # opened 8.5 to 9.5 candles ago, depending on the minute of the hour
     candles(client, base, [(95, 100, 92, 99), (99, 100, 89, 91)])
     run_cycle(aid, settings)
     assert the_trade(aid).status == "open" and the_trade(aid).stop_loss_price == 43.0
