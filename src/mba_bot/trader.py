@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import ema_exits, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -229,6 +229,8 @@ async def process_account(session: Session, account: TradingAccount, settings: S
                     open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            if not rsi_trade and not don_trade and open_trade.status == TRADE_OPEN:
+                await _live_ema_manage(ctx, open_trade, settings, now_ms=now_ms, candles=candles, current_price=candles[-1].close)  # take profit, trailing stop, break-even (all off by default)
             if rsi_trade and open_trade.status == TRADE_OPEN:
                 await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms)
             if don_trade and open_trade.status == TRADE_OPEN:
@@ -372,7 +374,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             # Only a PAPER trade reaches here: live trades returned above.
             await _maybe_exit(
                 session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now,
-                settings=settings,
+                settings=settings, take_profit=_paper_ema_rules(open_trade, candles, settings, now_ms),
             )
 
         await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
@@ -1526,6 +1528,7 @@ async def _maybe_enter(session, account, client, signal, current_price, settings
         entry_price=current_price,
         quantity=size.quantity,
         stop_loss_price=stop_price,
+        initial_stop_price=stop_price,  # the R of the EMA exit rules (docs/safety/ema_exit_rules.md); nothing reads it unless one of them is on
         status=TRADE_OPEN,
         opened_at=now,
         pair=pair,
@@ -1724,7 +1727,7 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
             continue
         await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
-                          settings=settings, multi_label=True)
+                          settings=settings, multi_label=True, take_profit=_paper_ema_rules(t, candles, settings, int(now.timestamp() * 1000)))
 
     # 2. At most ONE new entry per cycle, only if the grade leaves a slot.
     open_now = list_open_trades(session, account.id)
@@ -2083,6 +2086,8 @@ async def _process_live_multi(session, account, client, live_trades: list[Trade]
             signal = _ema_generate(_ema_signal_candles(candles, settings, now_ms), settings)
             opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_ema_manage(ctx, t, settings, now_ms=now_ms, candles=candles, current_price=price)
     account.last_error = None
     account.last_error_at = None
 
@@ -2138,7 +2143,63 @@ async def _process_multi_live(session, account, client, live_trades: list[Trade]
     await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
 
 
-async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None, multi_label=False):
+def _ema_rule_inputs(trade: Trade, candles: list, settings: Settings, now_ms: int):
+    """(rules, closed candles, ATR values, opened_ms) for an EMA trade's exit rules, or None when no rule is on, the trade is not an EMA trade, or it has no initial stop to measure R from."""
+    rules = ema_exits.rules_from_settings(settings)
+    if not rules.any_on or multi_trade.strategy_of(trade) != multi_trade.EMA_STRATEGY_ID or not trade.initial_stop_price:
+        return None
+    closed = _ema_signal_candles(candles, settings, now_ms) if settings.ema_closed_candle_only else rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0]))
+    if not closed:
+        return None
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    atrs = atr_series([c.high for c in closed], [c.low for c in closed], [c.close for c in closed], settings.atr_period)
+    return rules, closed, atrs, int(opened.timestamp() * 1000)
+
+
+def _paper_ema_rules(trade: Trade, candles: list, settings: Settings, now_ms: int) -> float | None:
+    """PAPER EMA trades, rules on: ratchet the trade's stop to the level the closed candles have earned (never loosened) and return the take-profit price, or None. Nothing happens with every rule off."""
+    got = _ema_rule_inputs(trade, candles, settings, now_ms)
+    if got is None:
+        return None
+    rules, closed, atrs, opened_ms = got
+    level = ema_exits.earned_stop(trade.side, trade.entry_price, trade.initial_stop_price, opened_ms, closed, rules, atrs)
+    if level is not None and ((trade.side == "long" and level > trade.stop_loss_price) or (trade.side == "short" and level < trade.stop_loss_price)):
+        trade.stop_loss_price = level
+    return ema_exits.take_profit_level(trade.side, trade.entry_price, trade.initial_stop_price, rules.take_profit_r)
+
+
+async def _live_ema_manage(ctx, trade: Trade, settings: Settings, *, now_ms: int, candles: list, current_price: float) -> None:
+    """A healthy, protected LIVE EMA trade with an exit rule on (EMA_TAKE_PROFIT_R, EMA_TRAIL_TRIGGER_R, EMA_BREAKEVEN_R; all off by default): docs/safety/ema_exit_rules.md.
+    * Take profit is MONITORED each round (no exchange-side order): when a candle after the entry, the forming candle or the live price has reached the level, the trade exits through lifecycle.execute_exit, the only
+      live exit path, at the market. If the bot was down or between rounds the touch is still found from the candles. The protective stop stays the protection meanwhile.
+    * A trailing or break-even level the closed candles have earned is applied with lifecycle.move_stop (new stop placed and verified before the old one is cancelled; never loosened; never beyond the price; a failed
+      move keeps the old stop). If a closed candle already went through the earned level, the trade exits through execute_exit with that reason.
+    Never raises into the cycle's trading decisions beyond what execute_exit and move_stop themselves do."""
+    if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED:
+        return
+    got = _ema_rule_inputs(trade, candles, settings, now_ms)
+    if got is None:
+        return
+    rules, closed, atrs, opened_ms = got
+    initial = trade.initial_stop_price
+    w = ema_exits.walk(trade.side, trade.entry_price, initial, opened_ms, closed, rules, atrs)
+    tp = ema_exits.take_profit_level(trade.side, trade.entry_price, initial, rules.take_profit_r)
+    forming = [c for c in candles if c.timestamp >= opened_ms and c not in closed]  # the candle still forming (never the one the entry happened in: its start is before the entry)
+    touched_now = ema_exits.take_profit_touched(trade.side, tp, current_price) or any(ema_exits.take_profit_touched(trade.side, tp, c.high if trade.side == "long" else c.low) for c in forming)
+    if w.exit_reason == "stop_loss":
+        return  # the initial stop was touched: the exchange-side stop and monitor_trade own that exit
+    if w.exit_reason == "take_profit" or (w.exit_reason is None and touched_now):
+        await lifecycle.execute_exit(ctx, trade, reason="take_profit", price_hint=tp)
+        return
+    if w.exit_reason in ("trailing_stop", "break_even_stop"):
+        await lifecycle.execute_exit(ctx, trade, reason=w.exit_reason, price_hint=w.exit_price)
+        return
+    level = ema_exits.earned_stop(trade.side, trade.entry_price, initial, opened_ms, closed, rules, atrs)
+    if level is not None:
+        await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=current_price)
+
+
+async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None, multi_label=False, take_profit: float | None = None):
     """PAPER trades only. A live trade's exit is lifecycle.execute_exit /
     lifecycle.monitor_trade - never a bare market order from here."""
     if not is_paper:
@@ -2149,10 +2210,11 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     opposite_cross = (open_trade.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (
         open_trade.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER
     )
-    if not (hit_stop or opposite_cross):
+    hit_tp = (not hit_stop) and ema_exits.take_profit_touched(open_trade.side, take_profit, current_price)  # the stop wins if both are true; off (None) unless EMA_TAKE_PROFIT_R is set
+    if not (hit_stop or opposite_cross or hit_tp):
         return
 
-    exit_price = open_trade.stop_loss_price if hit_stop else current_price
+    exit_price = open_trade.stop_loss_price if hit_stop else (take_profit if hit_tp else current_price)
 
     if open_trade.side == "long":
         pnl = (exit_price - open_trade.entry_price) * open_trade.quantity
@@ -2163,7 +2225,11 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
     open_trade.pnl = pnl
     open_trade.status = "closed"
     open_trade.closed_at = now
-    open_trade.close_reason = "stop_loss" if hit_stop else "crossover_exit"
+    if hit_stop:
+        moved = open_trade.initial_stop_price is not None and open_trade.stop_loss_price != open_trade.initial_stop_price
+        open_trade.close_reason = ("break_even_stop" if abs(open_trade.stop_loss_price - open_trade.entry_price) < 1e-9 else "trailing_stop") if moved else "stop_loss"
+    else:
+        open_trade.close_reason = "take_profit" if hit_tp else "crossover_exit"
 
     account.paper_balance += pnl
     session.commit()  # durable before the (network) notification; also makes it visible to the daily summary

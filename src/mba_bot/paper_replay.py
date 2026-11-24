@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import ema_exits
+from .indicators import atr as atr_series
 from .strategy import Candle, SignalType, generate_signal
 
 HOUR_MS = 3_600_000
@@ -39,6 +41,7 @@ class Params:
     atr_period: int = 14
     atr_flat_threshold: float = 0.75
     atr_rolling_window: int = 50
+    rules: ema_exits.ExitRules = ema_exits.ExitRules()  # optional: replay the EMA exit rules (take profit, trailing stop, break-even) next to the existing replay; all off = nothing added
 
 
 def load_candles(path: Path) -> list[Candle]:
@@ -143,6 +146,12 @@ def replay_trade(trade: dict, candles: list[Candle] | None, params: Params) -> d
     reason = trade.get("close_reason", "")
     out["paper_exit_consistent_with_mainnet_stop"] = (touch is not None) == (reason in ("stop_loss", "exchange_stop_triggered", "stop_limit_gap")) if reason else None
     out["comparable"] = out["paper_r"] is not None and out["mainnet_r"] is not None
+    if params.rules.any_on and i1 > i0:
+        # What the EMA exit rules would have done on the same candles: walk the hours after the entry up to the paper close; if no rule fired, the trade ends where the existing replay ends (the close of the paper-close hour).
+        atrs = atr_series([c.high for c in candles[: i1 + 1]], [c.low for c in candles[: i1 + 1]], [c.close for c in candles[: i1 + 1]], params.atr_period)
+        w = ema_exits.walk(side, entry, stop, candles[i0 + 1].timestamp, candles[i0 + 1 : i1 + 1], params.rules, atrs[i0 + 1 : i1 + 1])
+        out["rules_exit"] = w.exit_reason or "paper_exit_hour_close"
+        out["rules_r"] = r_multiple(side, entry, stop, w.exit_price if w.exit_reason else candles[i1].close)
     return out
 
 
@@ -165,6 +174,16 @@ def summarize(results: list[dict]) -> list[str]:
     inside = [r for r in comp if r.get("entry_inside_mainnet_hour") is not None]
     if inside:
         lines.append(f"paper entry price inside the mainnet range of its hour: {sum(1 for r in inside if r['entry_inside_mainnet_hour'])} of {len(inside)}")
+    with_rules = [r for r in comp if r.get("rules_r") is not None]
+    if with_rules:
+        by_reason: dict[str, int] = {}
+        for r in with_rules:
+            by_reason[r["rules_exit"]] = by_reason.get(r["rules_exit"], 0) + 1
+        better = sum(1 for r in with_rules if r["rules_r"] > r["mainnet_r"] + 1e-9)
+        worse = sum(1 for r in with_rules if r["rules_r"] < r["mainnet_r"] - 1e-9)
+        lines.append(f"WITH THE EXIT RULES on the same {len(with_rules)} trades: average R {mean([r['rules_r'] for r in with_rules])} against {mean([r['mainnet_r'] for r in with_rules])} without; "
+                     f"better on {better}, worse on {worse}, the same on {len(with_rules) - better - worse}; exits by reason: " + ", ".join(f"{k} {v}" for k, v in sorted(by_reason.items())))
+        lines.append("This shows what the rules do to THESE trades. It is a mechanics check, not evidence that the rules improve results: the rules were not chosen on these trades and no claim is made.")
     notes = sorted({r["note"] for r in results if r["note"]})
     if notes:
         lines.append("not comparable because: " + "; ".join(notes))
@@ -191,7 +210,7 @@ def run(trades_path: Path, klines_dir: Path, params: Params) -> tuple[list[dict]
     return results, summarize(results)
 
 
-FIELDS = ("trade_ref", "pair", "side", "status", "paper_r", "mainnet_r", "paper_win", "mainnet_win", "comparable", "entry_inside_mainnet_hour", "entry_vs_mainnet_open_pct", "mainnet_closed_signal",
+FIELDS = ("trade_ref", "pair", "side", "status", "paper_r", "mainnet_r", "rules_r", "rules_exit", "paper_win", "mainnet_win", "comparable", "entry_inside_mainnet_hour", "entry_vs_mainnet_open_pct", "mainnet_closed_signal",
           "mainnet_signal_matches_side", "entry_candle_already_touched_stop", "mainnet_stop_touched_at", "paper_exit_consistent_with_mainnet_stop", "note")
 
 
@@ -214,9 +233,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--atr-period", type=int, default=14)
     ap.add_argument("--atr-flat-threshold", type=float, default=0.75)
     ap.add_argument("--atr-rolling-window", type=int, default=50)
+    ap.add_argument("--take-profit-r", type=float, default=0.0, help="also replay the EMA take-profit rule (multiples of the initial stop distance); 0 = off")
+    ap.add_argument("--trail-trigger-r", type=float, default=0.0, help="also replay the trailing stop once the trade is up this many R; 0 = off")
+    ap.add_argument("--trail-atr", type=float, default=2.0, help="trail distance in ATR")
+    ap.add_argument("--breakeven-r", type=float, default=0.0, help="also replay the break-even move after this many R; 0 = off")
     args = ap.parse_args(argv)
     try:
-        results, summary = run(args.trades, args.klines, Params(args.ema_fast, args.ema_slow, args.atr_period, args.atr_flat_threshold, args.atr_rolling_window))
+        rules = ema_exits.ExitRules(max(0.0, args.take_profit_r), max(0.0, args.trail_trigger_r), args.trail_atr, max(0.0, args.breakeven_r))
+        results, summary = run(args.trades, args.klines, Params(args.ema_fast, args.ema_slow, args.atr_period, args.atr_flat_threshold, args.atr_rolling_window, rules))
     except Exception as exc:  # noqa: BLE001 - class name only
         print(f"paper replay: cannot read the inputs ({type(exc).__name__})", file=sys.stderr)
         return 2

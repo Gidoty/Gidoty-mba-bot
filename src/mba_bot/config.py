@@ -145,6 +145,20 @@ def parse_strategy_guards_mode(raw: str | None) -> str:
     return value if value in ("observe", "enforce") else "off"
 
 
+def _r_multiple_from_env(name: str) -> float:
+    """A number of R (multiples of the initial stop distance) for an exit rule. Unset, empty, malformed, zero, negative or not finite is 0 = OFF, so a typo can never switch a rule on. Clamped to 0.25..50 when on."""
+    import math
+
+    raw = os.environ.get(name)
+    try:
+        value = float((raw or "0").strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(50.0, max(0.25, value))
+
+
 def parse_signups_mode(raw: str | None) -> str:
     """open | closed for creating NEW customer accounts (docs/commercial_readiness.md). Unset or empty is open, so nothing changes by default. Any other value that is not "open" is closed: a
     mistyped value must never leave registration open to strangers while the operator thinks it is shut."""
@@ -397,6 +411,13 @@ class Settings:
     foreign_order_check_minutes: float = 15.0
     # With the switch on, an EMA entry is taken only if the signal candle closed at most this many minutes ago. 1 to 59.
     ema_entry_window_minutes: float = 10.0
+    # Exit rules for EMA trades (docs/safety/ema_exit_rules.md). Every value 0 means OFF, which is the default: the EMA trade then exits exactly as before (opposite crossover or its fixed stop).
+    # R is the distance from the entry to the initial stop. Take profit: exit when the price reaches entry +/- take_profit_r x R. Trailing stop: once the trade has been up trail_trigger_r x R, the protective stop
+    # trails the best price by ema_trail_atr x ATR (never loosened). Break-even: once the trade has been up breakeven_r x R, the stop moves to the entry price. Each is its own switch.
+    ema_take_profit_r: float = 0.0
+    ema_trail_trigger_r: float = 0.0
+    ema_trail_atr: float = 2.0
+    ema_breakeven_r: float = 0.0
     ema_min_gap_atr: float = 0.0  # EMA crossover: |fast - slow| must be at least this many ATRs when the entry is taken (0 = off)
     ema_stop_cooldown_hours: float = 0.0  # no new entry on a pair for this long after a trade on it was stopped out (0 = off)
     fee_guard_margin: float = 0.0  # expected move must be at least margin x (round-trip fees + slippage) (0 = off)
@@ -630,6 +651,10 @@ def load_settings() -> Settings:
         foreign_order_alarm=foreign_orders_module.parse_mode(os.environ.get("FOREIGN_ORDER_ALARM")),
         foreign_order_check_minutes=min(240.0, max(5.0, _env_float("FOREIGN_ORDER_CHECK_MINUTES", 15.0))),
         ema_entry_window_minutes=min(59.0, max(1.0, _env_float("EMA_ENTRY_WINDOW_MINUTES", 10.0))),
+        ema_take_profit_r=_r_multiple_from_env("EMA_TAKE_PROFIT_R"),
+        ema_trail_trigger_r=_r_multiple_from_env("EMA_TRAIL_TRIGGER_R"),
+        ema_trail_atr=min(10.0, max(0.5, _env_float("EMA_TRAIL_ATR", 2.0))),
+        ema_breakeven_r=_r_multiple_from_env("EMA_BREAKEVEN_R"),
         ema_min_gap_atr=min(5.0, max(0.0, _env_float("EMA_MIN_GAP_ATR", 0.0))),
         ema_stop_cooldown_hours=min(720.0, max(0.0, _env_float("EMA_STOP_COOLDOWN_HOURS", 0.0))),
         fee_guard_margin=min(100.0, max(0.0, _env_float("FEE_GUARD_MARGIN", 0.0))),
