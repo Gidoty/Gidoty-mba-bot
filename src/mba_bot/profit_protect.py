@@ -28,3 +28,9 @@ def peak_from_candles(side: str, entry: float, opened_ms: int, candles: list, pr
             continue
         best = advance_peak(side, best, c.high if side == "long" else c.low)
     return advance_peak(side, best, price)
+
+
+def cost_buffer(entry: float, *, fee_bps_per_side: float, slippage_bps_round_trip: float, funding_paid_per_unit: float = 0.0) -> float:
+    """The price distance a stop must sit beyond the entry to be at or above zero NET: both fees at `fee_bps_per_side`, the assumed round-trip slippage, and the funding paid so far per unit (a funding amount
+    RECEIVED, a negative number, is ignored: it never shrinks the buffer). Always at least 0."""
+    return max(0.0, entry * (2.0 * fee_bps_per_side + slippage_bps_round_trip) / 10_000.0) + max(0.0, funding_paid_per_unit)

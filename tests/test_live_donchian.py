@@ -426,7 +426,7 @@ def test_the_entry_function_refuses_a_live_donchian_call_with_the_switch_off(db,
 def test_the_trail_goes_through_move_stop_only_and_exits_through_execute_exit():
     import inspect
 
-    src = inspect.getsource(trader._live_donchian_manage)
+    src = inspect.getsource(trader._live_donchian_rules)
     assert "lifecycle.move_stop" in src and "lifecycle.execute_exit" in src and "create_order" not in src and "cancel_order" not in src
 
 

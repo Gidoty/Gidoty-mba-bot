@@ -910,6 +910,7 @@ async def _record_exit(
             "trailing_stop": "trailing stop",
             "rsi_exit": "RSI back to 50",
             "time_stop": "time stop",
+            "profit_lock": "profit lock",
         }.get(reason, "closed")
         await _notify(
             ctx,
