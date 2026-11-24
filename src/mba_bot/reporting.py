@@ -20,6 +20,8 @@ MODE_LABEL = {
     MODE_DEMO: "Demo (Binance demo system, no real money)",
     MODE_PAPER: "Practice (simulated: no fees, no slippage)",
 }
+GIVEBACK_REPORT_R = 1.0  # a trade "closed far below its peak" when it closed more than this many R below its best price
+ASSUMED_FEE_BPS, ASSUMED_SLIPPAGE_BPS = 5.0, 11.0  # the give-back test judges "below entry net of costs" with these assumed costs (docs/safety/give_back_alarm.md)
 FUNDING_NOTE = "Net is shown only when the real fees and the Futures funding of every trade in the figure are known; funding is shown on its own line."
 
 
@@ -33,6 +35,23 @@ def funding_applies(trade) -> bool:
     """Funding exists only on Futures. A trade's market is not stored on it, so it is read from the protective order it was given: Futures stops are "stop_market_close" or "stop_market_reduce", Spot stops
     "stop_loss" or "stop_loss_limit". A trade with no protective kind (a very old or practice row) is treated as Spot: no funding claimed, and a practice trade never gets a net figure anyway."""
     return str(getattr(trade, "protective_kind", None) or "").startswith("stop_market")
+
+
+def giveback_flags(trade) -> tuple[bool, bool, bool, bool]:
+    """(peak known, reached +1 R, gave it back to a loss, closed far below its peak) for a CLOSED trade; all False when the peak, the initial stop or the exit price is missing. R is the distance from the entry to
+    the INITIAL stop. "Gave it back to a loss": the best price was at least +1 R in profit and the exit was below the entry by less than the round-trip cost (or above, for a short): both fees and the slippage at the
+    ASSUMED rates, so it is an estimate, and it needs no fee data. "Far below its peak": the exit was more than GIVEBACK_REPORT_R x R worse than the best price."""
+    peak, entry, stop, exit_ = (_num(getattr(trade, k, None)) for k in ("peak_price", "entry_price", "initial_stop_price", "exit_price"))
+    if peak is None or entry is None or stop is None or exit_ is None or abs(entry - stop) <= 0:
+        return False, False, False, False
+    r = abs(entry - stop)
+    long_side = getattr(trade, "side", "long") == "long"
+    gain = (peak - entry) if long_side else (entry - peak)
+    reached = gain >= r
+    buffer = entry * (2 * ASSUMED_FEE_BPS + ASSUMED_SLIPPAGE_BPS) / 10_000.0
+    below_entry_net = exit_ < entry + buffer if long_side else exit_ > entry - buffer
+    drawdown = (peak - exit_) if long_side else (exit_ - peak)
+    return True, reached, bool(reached and below_entry_net), drawdown > GIVEBACK_REPORT_R * r
 
 
 def strategy_of(trade) -> str:
@@ -54,6 +73,10 @@ class Group:
     gross_pnl: float = 0.0
     fees: float = 0.0
     trades_with_fees: int = 0
+    with_peak: int = 0  # closed trades with a recorded best price (older trades have none)
+    reached_1r: int = 0  # ... whose best price was at least +1 R
+    gave_back: int = 0  # ... of those, closed below the entry net of (assumed) costs
+    far_below_peak: int = 0  # closed trades that finished more than GIVEBACK_REPORT_R below their best price
     funding: float = 0.0  # signed from the account's side: negative = paid
     trades_with_funding: int = 0  # trades whose funding is KNOWN (read, or a Spot trade, which has none)
 
@@ -76,6 +99,8 @@ class Group:
             "gross_pnl": round(self.gross_pnl, 8), "fees": round(self.fees, 8) if self.trades_with_fees else None, "trades_with_fees": self.trades_with_fees,
             "fees_complete": self.fees_complete, "funding": round(self.funding, 8) if self.trades_with_funding else None, "trades_with_funding": self.trades_with_funding,
             "funding_complete": self.funding_complete, "net_pnl": self.net_pnl, "simulated": self.mode == MODE_PAPER,
+            "trades_with_peak": self.with_peak, "reached_1r": self.reached_1r, "gave_back_to_loss": self.gave_back, "give_back_rate": round(self.gave_back / self.reached_1r, 4) if self.reached_1r else None,
+            "closed_far_below_peak": self.far_below_peak,
         }
 
 
@@ -91,6 +116,11 @@ def _add(group: Group, trade) -> None:
     if entry is not None and exit_ is not None and group.mode != MODE_PAPER:
         group.fees += entry + exit_
         group.trades_with_fees += 1
+    known, reached, gave, far = giveback_flags(trade)
+    group.with_peak += 1 if known else 0
+    group.reached_1r += 1 if reached else 0
+    group.gave_back += 1 if gave else 0
+    group.far_below_peak += 1 if far else 0
     if group.mode != MODE_PAPER:
         funding = _num(getattr(trade, "funding_quote", None))
         if funding is not None:

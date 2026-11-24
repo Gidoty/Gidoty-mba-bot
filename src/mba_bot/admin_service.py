@@ -238,6 +238,7 @@ def _group(mode: str, strategy: str, r) -> reporting.Group:
     g.gross_pnl = float(r.gross or 0.0)
     g.fees, g.trades_with_fees = float(r.fees or 0.0), int(r.with_fees)
     g.funding, g.trades_with_funding = float(r.funding or 0.0), int(r.with_funding)
+    g.with_peak, g.reached_1r, g.gave_back, g.far_below_peak = int(r.with_peak), int(r.reached_1r), int(r.gave_back), int(r.far_below_peak)
     return g
 
 
@@ -245,7 +246,7 @@ def _group_dict(g: reporting.Group) -> dict:
     d = g.to_dict()
     d["label"] = _label(g)
     d["mode_label"] = reporting.MODE_LABEL[g.mode]
-    return {k: d[k] for k in ("mode", "strategy", "closed_trades", "wins", "losses", "gross_pnl", "fees", "trades_with_fees", "fees_complete", "funding", "trades_with_funding", "funding_complete", "net_pnl", "simulated", "label", "mode_label")}
+    return {k: d[k] for k in ("mode", "strategy", "closed_trades", "wins", "losses", "gross_pnl", "fees", "trades_with_fees", "fees_complete", "funding", "trades_with_funding", "funding_complete", "net_pnl", "simulated", "label", "mode_label", "trades_with_peak", "reached_1r", "gave_back_to_loss", "give_back_rate", "closed_far_below_peak")}
 
 
 def _result_columns():
@@ -262,6 +263,21 @@ def _result_columns():
         func.coalesce(func.sum(case((and_(mode != reporting.MODE_PAPER, Trade.funding_quote.is_not(None)), Trade.funding_quote), else_=0.0)), 0.0).label("funding"),
         # a trade's funding is KNOWN when it was read, or when it is a Spot trade (Spot stops are "stop_loss" or "stop_loss_limit"; Futures stops start with "stop_market"): see reporting.funding_applies
         func.coalesce(func.sum(case((and_(mode != reporting.MODE_PAPER, or_(Trade.funding_quote.is_not(None), func.coalesce(Trade.protective_kind, "").notlike("stop_market%"))), 1), else_=0)), 0).label("with_funding"),
+    )
+    # The give-back figures, in SQL, exactly as `reporting.giveback_flags` defines them (a test compares the two on the same trades).
+    r = func.abs(Trade.entry_price - Trade.initial_stop_price)
+    known = and_(Trade.peak_price.is_not(None), Trade.initial_stop_price.is_not(None), Trade.exit_price.is_not(None), r > 0)
+    long_side = Trade.side == "long"
+    gain = case((long_side, Trade.peak_price - Trade.entry_price), else_=Trade.entry_price - Trade.peak_price)
+    reached = and_(known, gain >= r)
+    buf = Trade.entry_price * (2 * reporting.ASSUMED_FEE_BPS + reporting.ASSUMED_SLIPPAGE_BPS) / 10_000.0
+    below = case((long_side, Trade.exit_price < Trade.entry_price + buf), else_=Trade.exit_price > Trade.entry_price - buf)
+    drawdown = case((long_side, Trade.peak_price - Trade.exit_price), else_=Trade.exit_price - Trade.peak_price)
+    aggs = aggs + (
+        func.coalesce(func.sum(case((known, 1), else_=0)), 0).label("with_peak"),
+        func.coalesce(func.sum(case((reached, 1), else_=0)), 0).label("reached_1r"),
+        func.coalesce(func.sum(case((and_(reached, below), 1), else_=0)), 0).label("gave_back"),
+        func.coalesce(func.sum(case((and_(known, drawdown > reporting.GIVEBACK_REPORT_R * r), 1), else_=0)), 0).label("far_below_peak"),
     )
     return mode, strategy, aggs
 
