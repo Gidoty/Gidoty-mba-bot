@@ -211,6 +211,12 @@ def parse_smtp_security(raw: str | None) -> str:
     return value if value in ("ssl", "none") else "starttls"
 
 
+def parse_new_account_strategies(raw: str | None) -> str:
+    """ema_only (default) | ema_donchian | ema_rsi | ema_donchian_rsi. Anything else is ema_only: a typo never opts new accounts in to a strategy."""
+    value = (raw or "").strip().lower()
+    return value if value in ("ema_donchian", "ema_rsi", "ema_donchian_rsi") else "ema_only"
+
+
 def parse_guard_mode(raw: str | None) -> str:
     """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
     value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
@@ -541,6 +547,12 @@ class Settings:
     email_http_key: str | None = field(default=None, repr=False)
     email_reset_ttl_minutes: int = 30
     email_verify_ttl_hours: int = 48
+    # Strategy availability (docs/safety/strategy_availability.md), all off or EMA-only by default. Which of the extra strategies a customer may CHOOSE, what a NEW account starts with, and whether customers can choose at
+    # all. None of these switches a strategy on for trading: the live switches (LIVE_RSI_MR, LIVE_DONCHIAN) stay where they are.
+    customer_strategy_choice: bool = False
+    strategy_donchian_available: bool = False
+    strategy_rsi_available: bool = False
+    new_account_strategies: str = "ema_only"  # ema_only | ema_donchian | ema_rsi | ema_donchian_rsi
     subscription_billing_enabled: bool = False
     # Hourly recovery of a Paystack renewal whose webhook never arrived (docs/security/billing_paystack_subscriptions.md). OFF by default: it makes read-only calls with the live Paystack key, and the operator
     # enables anything that uses a secret key by hand. Read only while SUBSCRIPTION_BILLING_ENABLED is on.
@@ -792,6 +804,10 @@ def load_settings() -> Settings:
         email_http_key=os.environ.get("EMAIL_HTTP_KEY") or None,
         email_reset_ttl_minutes=min(120, max(5, _env_int("EMAIL_RESET_TTL_MINUTES", 30))),
         email_verify_ttl_hours=min(168, max(1, _env_int("EMAIL_VERIFY_TTL_HOURS", 48))),
+        customer_strategy_choice=_env_bool("CUSTOMER_STRATEGY_CHOICE", False),
+        strategy_donchian_available=_env_bool("STRATEGY_DONCHIAN_AVAILABLE", False),
+        strategy_rsi_available=_env_bool("STRATEGY_RSI_AVAILABLE", False),
+        new_account_strategies=parse_new_account_strategies(os.environ.get("NEW_ACCOUNT_STRATEGIES")),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         paystack_renewal_reconcile=_env_bool("PAYSTACK_RENEWAL_RECONCILE", False),
         subscription_grace_days=_grace_days_from_env(),

@@ -78,7 +78,7 @@ def test_the_allowlist_has_no_secret_looking_key_and_only_plain_types():
 
 
 def test_every_default_equals_what_the_environment_gives_when_nothing_is_set(monkeypatch):
-    for name in ("SIGNUPS_MODE", "SETUP_ADVISOR", "POLL_INTERVAL_SECONDS", "SUBSCRIPTION_GRACE_DAYS", "LOGIN_MAX_FAILURES", "LOGIN_LOCKOUT_SECONDS", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_AUTH_PER_MINUTE", "DISABLE_API_DOCS"):
+    for name in ("SIGNUPS_MODE", "SETUP_ADVISOR", "POLL_INTERVAL_SECONDS", "SUBSCRIPTION_GRACE_DAYS", "LOGIN_MAX_FAILURES", "LOGIN_LOCKOUT_SECONDS", "CUSTOMER_STRATEGY_CHOICE", "STRATEGY_DONCHIAN_AVAILABLE", "STRATEGY_RSI_AVAILABLE", "NEW_ACCOUNT_STRATEGIES", "RATE_LIMIT_PER_MINUTE", "RATE_LIMIT_AUTH_PER_MINUTE", "DISABLE_API_DOCS"):
         monkeypatch.delenv(name, raising=False)
     base = load_settings()
     for d in O.ALLOWLIST.values():

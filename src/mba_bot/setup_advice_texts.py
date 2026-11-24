@@ -73,6 +73,30 @@ TEXTS = {
         "Moving money in or out of your Binance account during the day changes the value the daily limit measures from, and the reference value of the automatic total stop. After you move money, reset the total "
         "stop if it is shown, and expect the daily limit to measure from a different start."
     ),
+    # 11. the candle size of the EMA strategy (a preview: the candle size is set by the operator for everybody, nothing here saves it)
+    "tf_unknown": "That candle size is not one of the three the preview knows: 1h, 4h or 1d.",
+    "tf_stop_refused": (
+        "With {tf} candles the EMA stop-loss sits about {stop_pct:.1f}% from the entry price (this preview assumes {base_pct:g}% on 1h and scales it with the square root of the candle length; real stops can be wider or narrower). "
+        "At {lev_phrase} the bot's protection check allows a stop up to {max_pct:.1f}% from the entry (the same formula the bot uses, with its lowest maintenance rate; the live check reads Binance's own table and can be tighter). "
+        "So the check would refuse these entries and the bot would not open the trade."
+    ),
+    "tf_stop_refused_action": "A lower leverage allows a wider stop: set it on Binance for this pair, and check the leverage limit on the Risk tab.",
+    "tf_stop_ok": (
+        "With {tf} candles the EMA stop-loss sits about {stop_pct:.1f}% from the entry price (this preview assumes {base_pct:g}% on 1h and scales it with the square root of the candle length). "
+        "At {lev_phrase} the bot's protection check would allow a stop up to {max_pct:.1f}% (same formula, lowest maintenance rate; the live check reads Binance's own table)."
+    ),
+    "tf_stop_spot": "With {tf} candles the EMA stop-loss sits about {stop_pct:.1f}% from the entry price (assumed, see above). Spot has no liquidation price, so the protection check on leverage does not apply.",
+    "tf_order_too_small": (
+        "At {risk_pct:g}% risk and a stop {stop_pct:.1f}% away, a trade on your {capital} {unit} capital is about {order} {unit} of {pair}. The exchange's minimum order for {pair} is {minimum} {unit}, so the bot would not be able to open it. "
+        "A wider stop means a smaller position for the same risk."
+    ),
+    "tf_order_too_small_action": "More trading capital or a higher risk per trade makes the order larger. Both are on the Trading and Risk tabs.",
+    "tf_order_ok": "At {risk_pct:g}% risk and a stop {stop_pct:.1f}% away, a trade on your {capital} {unit} capital is about {order} {unit} of {pair}, above the exchange's minimum of {minimum} {unit}.",
+    "tf_order_unknown": "At {risk_pct:g}% risk and a stop {stop_pct:.1f}% away, a trade on your {capital} {unit} capital is about {order} {unit}. The exchange's minimum order for {pair} could not be read, so it is not compared.",
+    "tf_signals": (
+        "The EMA crossover that opens a trade is rare on long candles. On a random price series it crosses about {per_hundred:g} times in every 100 candles, which is about {per_year:g} times a year on one pair with {tf} candles. "
+        "The bot also skips flat markets, so expect fewer, and with one open trade at a time you can take fewer still. Real markets can differ by a factor of two or more. This is a count of signals, not a forecast of results."
+    ),
     # common
     "no_capital": "Your trading capital is not set. The bot cannot open a live trade without it.",
     "no_capital_action": "Enter your trading capital on the Trading tab.",

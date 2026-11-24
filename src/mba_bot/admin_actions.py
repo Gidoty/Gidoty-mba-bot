@@ -9,7 +9,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import kill_switch
+from . import kill_switch, strategy_availability
+from .multi_trade import account_strategies
+from .db import list_open_trades
 from .models import AdminChange, Customer, CustomerNote, DataRequest, Subscription, TradingAccount
 
 MAX_EXTEND_DAYS = 366
@@ -158,3 +160,19 @@ def kill_flag(db: Session, admin_id: str, engage: bool, reason: str, now: dateti
     if not result.ok:
         raise ActionError(503, "the kill flag could not be written; nothing was changed")
     return _log(db, admin_id, "kill_engage" if engage else "kill_release", "kill_switch", getattr(prev, "state", None), engage, reason, now)
+
+
+def set_strategies(db: Session, admin_id: str, ref: str, wanted, reason: str, now: datetime | None = None) -> AdminChange:
+    """The admin override of an account's strategies (`extra_strategies`): any known strategies, whatever is available to customers. It only changes what the account is opted in to; whether a strategy trades live is
+    still decided by the operator's own live switches. Refused while a trade of the account is open (an open trade is managed by its own strategy and must not lose it)."""
+    reason, now = clean_reason(reason), now or _now()
+    acct, cust = account_and_customer(db, ref)
+    try:
+        value = strategy_availability.admin_value(wanted)
+    except strategy_availability.ChoiceError as exc:
+        raise ActionError(422, str(exc)) from None
+    if list_open_trades(db, acct.id):
+        raise ActionError(409, "a trade of this account is open; change this after it has closed")
+    old = ",".join(sorted(account_strategies(acct))) or "ema only"
+    acct.extra_strategies = value
+    return _log(db, admin_id, "set_strategies", cust.id, old, (value or "ema only")[:120], reason, now)

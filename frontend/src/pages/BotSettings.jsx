@@ -27,6 +27,7 @@ import { optionLabel, usePairs, withCurrentPair } from "../usePairs.js";
 export default function BotSettings() {
   const { account, reloadAccount } = useAccount();
   const [tab, setTab] = useState("trading");
+  const [previewTf, setPreviewTf] = useState("");  // a candle size to preview in the setup advisor; never saved
   const [pair, setPair] = useState(account.pair);
   const [marketType, setMarketType] = useState(account.market_type);
   const [riskPct, setRiskPct] = useState(String(account.risk_pct));
@@ -88,7 +89,7 @@ export default function BotSettings() {
   useEffect(() => {
     setProblems({ trading: null, risk: null });
   }, [editKey]);
-  const advice = useAdvice(buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit }));
+  const advice = useAdvice(buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit, previewTimeframe: previewTf }));
   const tabNotes = notesForTab(advice.notes, tab);
   const marks = {
     trading: problems.trading ? "error" : tradingDirty ? "changed" : null,
@@ -196,6 +197,17 @@ export default function BotSettings() {
             Trading
           </CardTitle>
           <div className="mb-3"><PairSkipNotice account={account} /></div>
+          {advice.enabled && (
+            <label className="mb-3 block text-sm text-fg">
+              What if the EMA strategy used longer candles? (preview only: the candle size is set by the service for everyone, and nothing here saves it)
+              <select className="ml-2 rounded-ctl border border-line bg-surface px-2 py-1" value={previewTf} onChange={(e) => setPreviewTf(e.target.value)}>
+                <option value="">Do not preview</option>
+                <option value="1h">1 hour</option>
+                <option value="4h">4 hours</option>
+                <option value="1d">1 day</option>
+              </select>
+            </label>
+          )}
           {problems.trading && <p role="alert" className="mb-3 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm font-medium text-fg">{problems.trading}</p>}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 shell:grid-cols-3">
             <FormField label="Pair selection">

@@ -235,6 +235,7 @@ class AdviceRequest(BaseModel):
     pair_selection_mode: str | None = None
     acknowledge_high_risk: bool = False
     acknowledge_very_high_risk: bool = False
+    ema_timeframe: str | None = None  # a candle size to preview (1h, 4h, 1d); never saved
 
 
 class AdviceNote(BaseModel):
