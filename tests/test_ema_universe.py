@@ -315,3 +315,37 @@ def test_the_real_simulation_runs_end_to_end_on_synthetic_candles(tmp_path):
     n4, n1 = len(sims[U.CELLS[0]]), len(sims[U.CELLS[2]])
     assert n4 > n1 > 0
     assert all(sims[c] == sorted(sims[c], key=U.order_key) for c in U.CELLS) and {t.pair for t in sims[U.CELLS[0]]} <= set(U.CATALOG)
+
+
+def test_concentration_boundary_is_exactly_the_registered_number_of_positive_pairs():
+    def build(positive):
+        out = []
+        for k in U.DEV_WINDOWS:
+            for j, pair in enumerate(U.CATALOG):
+                out += [T(0.5 if j < positive else -0.01, in_window(k, 2 + j * 3 + i), pair=pair) for i in range(3)]
+        return out
+    assert ev(build(6))["P4"] and not ev(build(5))["P4"]
+
+
+def test_positions_held_are_clipped_at_both_ends_of_the_span():
+    a = 1_000_000 * DAY // 1000
+    c = U.concurrency([T(0.1, a + 8 * DAY, hold=5 * DAY)], a, a + 10 * DAY)
+    assert c["mean_open"] == pytest.approx(0.2) and c["share_time_ge1"] == pytest.approx(0.2)
+
+
+def test_the_first_signal_wins_a_tie_by_catalog_order():
+    t = E._ms("2023-01-01")
+    trades = [T(0.1, t, pair="SOLUSDT"), T(0.1, t, pair="BTCUSDT"), T(0.1, t - HOUR, pair="LTCUSDT")]
+    assert [x.pair for x in sorted(trades, key=U.order_key)] == ["LTCUSDT", "BTCUSDT", "SOLUSDT"]
+
+
+def test_volume_is_read_over_the_last_365_days_only(tmp_path):
+    write_root(tmp_path, years=4.0, volume=1e5 / 24, only=("BTCUSDT",))
+    p = tmp_path / "klines" / "1h" / "BTCUSDT.csv"
+    rows = p.read_text().splitlines()
+    for i in range(1, len(rows) - 24 * 400):  # everything older than 400 days is huge
+        parts = rows[i].split(",")
+        parts[6] = "1e9"
+        rows[i] = ",".join(parts)
+    p.write_text("\n".join(rows) + "\n")
+    assert not U.liquidity_table(tmp_path)["BTCUSDT"]["ok"]

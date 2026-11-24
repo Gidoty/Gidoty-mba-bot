@@ -1,0 +1,1256 @@
+{
+ "plan_hash": "bc1f9d088852a3c3",
+ "data_hash": "be345d7847ab820d",
+ "created": "2026-11-24 21:12:54",
+ "rows": {
+  "ema 4h s1": {
+   "trades": 1083,
+   "mean_net_r": 0.2781910197548526,
+   "mean_ci": [
+    0.2781910197548526,
+    -0.011429015629167828,
+    0.6628125707135137
+   ],
+   "total_net_r": 301.28087439450536,
+   "total_block_ci": [
+    301.28087439450536,
+    -219.04268956014099,
+    997.1851362350187
+   ],
+   "positive_windows": 4,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 171,
+     "net_total_r": 22.94721655422005
+    },
+    {
+     "window": 1,
+     "trades": 156,
+     "net_total_r": 51.95697234418585
+    },
+    {
+     "window": 2,
+     "trades": 186,
+     "net_total_r": -19.664074244472047
+    },
+    {
+     "window": 3,
+     "trades": 179,
+     "net_total_r": 167.78728043962758
+    },
+    {
+     "window": 4,
+     "trades": 176,
+     "net_total_r": -25.064137820996727
+    },
+    {
+     "window": 5,
+     "trades": 215,
+     "net_total_r": 103.31761712194066
+    }
+   ],
+   "avg_stop_pct": 4.754657013087255,
+   "avg_cost_r": 0.07831201124277584,
+   "avg_gross_r": 0.3565030309976284,
+   "P1": true,
+   "P2": false,
+   "P3": false,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 112,
+     "total_net_r": 15.450708796125529,
+     "mean_net_r": 0.13795275710826366
+    },
+    "ETHUSDT": {
+     "trades": 121,
+     "total_net_r": 35.0598910130855,
+     "mean_net_r": 0.2897511653974008
+    },
+    "BNBUSDT": {
+     "trades": 111,
+     "total_net_r": 35.19037293290832,
+     "mean_net_r": 0.3170303867829578
+    },
+    "XRPUSDT": {
+     "trades": 112,
+     "total_net_r": 79.88539968147484,
+     "mean_net_r": 0.7132624971560253
+    },
+    "SOLUSDT": {
+     "trades": 116,
+     "total_net_r": 26.581264259392913,
+     "mean_net_r": 0.2291488298223527
+    },
+    "DOGEUSDT": {
+     "trades": 102,
+     "total_net_r": 44.867843924939784,
+     "mean_net_r": 0.4398808227935273
+    },
+    "SUIUSDT": {
+     "trades": 68,
+     "total_net_r": 12.113100896008175,
+     "mean_net_r": 0.17813383670600258
+    },
+    "LINKUSDT": {
+     "trades": 105,
+     "total_net_r": 42.32407208417899,
+     "mean_net_r": 0.40308640080170466
+    },
+    "ADAUSDT": {
+     "trades": 102,
+     "total_net_r": 36.837788540179595,
+     "mean_net_r": 0.3611547896096039
+    },
+    "LTCUSDT": {
+     "trades": 134,
+     "total_net_r": -27.02956773378827,
+     "mean_net_r": -0.20171319204319604
+    }
+   },
+   "positive_pairs": 9,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 221.39547471303052,
+   "P4": true
+  },
+  "ema 4h s2": {
+   "trades": 1929,
+   "mean_net_r": 0.15846555759393477,
+   "mean_ci": [
+    0.15846555759393477,
+    -0.012526926393651456,
+    0.387932414607599
+   ],
+   "total_net_r": 305.68006059870015,
+   "total_block_ci": [
+    305.6800605987002,
+    -203.13159279968517,
+    1016.2081527126529
+   ],
+   "positive_windows": 4,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 337,
+     "net_total_r": -36.500827116446914
+    },
+    {
+     "window": 1,
+     "trades": 299,
+     "net_total_r": 76.53343155907584
+    },
+    {
+     "window": 2,
+     "trades": 330,
+     "net_total_r": -17.90299161514123
+    },
+    {
+     "window": 3,
+     "trades": 316,
+     "net_total_r": 119.14029329231182
+    },
+    {
+     "window": 4,
+     "trades": 305,
+     "net_total_r": 35.4433220826702
+    },
+    {
+     "window": 5,
+     "trades": 342,
+     "net_total_r": 128.96683239623042
+    }
+   ],
+   "avg_stop_pct": 4.830522223829107,
+   "avg_cost_r": 0.06633006291330462,
+   "avg_gross_r": 0.2247956205072394,
+   "P1": true,
+   "P2": false,
+   "P3": false,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 203,
+     "total_net_r": 40.76731575942052,
+     "mean_net_r": 0.20082421556364788
+    },
+    "ETHUSDT": {
+     "trades": 215,
+     "total_net_r": 19.088085095694545,
+     "mean_net_r": 0.08878179114276533
+    },
+    "BNBUSDT": {
+     "trades": 186,
+     "total_net_r": 46.67105126455474,
+     "mean_net_r": 0.25091963045459537
+    },
+    "XRPUSDT": {
+     "trades": 189,
+     "total_net_r": 82.28058385087263,
+     "mean_net_r": 0.4353470045019716
+    },
+    "SOLUSDT": {
+     "trades": 188,
+     "total_net_r": 56.76252787921635,
+     "mean_net_r": 0.3019283397830657
+    },
+    "DOGEUSDT": {
+     "trades": 180,
+     "total_net_r": 46.14506080325672,
+     "mean_net_r": 0.25636144890698176
+    },
+    "SUIUSDT": {
+     "trades": 127,
+     "total_net_r": 7.893627551028793,
+     "mean_net_r": 0.06215454764589601
+    },
+    "LINKUSDT": {
+     "trades": 214,
+     "total_net_r": 0.8048124444828864,
+     "mean_net_r": 0.0037608058153405905
+    },
+    "ADAUSDT": {
+     "trades": 206,
+     "total_net_r": 44.118082000322495,
+     "mean_net_r": 0.21416544660350725
+    },
+    "LTCUSDT": {
+     "trades": 221,
+     "total_net_r": -38.851086050149526,
+     "mean_net_r": -0.17579676945769016
+    }
+   },
+   "positive_pairs": 9,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 223.39947674782752,
+   "P4": true
+  },
+  "ema 1d s1": {
+   "trades": 160,
+   "mean_net_r": 0.5185210782500181,
+   "mean_ci": [
+    0.5185210782500181,
+    -0.22303731547802333,
+    1.4950949901895736
+   ],
+   "total_net_r": 82.9633725200029,
+   "total_block_ci": [
+    82.9633725200029,
+    -61.31659151529135,
+    298.82791311670223
+   ],
+   "positive_windows": 5,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 21,
+     "net_total_r": 0.5191110591638365
+    },
+    {
+     "window": 1,
+     "trades": 33,
+     "net_total_r": -20.29256716880748
+    },
+    {
+     "window": 2,
+     "trades": 31,
+     "net_total_r": 0.8771189257329993
+    },
+    {
+     "window": 3,
+     "trades": 14,
+     "net_total_r": 53.81688698232739
+    },
+    {
+     "window": 4,
+     "trades": 33,
+     "net_total_r": 9.352948952115655
+    },
+    {
+     "window": 5,
+     "trades": 28,
+     "net_total_r": 38.689873769470516
+    }
+   ],
+   "avg_stop_pct": 12.196827790968394,
+   "avg_cost_r": 0.11559923979607149,
+   "avg_gross_r": 0.6341203180460897,
+   "P1": true,
+   "P2": false,
+   "P3": true,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 12,
+     "total_net_r": 21.778028262952038,
+     "mean_net_r": 1.8148356885793364
+    },
+    "ETHUSDT": {
+     "trades": 21,
+     "total_net_r": -3.7556333493454006,
+     "mean_net_r": -0.17883968330216193
+    },
+    "BNBUSDT": {
+     "trades": 19,
+     "total_net_r": 18.00446907348108,
+     "mean_net_r": 0.9476036354463726
+    },
+    "XRPUSDT": {
+     "trades": 20,
+     "total_net_r": 15.58867252084127,
+     "mean_net_r": 0.7794336260420635
+    },
+    "SOLUSDT": {
+     "trades": 11,
+     "total_net_r": -4.093540040465944,
+     "mean_net_r": -0.3721400036787222
+    },
+    "DOGEUSDT": {
+     "trades": 18,
+     "total_net_r": -6.915781164281786,
+     "mean_net_r": -0.38421006468232144
+    },
+    "SUIUSDT": {
+     "trades": 6,
+     "total_net_r": 23.208471726575098,
+     "mean_net_r": 3.8680786210958495
+    },
+    "LINKUSDT": {
+     "trades": 24,
+     "total_net_r": 3.4853746120259954,
+     "mean_net_r": 0.1452239421677498
+    },
+    "ADAUSDT": {
+     "trades": 12,
+     "total_net_r": 17.946325616324597,
+     "mean_net_r": 1.4955271346937165
+    },
+    "LTCUSDT": {
+     "trades": 17,
+     "total_net_r": -2.283014738104038,
+     "mean_net_r": -0.13429498459435518
+    }
+   },
+   "positive_pairs": 6,
+   "pairs_with_trades": 10,
+   "best_pair": "SUIUSDT",
+   "total_without_best_pair": 59.75490079342781,
+   "P4": true
+  },
+  "ema 1d s2": {
+   "trades": 279,
+   "mean_net_r": 0.3281846798029752,
+   "mean_ci": [
+    0.3281846798029752,
+    -0.14412241000606554,
+    0.9262617110479753
+   ],
+   "total_net_r": 91.56352566503008,
+   "total_block_ci": [
+    91.56352566503008,
+    -75.86248779181858,
+    324.2461216805761
+   ],
+   "positive_windows": 5,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 33,
+     "net_total_r": 7.453772345829625
+    },
+    {
+     "window": 1,
+     "trades": 43,
+     "net_total_r": -19.4926497259807
+    },
+    {
+     "window": 2,
+     "trades": 40,
+     "net_total_r": 13.288843946652143
+    },
+    {
+     "window": 3,
+     "trades": 44,
+     "net_total_r": 45.30425861577473
+    },
+    {
+     "window": 4,
+     "trades": 58,
+     "net_total_r": 1.2891975812508343
+    },
+    {
+     "window": 5,
+     "trades": 61,
+     "net_total_r": 43.72010290150346
+    }
+   ],
+   "avg_stop_pct": 12.546803889597859,
+   "avg_cost_r": 0.06352641416363525,
+   "avg_gross_r": 0.39171109396661047,
+   "P1": true,
+   "P2": false,
+   "P3": true,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 25,
+     "total_net_r": 7.9038789360302575,
+     "mean_net_r": 0.3161551574412103
+    },
+    "ETHUSDT": {
+     "trades": 34,
+     "total_net_r": -2.6268254938310376,
+     "mean_net_r": -0.07725957334797169
+    },
+    "BNBUSDT": {
+     "trades": 26,
+     "total_net_r": 13.442847610868144,
+     "mean_net_r": 0.5170326004180056
+    },
+    "XRPUSDT": {
+     "trades": 30,
+     "total_net_r": 37.30897029831019,
+     "mean_net_r": 1.2436323432770064
+    },
+    "SOLUSDT": {
+     "trades": 21,
+     "total_net_r": 1.4280251749081385,
+     "mean_net_r": 0.06800119880514946
+    },
+    "DOGEUSDT": {
+     "trades": 28,
+     "total_net_r": -1.801071535443522,
+     "mean_net_r": -0.06432398340869722
+    },
+    "SUIUSDT": {
+     "trades": 10,
+     "total_net_r": 32.47710982139357,
+     "mean_net_r": 3.247710982139357
+    },
+    "LINKUSDT": {
+     "trades": 35,
+     "total_net_r": 2.288078283808964,
+     "mean_net_r": 0.06537366525168468
+    },
+    "ADAUSDT": {
+     "trades": 30,
+     "total_net_r": 12.70785418652534,
+     "mean_net_r": 0.42359513955084466
+    },
+    "LTCUSDT": {
+     "trades": 40,
+     "total_net_r": -11.565341617539966,
+     "mean_net_r": -0.28913354043849915
+    }
+   },
+   "positive_pairs": 7,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 54.25455536671989,
+   "P4": true
+  }
+ },
+ "bnb_rows": {
+  "ema 4h s1": {
+   "trades": 1083,
+   "mean_net_r": 0.28075149879864025,
+   "mean_ci": [
+    0.28075149879864025,
+    -0.008924000491312084,
+    0.6653987860425655
+   ],
+   "total_net_r": 304.0538731989274,
+   "total_block_ci": [
+    304.0538731989274,
+    -215.96133085953406,
+    999.7346606012975
+   ],
+   "positive_windows": 4,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 171,
+     "net_total_r": 23.283635952950398
+    },
+    {
+     "window": 1,
+     "trades": 156,
+     "net_total_r": 52.36471114792395
+    },
+    {
+     "window": 2,
+     "trades": 186,
+     "net_total_r": -19.03775938332469
+    },
+    {
+     "window": 3,
+     "trades": 179,
+     "net_total_r": 168.24876960123623
+    },
+    {
+     "window": 4,
+     "trades": 176,
+     "net_total_r": -24.607205970486127
+    },
+    {
+     "window": 5,
+     "trades": 215,
+     "net_total_r": 103.80172185062767
+    }
+   ],
+   "avg_stop_pct": 4.754657013087255,
+   "avg_cost_r": 0.07575153219898814,
+   "avg_gross_r": 0.3565030309976284,
+   "P1": true,
+   "P2": false,
+   "P3": false,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 112,
+     "total_net_r": 15.850671051365959,
+     "mean_net_r": 0.14152384867291035
+    },
+    "ETHUSDT": {
+     "trades": 121,
+     "total_net_r": 35.42091847210316,
+     "mean_net_r": 0.29273486340581123
+    },
+    "BNBUSDT": {
+     "trades": 111,
+     "total_net_r": 35.56329078688299,
+     "mean_net_r": 0.3203900070890359
+    },
+    "XRPUSDT": {
+     "trades": 112,
+     "total_net_r": 80.16749348676703,
+     "mean_net_r": 0.7157811918461342
+    },
+    "SOLUSDT": {
+     "trades": 116,
+     "total_net_r": 26.803734430684578,
+     "mean_net_r": 0.23106667612659118
+    },
+    "DOGEUSDT": {
+     "trades": 102,
+     "total_net_r": 45.09980563804039,
+     "mean_net_r": 0.44215495723569004
+    },
+    "SUIUSDT": {
+     "trades": 68,
+     "total_net_r": 12.209229843850306,
+     "mean_net_r": 0.17954749770368097
+    },
+    "LINKUSDT": {
+     "trades": 105,
+     "total_net_r": 42.549338023632416,
+     "mean_net_r": 0.4052317907012611
+    },
+    "ADAUSDT": {
+     "trades": 102,
+     "total_net_r": 37.07726179661858,
+     "mean_net_r": 0.3635025666335155
+    },
+    "LTCUSDT": {
+     "trades": 134,
+     "total_net_r": -26.687870331017972,
+     "mean_net_r": -0.19916321142550725
+    }
+   },
+   "positive_pairs": 9,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 223.8863797121604,
+   "P4": true
+  },
+  "ema 4h s2": {
+   "trades": 1929,
+   "mean_net_r": 0.1609851031373852,
+   "mean_ci": [
+    0.1609851031373852,
+    -0.009943900481946273,
+    0.3904654906676509
+   ],
+   "total_net_r": 310.54026395201606,
+   "total_block_ci": [
+    310.54026395201623,
+    -198.26035178017392,
+    1020.944185269741
+   ],
+   "positive_windows": 4,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 337,
+     "net_total_r": -35.829547278754475
+    },
+    {
+     "window": 1,
+     "trades": 299,
+     "net_total_r": 77.33411179603854
+    },
+    {
+     "window": 2,
+     "trades": 330,
+     "net_total_r": -16.796220456090982
+    },
+    {
+     "window": 3,
+     "trades": 316,
+     "net_total_r": 119.91322656034036
+    },
+    {
+     "window": 4,
+     "trades": 305,
+     "net_total_r": 36.2252093997355
+    },
+    {
+     "window": 5,
+     "trades": 342,
+     "net_total_r": 129.69348393074713
+    }
+   ],
+   "avg_stop_pct": 4.830522223829107,
+   "avg_cost_r": 0.06381051736985416,
+   "avg_gross_r": 0.2247956205072394,
+   "P1": true,
+   "P2": false,
+   "P3": false,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 203,
+     "total_net_r": 41.50072253299938,
+     "mean_net_r": 0.20443705681280483
+    },
+    "ETHUSDT": {
+     "trades": 215,
+     "total_net_r": 19.723114263746776,
+     "mean_net_r": 0.09173541518021756
+    },
+    "BNBUSDT": {
+     "trades": 186,
+     "total_net_r": 47.29675793785891,
+     "mean_net_r": 0.2542836448271984
+    },
+    "XRPUSDT": {
+     "trades": 189,
+     "total_net_r": 82.75439407022562,
+     "mean_net_r": 0.4378539368795006
+    },
+    "SOLUSDT": {
+     "trades": 188,
+     "total_net_r": 57.10204349959413,
+     "mean_net_r": 0.3037342739340113
+    },
+    "DOGEUSDT": {
+     "trades": 180,
+     "total_net_r": 46.55148795042296,
+     "mean_net_r": 0.25861937750234976
+    },
+    "SUIUSDT": {
+     "trades": 127,
+     "total_net_r": 8.073614777860813,
+     "mean_net_r": 0.06357176990441585
+    },
+    "LINKUSDT": {
+     "trades": 214,
+     "total_net_r": 1.2613971704117488,
+     "mean_net_r": 0.005894379300989481
+    },
+    "ADAUSDT": {
+     "trades": 206,
+     "total_net_r": 44.58797478795426,
+     "mean_net_r": 0.216446479553176
+    },
+    "LTCUSDT": {
+     "trades": 221,
+     "total_net_r": -38.311243039058496,
+     "mean_net_r": -0.17335404090071718
+    }
+   },
+   "positive_pairs": 9,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 227.78586988179046,
+   "P4": true
+  },
+  "ema 1d s1": {
+   "trades": 160,
+   "mean_net_r": 0.5194982979837242,
+   "mean_ci": [
+    0.5194982979837242,
+    -0.22213466429073198,
+    1.4961368940196302
+   ],
+   "total_net_r": 83.11972767739586,
+   "total_block_ci": [
+    83.11972767739587,
+    -61.20483515896228,
+    298.9730976594095
+   ],
+   "positive_windows": 5,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 21,
+     "net_total_r": 0.5345202207285467
+    },
+    {
+     "window": 1,
+     "trades": 33,
+     "net_total_r": -20.261773293981747
+    },
+    {
+     "window": 2,
+     "trades": 31,
+     "net_total_r": 0.9105102804738345
+    },
+    {
+     "window": 3,
+     "trades": 14,
+     "net_total_r": 53.83574089152645
+    },
+    {
+     "window": 4,
+     "trades": 33,
+     "net_total_r": 9.382933732517658
+    },
+    {
+     "window": 5,
+     "trades": 28,
+     "net_total_r": 38.717795846131125
+    }
+   ],
+   "avg_stop_pct": 12.196827790968394,
+   "avg_cost_r": 0.11462202006236555,
+   "avg_gross_r": 0.6341203180460897,
+   "P1": true,
+   "P2": false,
+   "P3": true,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 12,
+     "total_net_r": 21.7962225598656,
+     "mean_net_r": 1.8163518799888
+    },
+    "ETHUSDT": {
+     "trades": 21,
+     "total_net_r": -3.731803880510697,
+     "mean_net_r": -0.17770494669098558
+    },
+    "BNBUSDT": {
+     "trades": 19,
+     "total_net_r": 18.02859334507655,
+     "mean_net_r": 0.9488733339513974
+    },
+    "XRPUSDT": {
+     "trades": 20,
+     "total_net_r": 15.607342169599674,
+     "mean_net_r": 0.7803671084799837
+    },
+    "SOLUSDT": {
+     "trades": 11,
+     "total_net_r": -4.085434883721845,
+     "mean_net_r": -0.3714031712474405
+    },
+    "DOGEUSDT": {
+     "trades": 18,
+     "total_net_r": -6.90270232210209,
+     "mean_net_r": -0.383483462339005
+    },
+    "SUIUSDT": {
+     "trades": 6,
+     "total_net_r": 23.21295744960129,
+     "mean_net_r": 3.8688262416002153
+    },
+    "LINKUSDT": {
+     "trades": 24,
+     "total_net_r": 3.5051291994682305,
+     "mean_net_r": 0.14604704997784293
+    },
+    "ADAUSDT": {
+     "trades": 12,
+     "total_net_r": 17.957234693349175,
+     "mean_net_r": 1.4964362244457645
+    },
+    "LTCUSDT": {
+     "trades": 17,
+     "total_net_r": -2.2678106532300304,
+     "mean_net_r": -0.13340062666059002
+    }
+   },
+   "positive_pairs": 6,
+   "pairs_with_trades": 10,
+   "best_pair": "SUIUSDT",
+   "total_without_best_pair": 59.90677022779457,
+   "P4": true
+  },
+  "ema 1d s2": {
+   "trades": 279,
+   "mean_net_r": 0.3291268264918283,
+   "mean_ci": [
+    0.3291268264918283,
+    -0.1431997615792185,
+    0.9272456537028935
+   ],
+   "total_net_r": 91.82638459122009,
+   "total_block_ci": [
+    91.8263845912201,
+    -75.60826856201878,
+    324.5558892636216
+   ],
+   "positive_windows": 5,
+   "per_window": [
+    {
+     "window": 0,
+     "trades": 33,
+     "net_total_r": 7.4781956721278275
+    },
+    {
+     "window": 1,
+     "trades": 43,
+     "net_total_r": -19.45644786101356
+    },
+    {
+     "window": 2,
+     "trades": 40,
+     "net_total_r": 13.332927905533081
+    },
+    {
+     "window": 3,
+     "trades": 44,
+     "net_total_r": 45.35471867842665
+    },
+    {
+     "window": 4,
+     "trades": 58,
+     "net_total_r": 1.342281755340612
+    },
+    {
+     "window": 5,
+     "trades": 61,
+     "net_total_r": 43.77470844080549
+    }
+   ],
+   "avg_stop_pct": 12.546803889597859,
+   "avg_cost_r": 0.06258426747478214,
+   "avg_gross_r": 0.39171109396661047,
+   "P1": true,
+   "P2": false,
+   "P3": true,
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 25,
+     "total_net_r": 7.936312166374674,
+     "mean_net_r": 0.317452486654987
+    },
+    "ETHUSDT": {
+     "trades": 34,
+     "total_net_r": -2.58878318098013,
+     "mean_net_r": -0.07614068179353323
+    },
+    "BNBUSDT": {
+     "trades": 26,
+     "total_net_r": 13.474214993176746,
+     "mean_net_r": 0.5182390381991057
+    },
+    "XRPUSDT": {
+     "trades": 30,
+     "total_net_r": 37.3382836140439,
+     "mean_net_r": 1.2446094538014634
+    },
+    "SOLUSDT": {
+     "trades": 21,
+     "total_net_r": 1.4422638113719135,
+     "mean_net_r": 0.06867922911294826
+    },
+    "DOGEUSDT": {
+     "trades": 28,
+     "total_net_r": -1.7805636440825494,
+     "mean_net_r": -0.0635915587172339
+    },
+    "SUIUSDT": {
+     "trades": 10,
+     "total_net_r": 32.48441070144927,
+     "mean_net_r": 3.248441070144927
+    },
+    "LINKUSDT": {
+     "trades": 35,
+     "total_net_r": 2.314597434349368,
+     "mean_net_r": 0.0661313552671248
+    },
+    "ADAUSDT": {
+     "trades": 30,
+     "total_net_r": 12.734528977623148,
+     "mean_net_r": 0.4244842992541049
+    },
+    "LTCUSDT": {
+     "trades": 40,
+     "total_net_r": -11.528880282106245,
+     "mean_net_r": -0.2882220070526561
+    }
+   },
+   "positive_pairs": 7,
+   "pairs_with_trades": 10,
+   "best_pair": "XRPUSDT",
+   "total_without_best_pair": 54.48810097717619,
+   "P4": true
+  }
+ },
+ "tpy": {
+  "ema 4h s1": {
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 188,
+     "years": 4.999315537303217,
+     "per_year": 37.605147864184005
+    },
+    "ETHUSDT": {
+     "trades": 183,
+     "years": 4.999315537303217,
+     "per_year": 36.60501095290252
+    },
+    "BNBUSDT": {
+     "trades": 171,
+     "years": 4.999315537303217,
+     "per_year": 34.20468236582694
+    },
+    "XRPUSDT": {
+     "trades": 182,
+     "years": 4.999315537303217,
+     "per_year": 36.404983570646216
+    },
+    "SOLUSDT": {
+     "trades": 157,
+     "years": 4.543919689710244,
+     "per_year": 34.5516670014059
+    },
+    "DOGEUSDT": {
+     "trades": 144,
+     "years": 4.72416153319644,
+     "per_year": 30.48159953636627
+    },
+    "SUIUSDT": {
+     "trades": 68,
+     "years": 1.9119324663472508,
+     "per_year": 35.56610978520286
+    },
+    "LINKUSDT": {
+     "trades": 176,
+     "years": 4.999315537303217,
+     "per_year": 35.204819277108435
+    },
+    "ADAUSDT": {
+     "trades": 169,
+     "years": 4.999315537303217,
+     "per_year": 33.804627601314344
+    },
+    "LTCUSDT": {
+     "trades": 207,
+     "years": 4.999315537303217,
+     "per_year": 41.405668127053666
+    }
+   },
+   "universe_per_year": 355.8343160820112,
+   "four_per_year": 144.8198247535597,
+   "one_pair_avg": 35.58343160820112,
+   "one_pair_min": 30.48159953636627,
+   "one_pair_max": 41.405668127053666
+  },
+  "ema 4h s2": {
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 337,
+     "years": 4.999315537303217,
+     "per_year": 67.4092278203724
+    },
+    "ETHUSDT": {
+     "trades": 361,
+     "years": 4.999315537303217,
+     "per_year": 72.20988499452355
+    },
+    "BNBUSDT": {
+     "trades": 304,
+     "years": 4.999315537303217,
+     "per_year": 60.808324205914566
+    },
+    "XRPUSDT": {
+     "trades": 301,
+     "years": 4.999315537303217,
+     "per_year": 60.20824205914567
+    },
+    "SOLUSDT": {
+     "trades": 279,
+     "years": 4.543919689710244,
+     "per_year": 61.40073307893151
+    },
+    "DOGEUSDT": {
+     "trades": 249,
+     "years": 4.72416153319644,
+     "per_year": 52.70776586496668
+    },
+    "SUIUSDT": {
+     "trades": 128,
+     "years": 1.9119324663472508,
+     "per_year": 66.94797136038186
+    },
+    "LINKUSDT": {
+     "trades": 332,
+     "years": 4.999315537303217,
+     "per_year": 66.4090909090909
+    },
+    "ADAUSDT": {
+     "trades": 328,
+     "years": 4.999315537303217,
+     "per_year": 65.60898138006571
+    },
+    "LTCUSDT": {
+     "trades": 350,
+     "years": 4.999315537303217,
+     "per_year": 70.00958378970427
+    }
+   },
+   "universe_per_year": 643.7198054630971,
+   "four_per_year": 260.63567907995616,
+   "one_pair_avg": 64.37198054630971,
+   "one_pair_min": 52.70776586496668,
+   "one_pair_max": 72.20988499452355
+  },
+  "ema 1d s1": {
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 19,
+     "years": 4.999315537303217,
+     "per_year": 3.8005202628696604
+    },
+    "ETHUSDT": {
+     "trades": 26,
+     "years": 4.999315537303217,
+     "per_year": 5.200711938663746
+    },
+    "BNBUSDT": {
+     "trades": 26,
+     "years": 4.999315537303217,
+     "per_year": 5.200711938663746
+    },
+    "XRPUSDT": {
+     "trades": 36,
+     "years": 4.999315537303217,
+     "per_year": 7.2009857612267245
+    },
+    "SOLUSDT": {
+     "trades": 16,
+     "years": 4.542094455852156,
+     "per_year": 3.522603978300181
+    },
+    "DOGEUSDT": {
+     "trades": 22,
+     "years": 4.722792607802875,
+     "per_year": 4.6582608695652175
+    },
+    "SUIUSDT": {
+     "trades": 6,
+     "years": 1.9110198494182067,
+     "per_year": 3.1396848137535818
+    },
+    "LINKUSDT": {
+     "trades": 35,
+     "years": 4.999315537303217,
+     "per_year": 7.000958378970427
+    },
+    "ADAUSDT": {
+     "trades": 17,
+     "years": 4.999315537303217,
+     "per_year": 3.4004654983570646
+    },
+    "LTCUSDT": {
+     "trades": 25,
+     "years": 4.999315537303217,
+     "per_year": 5.000684556407448
+    }
+   },
+   "universe_per_year": 48.125587996777796,
+   "four_per_year": 21.402929901423878,
+   "one_pair_avg": 4.812558799677779,
+   "one_pair_min": 3.1396848137535818,
+   "one_pair_max": 7.2009857612267245
+  },
+  "ema 1d s2": {
+   "per_pair": {
+    "BTCUSDT": {
+     "trades": 44,
+     "years": 4.999315537303217,
+     "per_year": 8.801204819277109
+    },
+    "ETHUSDT": {
+     "trades": 54,
+     "years": 4.999315537303217,
+     "per_year": 10.801478641840086
+    },
+    "BNBUSDT": {
+     "trades": 38,
+     "years": 4.999315537303217,
+     "per_year": 7.601040525739321
+    },
+    "XRPUSDT": {
+     "trades": 52,
+     "years": 4.999315537303217,
+     "per_year": 10.401423877327492
+    },
+    "SOLUSDT": {
+     "trades": 32,
+     "years": 4.542094455852156,
+     "per_year": 7.045207956600362
+    },
+    "DOGEUSDT": {
+     "trades": 36,
+     "years": 4.722792607802875,
+     "per_year": 7.622608695652174
+    },
+    "SUIUSDT": {
+     "trades": 10,
+     "years": 1.9110198494182067,
+     "per_year": 5.232808022922637
+    },
+    "LINKUSDT": {
+     "trades": 48,
+     "years": 4.999315537303217,
+     "per_year": 9.6013143483023
+    },
+    "ADAUSDT": {
+     "trades": 42,
+     "years": 4.999315537303217,
+     "per_year": 8.401150054764512
+    },
+    "LTCUSDT": {
+     "trades": 55,
+     "years": 4.999315537303217,
+     "per_year": 11.001506024096384
+    }
+   },
+   "universe_per_year": 86.50974296652238,
+   "four_per_year": 37.605147864184005,
+   "one_pair_avg": 8.650974296652238,
+   "one_pair_min": 5.232808022922637,
+   "one_pair_max": 11.001506024096384
+  }
+ },
+ "concurrency": {
+  "ema 4h s1": {
+   "mean_open": 8.125144175317185,
+   "share_time_ge1": 1.0,
+   "share_time_ge2": 1.0,
+   "max_open": 10
+  },
+  "ema 4h s2": {
+   "mean_open": 8.943483275663207,
+   "share_time_ge1": 1.0,
+   "share_time_ge2": 1.0,
+   "max_open": 10
+  },
+  "ema 1d s1": {
+   "mean_open": 7.536332179930795,
+   "share_time_ge1": 1.0,
+   "share_time_ge2": 1.0,
+   "max_open": 9
+  },
+  "ema 1d s2": {
+   "mean_open": 8.679930795847751,
+   "share_time_ge1": 1.0,
+   "share_time_ge2": 1.0,
+   "max_open": 10
+  }
+ },
+ "supplementary": {
+  "ema 4h s1": {
+   "trades": 558,
+   "mean_net_r": 0.6432786144280517,
+   "total_net_r": 358.94946685085284,
+   "total_block_ci": [
+    358.9494668508529,
+    36.99765716647445,
+    785.596608509629
+   ]
+  },
+  "ema 4h s2": {
+   "trades": 1027,
+   "mean_net_r": 0.2787839532914743,
+   "total_net_r": 286.3111200303441,
+   "total_block_ci": [
+    286.3111200303441,
+    13.256139421781008,
+    620.4447053822068
+   ]
+  },
+  "ema 1d s1": {
+   "trades": 68,
+   "mean_net_r": 14.76474111307736,
+   "total_net_r": 1004.0023956892604,
+   "total_block_ci": [
+    1004.0023956892603,
+    -28.34582503435209,
+    3536.9096458876907
+   ]
+  },
+  "ema 1d s2": {
+   "trades": 131,
+   "mean_net_r": 10.975941024770622,
+   "total_net_r": 1437.8482742449514,
+   "total_block_ci": [
+    1437.8482742449514,
+    -48.534368076277985,
+    5681.161893403326
+   ]
+  }
+ },
+ "passing": [],
+ "liquidity": {
+  "BTCUSDT": {
+   "years": 6.833561487565595,
+   "median_daily_quote_volume": 11477495028.257198,
+   "ok": true
+  },
+  "ETHUSDT": {
+   "years": 6.833561487565595,
+   "median_daily_quote_volume": 9109139841.418549,
+   "ok": true
+  },
+  "BNBUSDT": {
+   "years": 6.723134839151267,
+   "median_daily_quote_volume": 344028897.62319994,
+   "ok": true
+  },
+  "XRPUSDT": {
+   "years": 6.81895961670089,
+   "median_daily_quote_volume": 715782877.2285502,
+   "ok": true
+  },
+  "SOLUSDT": {
+   "years": 6.129135295459731,
+   "median_daily_quote_volume": 1942540744.9782,
+   "ok": true
+  },
+  "DOGEUSDT": {
+   "years": 6.309605293178189,
+   "median_daily_quote_volume": 473010322.80042994,
+   "ok": true
+  },
+  "SUIUSDT": {
+   "years": 3.497033994980607,
+   "median_daily_quote_volume": 211674712.53972998,
+   "ok": true
+  },
+  "LINKUSDT": {
+   "years": 6.788843258042436,
+   "median_daily_quote_volume": 126562564.38723002,
+   "ok": true
+  },
+  "ADAUSDT": {
+   "years": 6.750513347022587,
+   "median_daily_quote_volume": 188487494.9244,
+   "ok": true
+  },
+  "LTCUSDT": {
+   "years": 6.810746064339494,
+   "median_daily_quote_volume": 76291838.80477001,
+   "ok": true
+  }
+ }
+}
