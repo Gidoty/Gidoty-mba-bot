@@ -1,0 +1,411 @@
+{
+ "trades": 575,
+ "mean_net_r": 0.10390917585274924,
+ "total_net_r": 59.747776115330815,
+ "total_ci": [
+  59.74777611533082,
+  -175.41160958512447,
+  330.159177546588
+ ],
+ "mean_ci": [
+  0.10390917585274924,
+  -0.100169755482198,
+  0.322831131344759
+ ],
+ "avg_gross_r": 0.17637619898427892,
+ "avg_cost_r": 0.07246702313152968,
+ "avg_stop_pct": 3.985732472823157,
+ "win_rate": 0.24521739130434783,
+ "median_net_r": -1.0255959091789548,
+ "best_r": 17.61095545341867,
+ "worst_r": -1.260034065782833,
+ "top5_sum_r": 74.04595635728128,
+ "top5_share_of_total": 1.2393089947707974,
+ "total_without_top5": -14.298180241950469,
+ "longest_losing_streak": 23,
+ "max_drawdown_r": 70.1363635517959,
+ "max_drawdown_equity": 0.5069910358222288,
+ "lowest_equity": 0.7555858690811559,
+ "final_equity": 1.5122040626810411,
+ "blocks": [
+  {
+   "block": "2025-04 to 06",
+   "trades": 92,
+   "total_net_r": 8.965951342655803,
+   "mean_net_r": 0.09745599285495438
+  },
+  {
+   "block": "2025-07 to 09",
+   "trades": 79,
+   "total_net_r": -7.905076337930626,
+   "mean_net_r": -0.10006425744215983
+  },
+  {
+   "block": "2025-10 to 12",
+   "trades": 93,
+   "total_net_r": -4.152433360396961,
+   "mean_net_r": -0.044649821079537216
+  },
+  {
+   "block": "2026-01 to 03",
+   "trades": 123,
+   "total_net_r": 28.006165816784385,
+   "mean_net_r": 0.2276924050145072
+  },
+  {
+   "block": "2026-04 to 06",
+   "trades": 88,
+   "total_net_r": 18.61401615808682,
+   "mean_net_r": 0.21152291088735023
+  },
+  {
+   "block": "2026-07 to 09",
+   "trades": 100,
+   "total_net_r": 16.219152496131397,
+   "mean_net_r": 0.16219152496131398
+  }
+ ],
+ "pairs": {
+  "BTCUSDT": {
+   "trades": 55,
+   "total_net_r": 25.367863007944894,
+   "mean_net_r": 0.46123387287172535
+  },
+  "ETHUSDT": {
+   "trades": 53,
+   "total_net_r": 8.134135402195895,
+   "mean_net_r": 0.15347425287162067
+  },
+  "BNBUSDT": {
+   "trades": 60,
+   "total_net_r": 7.1198843931080615,
+   "mean_net_r": 0.11866473988513436
+  },
+  "XRPUSDT": {
+   "trades": 53,
+   "total_net_r": 9.6694535852337,
+   "mean_net_r": 0.18244252047610757
+  },
+  "SOLUSDT": {
+   "trades": 52,
+   "total_net_r": 25.394255048426757,
+   "mean_net_r": 0.48835105862359146
+  },
+  "DOGEUSDT": {
+   "trades": 53,
+   "total_net_r": 9.765896484020196,
+   "mean_net_r": 0.1842621978117018
+  },
+  "SUIUSDT": {
+   "trades": 59,
+   "total_net_r": -1.8009977178960557,
+   "mean_net_r": -0.03052538504908569
+  },
+  "LINKUSDT": {
+   "trades": 56,
+   "total_net_r": 7.188981867779706,
+   "mean_net_r": 0.1283746762103519
+  },
+  "ADAUSDT": {
+   "trades": 69,
+   "total_net_r": -12.612339168114797,
+   "mean_net_r": -0.18278752417557678
+  },
+  "LTCUSDT": {
+   "trades": 65,
+   "total_net_r": -18.47935678736754,
+   "mean_net_r": -0.2842977967287314
+  }
+ },
+ "positive_blocks": 4,
+ "positive_pairs": 7,
+ "exit_reasons": {
+  "crossover_exit": 255,
+  "stop_loss": 320
+ },
+ "P1": true,
+ "P2": false,
+ "P3": true,
+ "P4": true,
+ "verdict": "FAIL",
+ "bnb_reading": {
+  "trades": 575,
+  "mean_net_r": 0.10684884995772936,
+  "total_net_r": 61.438088725694385,
+  "total_ci": [
+   61.43808872569444,
+   -173.83558851268066,
+   331.865206936533
+  ],
+  "mean_ci": [
+   0.10684884995772936,
+   -0.09726886964966235,
+   0.32583242229611054
+  ],
+  "avg_gross_r": 0.17637619898427892,
+  "avg_cost_r": 0.06952734902654956,
+  "avg_stop_pct": 3.985732472823157,
+  "win_rate": 0.24521739130434783,
+  "median_net_r": -1.023631224024601,
+  "best_r": 17.61751994606776,
+  "worst_r": -1.253455641172656,
+  "top5_sum_r": 74.07457202426957,
+  "top5_share_of_total": 1.205678326925076,
+  "total_without_top5": -12.636483298575186,
+  "longest_losing_streak": 23,
+  "max_drawdown_r": 69.80261015826838,
+  "max_drawdown_equity": 0.5050912543920254,
+  "lowest_equity": 0.7571603239678971,
+  "final_equity": 1.5379383732817846,
+  "blocks": [
+   {
+    "block": "2025-04 to 06",
+    "trades": 92,
+    "total_net_r": 9.195455928974571,
+    "mean_net_r": 0.09995060792363664
+   },
+   {
+    "block": "2025-07 to 09",
+    "trades": 79,
+    "total_net_r": -7.676749477609644,
+    "mean_net_r": -0.09717404402037524
+   },
+   {
+    "block": "2025-10 to 12",
+    "trades": 93,
+    "total_net_r": -3.9167211111146774,
+    "mean_net_r": -0.04211528076467395
+   },
+   {
+    "block": "2026-01 to 03",
+    "trades": 123,
+    "total_net_r": 28.319950574819266,
+    "mean_net_r": 0.23024350060828672
+   },
+   {
+    "block": "2026-04 to 06",
+    "trades": 88,
+    "total_net_r": 18.922613721525295,
+    "mean_net_r": 0.21502970138096925
+   },
+   {
+    "block": "2026-07 to 09",
+    "trades": 100,
+    "total_net_r": 16.593539089099576,
+    "mean_net_r": 0.16593539089099577
+   }
+  ],
+  "pairs": {
+   "BTCUSDT": {
+    "trades": 55,
+    "total_net_r": 25.627200624356266,
+    "mean_net_r": 0.46594910226102304
+   },
+   "ETHUSDT": {
+    "trades": 53,
+    "total_net_r": 8.292864170400774,
+    "mean_net_r": 0.15646913529058065
+   },
+   "BNBUSDT": {
+    "trades": 60,
+    "total_net_r": 7.3728282198302315,
+    "mean_net_r": 0.12288047033050385
+   },
+   "XRPUSDT": {
+    "trades": 53,
+    "total_net_r": 9.822204598860612,
+    "mean_net_r": 0.18532461507284173
+   },
+   "SOLUSDT": {
+    "trades": 52,
+    "total_net_r": 25.528290603088113,
+    "mean_net_r": 0.49092866544400215
+   },
+   "DOGEUSDT": {
+    "trades": 53,
+    "total_net_r": 9.896419891024008,
+    "mean_net_r": 0.18672490360422658
+   },
+   "SUIUSDT": {
+    "trades": 59,
+    "total_net_r": -1.6798473133435334,
+    "mean_net_r": -0.028471988361754803
+   },
+   "LINKUSDT": {
+    "trades": 56,
+    "total_net_r": 7.323912767174334,
+    "mean_net_r": 0.13078415655668454
+   },
+   "ADAUSDT": {
+    "trades": 69,
+    "total_net_r": -12.461287378968539,
+    "mean_net_r": -0.18059836781113825
+   },
+   "LTCUSDT": {
+    "trades": 65,
+    "total_net_r": -18.28449745672788,
+    "mean_net_r": -0.2812999608727366
+   }
+  },
+  "positive_blocks": 4,
+  "positive_pairs": 7,
+  "exit_reasons": {
+   "crossover_exit": 255,
+   "stop_loss": 320
+  },
+  "P1": true,
+  "P2": false,
+  "P3": true,
+  "P4": true,
+  "verdict": "FAIL"
+ },
+ "descriptive_slots": {
+  "1 slot": {
+   "slots": "1 slot",
+   "signals": 575,
+   "taken": 57,
+   "dropped": 518,
+   "taken_share": 0.09913043478260869,
+   "taken_per_year": 37.99133211678832,
+   "total_net_r": 14.814303845408071,
+   "mean_net_r": 0.2599000674632995,
+   "total_block_ci": [
+    14.814303845408071,
+    -24.31297812536982,
+    55.680940917092755
+   ],
+   "dropped_total_net_r": 44.933472269922746,
+   "dropped_mean_net_r": 0.08674415496124083,
+   "losing_streak": 7,
+   "tail": {
+    "win_rate": 0.2982456140350877,
+    "median_r": -1.0191913834915767,
+    "top5_share_of_total": 2.4398476736096697,
+    "best_r": 9.608286602918614,
+    "worst_r": -1.260034065782833
+   },
+   "pilot_months_100": 31.586152238913506,
+   "dd": {
+    "0.5": {
+     "max_dd_r": 9.282389604496478,
+     "max_dd_equity": 0.04554230309403329,
+     "lowest_equity": 1.0,
+     "final_equity": 1.0723393755945398
+    },
+    "1.0": {
+     "max_dd_r": 9.282389604496478,
+     "max_dd_equity": 0.0893757720645113,
+     "lowest_equity": 1.0,
+     "final_equity": 1.1406283541256907
+    },
+    "2.0": {
+     "max_dd_r": 9.282389604496478,
+     "max_dd_equity": 0.1720980651152867,
+     "lowest_equity": 1.0,
+     "final_equity": 1.261894435074974
+    }
+   },
+   "max_open": 1,
+   "open_risk_pct_max": 1.0
+  },
+  "3 slots": {
+   "slots": "3 slots",
+   "signals": 575,
+   "taken": 199,
+   "dropped": 376,
+   "taken_share": 0.34608695652173915,
+   "taken_per_year": 132.63640510948903,
+   "total_net_r": 8.239448233799807,
+   "mean_net_r": 0.041404262481406065,
+   "total_block_ci": [
+    8.239448233799802,
+    -102.4790114526047,
+    137.67833589765186
+   ],
+   "dropped_total_net_r": 51.50832788153101,
+   "dropped_mean_net_r": 0.1369902337274761,
+   "losing_streak": 17,
+   "tail": {
+    "win_rate": 0.2613065326633166,
+    "median_r": -1.0196925518483888,
+    "top5_share_of_total": 6.268090585928143,
+    "best_r": 13.36750368572378,
+    "worst_r": -1.260034065782833
+   },
+   "pilot_months_100": 9.047289837276734,
+   "dd": {
+    "0.5": {
+     "max_dd_r": 33.4482615063141,
+     "max_dd_equity": 0.15465067169768432,
+     "lowest_equity": 0.9609525110000702,
+     "final_equity": 1.0285100188993117
+    },
+    "1.0": {
+     "max_dd_r": 33.4482615063141,
+     "max_dd_equity": 0.2864700082849426,
+     "lowest_equity": 0.9090454094066718,
+     "final_equity": 1.0317575412369535
+    },
+    "2.0": {
+     "max_dd_r": 33.4482615063141,
+     "max_dd_equity": 0.49394031322813214,
+     "lowest_equity": 0.7786979636291934,
+     "final_equity": 0.9695133354018692
+    }
+   },
+   "max_open": 3,
+   "open_risk_pct_max": 3.0
+  },
+  "unlimited": {
+   "slots": "unlimited",
+   "signals": 575,
+   "taken": 575,
+   "dropped": 0,
+   "taken_share": 1.0,
+   "taken_per_year": 383.24589416058393,
+   "total_net_r": 59.747776115330815,
+   "mean_net_r": 0.10390917585274924,
+   "total_block_ci": [
+    59.74777611533082,
+    -227.395488297757,
+    424.73863322026324
+   ],
+   "dropped_total_net_r": 0,
+   "dropped_mean_net_r": null,
+   "losing_streak": 23,
+   "tail": {
+    "win_rate": 0.24521739130434783,
+    "median_r": -1.0255959091789548,
+    "top5_share_of_total": 1.2393089947707974,
+    "best_r": 17.61095545341867,
+    "worst_r": -1.260034065782833
+   },
+   "pilot_months_100": 3.1311490045531647,
+   "dd": {
+    "0.5": {
+     "max_dd_r": 70.1363635517959,
+     "max_dd_equity": 0.29666496221215755,
+     "lowest_equity": 0.8718892213941867,
+     "final_equity": 1.2858431707703517
+    },
+    "1.0": {
+     "max_dd_r": 70.1363635517959,
+     "max_dd_equity": 0.5069910358222288,
+     "lowest_equity": 0.7555858690811559,
+     "final_equity": 1.5122040626810411
+    },
+    "2.0": {
+     "max_dd_r": 70.1363635517959,
+     "max_dd_equity": 0.7640760968569079,
+     "lowest_equity": 0.49683163945102815,
+     "final_equity": 1.6446292201340889
+    }
+   },
+   "max_open": 10,
+   "open_risk_pct_max": 10.0
+  }
+ },
+ "trades_per_year": 383.24589416058393,
+ "plan_hash": "253e2573bcc01497",
+ "data_hash": "be345d7847ab820d"
+}
