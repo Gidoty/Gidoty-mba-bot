@@ -12,6 +12,7 @@ export const ACTIONS = [
   { id: "note", label: "Add a note", target: "ref", suffix: "note", note: true },
   { id: "approve", label: "Approve a pending request", target: "request", suffix: "approve" },
   { id: "refuse", label: "Refuse a pending request", target: "request", suffix: "refuse" },
+  { id: "complete_deletion", label: "Complete an approved deletion (erases the customer's data)", target: "request", suffix: "complete-deletion", confirm: true },
   { id: "kill_engage", label: "Engage the kill flag (no new live entries)", target: "none", path: "/admin/kill-switch/engage" },
   { id: "kill_release", label: "Release the kill flag", target: "none", path: "/admin/kill-switch/release" },
 ];
@@ -38,6 +39,11 @@ export function buildRequest(actionId, form) {
     const d = Number(form.days);
     if (!Number.isInteger(d) || d < 1 || d > 366) return { error: "Extend by 1 to 366 days." };
     body.days = d;
+  }
+  if (a.confirm) {
+    const c = String(form.confirm ?? "").trim();
+    if (!/^DELETE [A-Za-z0-9-]{8}$/.test(c)) return { error: "Type the confirmation exactly as DELETE and the first 8 characters of the customer id." };
+    body.confirm = c;
   }
   if (a.note) {
     const n = String(form.note ?? "").trim();

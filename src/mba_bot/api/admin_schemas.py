@@ -250,3 +250,14 @@ class PendingRequest(BaseModel):
 
 class RequestsList(BaseModel):
     requests: list[PendingRequest]
+
+
+class CompleteDeletionBody(StepUp):
+    confirm: str = Field(max_length=40)
+
+
+class DeletionDone(BaseModel):
+    ok: bool
+    erased: dict[str, int]
+    kept: list[str]
+    warnings: list[str]

@@ -348,7 +348,7 @@ function ActionsPanel({ onAuthLost }) {
   const settings = usePanel("/admin/settings", onAuthLost);
   const changes = usePanel("/admin/changes", onAuthLost);
   const [action, setAction] = useState("pause");
-  const [form, setForm] = useState({ target: "", reason: "", code: "", days: "30", note: "" });
+  const [form, setForm] = useState({ target: "", reason: "", code: "", days: "30", note: "", confirm: "" });
   const [edit, setEdit] = useState({ key: "", value: "", reason: "", code: "" });
   const [msg, setMsg] = useState(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -397,6 +397,7 @@ function ActionsPanel({ onAuthLost }) {
         <FormField label="Action"><select className={inputClass} value={action} onChange={(e) => setAction(e.target.value)}>{ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select></FormField>
         {act.target !== "none" && <FormField label={act.target === "ref" ? "Customer ref (from the customer list)" : "Request id"}><input className={inputClass} value={form.target} onChange={set("target")} /></FormField>}
         {act.days && <FormField label="Days"><input className={inputClass} value={form.days} onChange={set("days")} /></FormField>}
+        {act.confirm && <FormField label="Type DELETE and the first 8 characters of the customer id"><input className={inputClass} value={form.confirm} onChange={set("confirm")} /></FormField>}
         {act.note && <FormField label="Note"><input className={inputClass} value={form.note} maxLength={500} onChange={set("note")} /></FormField>}
         <FormField label="Reason"><input className={inputClass} value={form.reason} maxLength={REASON_MAX} onChange={set("reason")} /></FormField>
         <FormField label="Authenticator code"><input className={inputClass} value={form.code} autoComplete="one-time-code" onChange={set("code")} /></FormField>

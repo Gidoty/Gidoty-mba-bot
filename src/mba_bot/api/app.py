@@ -28,7 +28,7 @@ from ..operator_settings import effective_settings
 from ..scheduler import run_forever
 from .browser_guards import OriginCheckMiddleware, SecurityHeadersMiddleware
 from .ratelimit import RateLimitMiddleware
-from .routers import account, auth, billing, pairs, privacy, reports, telegram, trades
+from .routers import account, auth, billing, pairs, privacy, reports, statements, telegram, trades
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,7 @@ def create_app() -> FastAPI:
     app.include_router(billing.router)
     app.include_router(pairs.router)
     app.include_router(reports.router)
+    app.include_router(statements.router)
     app.include_router(privacy.router)
     if settings.admin_dashboard_enabled:  # off (default): the admin routes do not exist (404)
         from .routers import admin as admin_router
