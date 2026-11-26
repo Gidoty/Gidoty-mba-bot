@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 
 import ccxt.async_support as ccxt_async
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from . import kill_switch, pnl_labels, protection_guard
@@ -195,12 +195,14 @@ def _set(session: Session, trade: Trade, **fields) -> None:
 
 
 async def _notify(ctx: LiveContext, message: str) -> None:
-    if ctx.account.notification_target is None:
-        return
+    account_id = _safe_account_id(ctx)
     try:
-        await ctx.notifier.send(ctx.account.notification_target, message)
-    except Exception:
-        logger.exception("account %s: failed to send a safety notification", ctx.account.id)
+        target = ctx.account.notification_target
+        if target is None:
+            return
+        await ctx.notifier.send(target, message)
+    except Exception:  # noqa: BLE001 - a message that cannot be sent (or a target that cannot be read) never stops what follows
+        _safe_log("exception", "account %s: failed to send a safety notification", account_id)
 
 
 def _pnl(side: str, entry: float, exit_: float, qty: float) -> float:
@@ -311,13 +313,14 @@ async def open_live_trade(
 
 
 async def _resolve_entry_submission_error(ctx: LiveContext, trade: Trade, exc: BaseException, *, risk_text: str) -> Trade:
+    account_id = _safe_account_id(ctx)
     cid = client_id(trade, "entry")
-    logger.warning("account %s: entry submission raised %s; checking Binance for the order", ctx.account.id, type(exc).__name__)
+    _safe_log("warning", "account %s: entry submission raised %s; checking Binance for the order", account_id, type(exc).__name__)
     try:
         found = await ctx.venue.find_order(cid)
     except Exception:
         # Cannot tell whether it exists. NEVER re-send; leave it pending for the reconciler.
-        logger.warning("account %s: entry outcome unknown, leaving trade pending", ctx.account.id)
+        _safe_log("warning", "account %s: entry outcome unknown, leaving trade pending", account_id)
         return trade
     if found is not None:
         return await _after_entry(ctx, trade, found, risk_text=risk_text)
@@ -480,6 +483,7 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
     'protected', 'executed', or 'failed'. Deterministic rejections stop
     retrying immediately."""
     attempts = max(1, ctx.settings.protection_max_attempts)
+    account_id = _safe_account_id(ctx)  # read once, before any attempt can fail: the failure handler below reads nothing from the database
     for i in range(attempts):
         # Each attempt starts with no classification, so the one used for the emergency exit can only come from the
         # attempt that actually failed last (never from an earlier attempt, trade or call on this context).
@@ -493,8 +497,8 @@ async def establish_protection(ctx: LiveContext, trade: Trade) -> str:
             kind = classify_protection_failure(exc)
             ctx.protection_failure_kind = kind
             ctx.protection_failure_detail = str(exc) if isinstance(exc, ProtectionUnavailable) and str(exc) else None
-            logger.warning(
-                "account %s: protective stop attempt %d/%d failed (%s%s) [%s]", ctx.account.id, i + 1, attempts,
+            _safe_log(
+                "warning", "account %s: protective stop attempt %d/%d failed (%s%s) [%s]", account_id, i + 1, attempts,
                 type(exc).__name__, f": {exc}" if isinstance(exc, ProtectionUnavailable) and str(exc) else "", kind,
             )
             # An InsufficientFunds from the exchange means the free balance moved
@@ -599,6 +603,41 @@ def _safe_log(level: str, message: str, *args) -> None:
         pass
 
 
+def _safe_get(obj, name: str, default="?"):
+    """An attribute of an ORM object, or `default` when it cannot be read (an expired object whose reload hits 'database is locked'). Never raises. Used BEFORE a `try` so a failure handler reads nothing from the ORM."""
+    try:
+        return getattr(obj, name)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _is_locked(exc: BaseException) -> bool:
+    return isinstance(exc, OperationalError) and "database is locked" in str(exc).lower()
+
+
+async def _db_retry(session: Session, op, *, tries: int = 3, pause: float = 0.25):
+    """Run a LOCAL database operation (never an exchange call). A 'database is locked' error is retried at most `tries - 1` more times (two) after a pause of 0.25 s; any other error, and the last locked error, is raised.
+    The session is rolled back first only if its transaction cannot continue."""
+    for i in range(tries):
+        try:
+            return op()
+        except Exception as exc:  # noqa: BLE001
+            if i + 1 >= tries or not _is_locked(exc):
+                raise
+            try:
+                if not session.is_active:
+                    session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            await _sleep(pause)
+
+
+async def _ensure_loaded(ctx: "LiveContext", trade: Trade) -> None:
+    """Make sure `trade` and `ctx.account` are loaded (after a rollback they are expired and every read is a reload). One read reloads the whole row; a brief lock is waited out as in `_db_retry`. A no-op, with no
+    database access, for objects that are already loaded. Raises only if the lock is still there after the retries."""
+    await _db_retry(ctx.session, lambda: (trade.status, ctx.account.id))
+
+
 async def read_funding(ctx: LiveContext, trade: Trade) -> float | None:
     """The Futures funding of this trade so far (signed from the account's side: negative = paid), from the account's own income history, or None when it cannot be read. A Spot trade has none (0.0).
     Read-only; never raises, never changes a trade, never delays an exit decision (docs/safety/net_pnl.md). The account id is read before anything can fail and the handler reads no ORM attribute, so an expired
@@ -648,6 +687,7 @@ async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
     established, which sends the caller to the emergency path."""
     venue = ctx.venue
     attempts = max(1, ctx.settings.protection_max_attempts)
+    account_id = _safe_account_id(ctx)  # read once, before any attempt can fail
     for i in range(attempts):
         try:
             order = await venue.find_order(client_id(trade, "entry"))
@@ -655,7 +695,7 @@ async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:
                 raise venue_mod.QuantityUnresolvable("entry order state unavailable")
             fee_base = await venue.resolve_entry_fee_base(order)  # type: ignore[attr-defined]
         except (venue_mod.QuantityUnresolvable, ccxt_async.NetworkError, ccxt_async.ExchangeError) as exc:
-            logger.warning("account %s: spot quantity attempt %d/%d unresolved (%s)", ctx.account.id, i + 1, attempts, type(exc).__name__)
+            _safe_log("warning", "account %s: spot quantity attempt %d/%d unresolved (%s)", account_id, i + 1, attempts, type(exc).__name__)
             if i + 1 < attempts:
                 await _sleep(ctx.settings.protection_retry_delay_seconds)
             continue
@@ -752,6 +792,7 @@ async def _exit_fills_and_fees(ctx: LiveContext, trade: Trade, *, want_fee: bool
 
 
 async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_price: float, protection: str) -> bool:
+    await _ensure_loaded(ctx, trade)  # an expired trade (after a rollback) is reloaded here, waiting out a brief lock, before anything is read from it
     ctx.venue.fee_other_total = {}  # commissions paid in BNB or another asset the bot does not value, collected as the fee reads below run
     fills, exit_fee_quote = await _exit_fills_and_fees(ctx, trade)
     extra: dict = {}
@@ -774,11 +815,16 @@ async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_pri
     if funding is not None:
         extra["funding_quote"] = funding
         extra["funding_read_at"] = ctx.now
+    await _ensure_loaded(ctx, trade)  # a rollback during the reads above must not stop the close from being recorded
     pnl = _pnl(trade.side, trade.entry_price, exit_price, qty)
-    moved = _cas(
-        ctx.session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION, TRADE_CLOSING), TRADE_CLOSED,
-        exit_price=exit_price, pnl=pnl, closed_at=ctx.now, close_reason=reason,
-        protection_status=protection, attention_reason=None, exit_fee_quote=exit_fee_quote, **extra,
+    # The close is the one write that must not be lost to a brief lock: only the LOCAL write is retried (at most two more times); no exchange call is repeated.
+    moved = await _db_retry(
+        ctx.session,
+        lambda: _cas(
+            ctx.session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION, TRADE_CLOSING), TRADE_CLOSED,
+            exit_price=exit_price, pnl=pnl, closed_at=ctx.now, close_reason=reason,
+            protection_status=protection, attention_reason=None, exit_fee_quote=exit_fee_quote, **extra,
+        ),
     )
     return moved
 
@@ -786,13 +832,15 @@ async def _finalize(ctx: LiveContext, trade: Trade, *, reason: str, fallback_pri
 async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str) -> None:
     """The exposure is already gone on the exchange (stop fired, or closed
     outside the bot). Record it - never send another order."""
+    await _ensure_loaded(ctx, trade)
     was_attention = trade.status == TRADE_ATTENTION or trade.attention_reason is not None
+    account_id = _safe_account_id(ctx)
     # Make sure no resting bot order survives to affect a future position.
     try:
         for cid, cond in await ctx.venue.list_open_bot_orders():
             await ctx.venue.cancel_by_client_id(cid, conditional=cond)
     except Exception:
-        logger.warning("account %s: could not clear leftover orders after close", ctx.account.id)
+        _safe_log("warning", "account %s: could not clear leftover orders after close", account_id)
     protection = PROTECTION_TRIGGERED if reason == "exchange_stop_triggered" else PROTECTION_CANCELLED
     if await _finalize(ctx, trade, reason=reason, fallback_price=trade.stop_loss_price, protection=protection):
         label = "stop-loss triggered at Binance" if reason == "exchange_stop_triggered" else "closed on Binance"
@@ -813,6 +861,7 @@ async def execute_exit(
     safely now; trade stays `closing`/`attention`, retried by reconcile)."""
     venue, session = ctx.venue, ctx.session
     was_attention = trade.status == TRADE_ATTENTION or trade.attention_reason is not None
+    account_id = _safe_account_id(ctx)  # read once, before anything can fail: the failure handlers below read nothing from the database
 
     if trade.status in (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION):
         if not _cas(session, trade, (TRADE_OPEN, TRADE_PROTECTING, TRADE_ATTENTION), TRADE_CLOSING, close_reason=reason):
@@ -828,7 +877,7 @@ async def execute_exit(
         try:
             final = await venue.cancel_protection(kind=trade.protective_kind or venue.default_kind, client_id=stop_cid)
         except Exception as exc:
-            logger.warning("account %s: could not confirm protective order cancelled (%s)", ctx.account.id, type(exc).__name__)
+            _safe_log("warning", "account %s: could not confirm protective order cancelled (%s)", account_id, type(exc).__name__)
             if venue.market_type == "spot":
                 # A resting stop still reserves the base asset and may still
                 # fire: selling on top of it is exactly the double exit.
@@ -849,7 +898,7 @@ async def execute_exit(
             expected = max(trade.quantity - sold, 0.0)
             remaining = min(expected, await venue.exposure())
     except Exception as exc:
-        logger.warning("account %s: could not read exchange state for exit (%s)", ctx.account.id, type(exc).__name__)
+        _safe_log("warning", "account %s: could not read exchange state for exit (%s)", account_id, type(exc).__name__)
         return "deferred"
 
     rules = venue._require_ready()
@@ -878,7 +927,7 @@ async def execute_exit(
                     cid, attempts=ctx.settings.entry_resolve_attempts, delay=ctx.settings.entry_resolve_delay_seconds
                 ) or order
         except Exception as exc:
-            logger.warning("account %s: exit order attempt failed (%s)", ctx.account.id, type(exc).__name__)
+            _safe_log("warning", "account %s: exit order attempt failed (%s)", account_id, type(exc).__name__)
             if emergency and t + 1 < tries and _is_transient(exc):
                 await _sleep(ctx.settings.protection_retry_delay_seconds)
                 continue
@@ -973,6 +1022,11 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     old_attempt, old_kind = trade.protection_attempt, trade.protective_kind
     old_cid = client_id(trade, "stop", old_attempt)
     new_cid = client_id(trade, "stop", old_attempt + 1)
+    # Everything the failure handler needs is read here, before the exchange calls that can fail: it then reads nothing from the database, so a failed move still cancels a possibly placed new stop and still tells the customer.
+    account_id = _safe_account_id(ctx)
+    alert_pair = _safe_get(trade, "pair", None) or _safe_get(ctx.account, "pair", "-")
+    alert_trade_id = _safe_get(trade, "id", "?")
+    alert_text = f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place."
     try:
         await venue.protection_precheck(side=trade.side, stop_price=stop)
         placed = await venue.place_protection(side=trade.side, quantity=trade.quantity, stop_price=stop, client_id=new_cid, entry_price=trade.entry_price)
@@ -980,13 +1034,13 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
         if verified is None or not verified.is_resting:
             raise RuntimeError("the new protective order is not resting")
     except Exception as exc:  # noqa: BLE001 - whatever went wrong, the old stop stays
-        logger.warning("account %s: trailing stop move to %.4f failed (%s); the existing stop stays", ctx.account.id, stop, type(exc).__name__)
+        _safe_log("warning", "account %s: trailing stop move to %.4f failed (%s); the existing stop stays", account_id, stop, type(exc).__name__)
         try:  # an order that may have been placed but not verified must not be left to add a second, unrecorded stop
             await venue.cancel_by_client_id(new_cid, conditional=True)
         except Exception:  # noqa: BLE001
             pass
-        if protection_guard.should_alert(ctx.account.id, trade.pair or ctx.account.pair, f"trail_failed:{trade.id}", now=ctx.now, repeat_hours=6.0):
-            await _notify(ctx, f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place.")
+        if protection_guard.should_alert(account_id, alert_pair, f"trail_failed:{alert_trade_id}", now=ctx.now, repeat_hours=6.0):
+            await _notify(ctx, alert_text)
         return "kept"
     moved = _cas(
         session, trade, (TRADE_OPEN,), TRADE_OPEN,
