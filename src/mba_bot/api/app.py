@@ -26,6 +26,7 @@ from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
 from ..operator_settings import effective_settings
 from ..scheduler import run_forever
+from .browser_guards import OriginCheckMiddleware, SecurityHeadersMiddleware
 from .ratelimit import RateLimitMiddleware
 from .routers import account, auth, billing, pairs, privacy, reports, telegram, trades
 
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
         # a 429 still carries the CORS headers and the browser shows the real status instead of a CORS error.
         app.add_middleware(RateLimitMiddleware, per_minute=settings.rate_limit_per_minute, auth_per_minute=settings.rate_limit_auth_per_minute)
 
+    if settings.csrf_origin_check:  # off (default): no check. Inside the CORS layer, after the rate limit.
+        app.add_middleware(OriginCheckMiddleware, allowed_origin=settings.frontend_origin)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
@@ -113,6 +117,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    if settings.security_headers:  # off (default): answers are exactly as before. Added last, so it is the outermost layer and covers every answer, refusals included.
+        app.add_middleware(SecurityHeadersMiddleware)
+    if not settings.disable_api_docs and settings.frontend_origin.startswith("https://"):
+        logger.warning("the interactive API docs are being served on a production-looking deployment; set DISABLE_API_DOCS=true")
 
     app.include_router(auth.router)
     app.include_router(account.router)
