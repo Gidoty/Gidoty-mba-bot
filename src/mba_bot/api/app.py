@@ -25,7 +25,8 @@ from ..db import init_db
 from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
 from ..operator_settings import effective_settings
-from ..scheduler import run_forever
+from .. import process_roles
+from ..scheduler import run_billing_forever, run_forever
 from .browser_guards import OriginCheckMiddleware, SecurityHeadersMiddleware
 from .ratelimit import RateLimitMiddleware
 from .routers import account, auth, billing, pairs, privacy, reports, statements, telegram, trades
@@ -72,19 +73,35 @@ async def lifespan(app: FastAPI):
         if guard_mode_is_unrecognised(os.environ.get(var)):
             logger.warning("%s has an unrecognised value; treating it as OBSERVE (nothing is blocked). Use off, observe or enforce.", var)
     install_log_safety(settings)  # idempotent; also covers `uvicorn mba_bot.api.app:app`
+    role = settings.process_role
+    try:
+        process_roles.refuse_other_role(settings, process_roles.ROLE_API)
+        if role == process_roles.ROLE_API:
+            process_roles.require_wal_setting(settings)
+    except process_roles.RoleError as exc:
+        raise RuntimeError(str(exc)) from None
     lock_handle = None
     if settings.api_single_instance_lock:
         # F-03: production starts through uvicorn, which never runs main.py, so the single-instance guard has to be
         # taken here. A second worker or a second copy of the service refuses to start instead of running a second scheduler.
+        # In the `api` role it is the API's own lock (the scheduler lock belongs to the worker), so API and worker run side by side but never two of either.
         try:
-            lock_handle = acquire_single_instance_lock(settings.lock_file)
+            lock_handle = acquire_single_instance_lock(settings.api_lock_file if role == process_roles.ROLE_API else settings.lock_file)
         except AlreadyRunning as exc:
             raise RuntimeError(str(exc)) from None
     init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms, lock_watch_seconds=settings.lock_watch_seconds)
-    with lock_watch.startup_probe("run_startup_default"):
-        daily_limit.run_startup_default()  # one time, the same rule for every account (docs/safety/account_daily_loss.md)
-    _ensure_scheduler_logs_are_visible()
-    scheduler_task = asyncio.create_task(run_forever(settings))
+    if role == process_roles.ROLE_API:
+        try:
+            process_roles.require_wal_on_disk(settings)
+        except process_roles.RoleError as exc:
+            raise RuntimeError(str(exc)) from None
+        _ensure_scheduler_logs_are_visible()
+        scheduler_task = asyncio.create_task(run_billing_forever(settings))  # no trading here: the worker process does that
+    else:
+        with lock_watch.startup_probe("run_startup_default"):
+            daily_limit.run_startup_default()  # one time, the same rule for every account (docs/safety/account_daily_loss.md)
+        _ensure_scheduler_logs_are_visible()
+        scheduler_task = asyncio.create_task(run_forever(settings))
     scheduler_task.add_done_callback(_log_scheduler_task_ended)
     try:
         yield

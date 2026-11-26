@@ -361,7 +361,8 @@ async def _renewal_reconcile(settings: Settings) -> None:
         logger.warning("billing: outcome=error reason=renewal_job_failed cause=%s", type(exc).__name__)
 
 
-async def run_poll_forever(settings: Settings) -> None:
+async def run_poll_forever(settings: Settings, *, billing: bool = True) -> None:
+    """The trading rounds. `billing=True` (the default, and the only mode of the single process) also runs the billing jobs after each round; the worker role passes False because the API process runs them."""
     base = settings
     while True:
         settings = effective_settings(base)  # the operator's database settings, read fresh each round (docs/safety/operator_settings.md); no rows = `base`
@@ -369,6 +370,16 @@ async def run_poll_forever(settings: Settings) -> None:
             await run_once(settings)
         except Exception:
             logger.exception("unexpected error in scheduler loop")
+        if billing:
+            await _billing_reminders(settings)
+            await _renewal_reconcile(settings)
+        await asyncio.sleep(settings.poll_interval_seconds)
+
+
+async def run_billing_forever(settings: Settings) -> None:
+    """The billing jobs alone (reminders, Paystack renewal recovery) on the poll interval, for the API role (docs/safety/process_split.md). Each job already does nothing unless its own switch is on, is rate limited
+    by its own clock and catches its own errors."""
+    while True:
         await _billing_reminders(settings)
         await _renewal_reconcile(settings)
         await asyncio.sleep(settings.poll_interval_seconds)
@@ -388,7 +399,7 @@ async def _supervised(name: str, make_loop) -> None:
             logger.error("the scheduler's %s returned unexpectedly; restarting it", name)
 
 
-async def run_forever(settings: Settings) -> None:
+async def run_forever(settings: Settings, *, billing: bool = True) -> None:
     # Startup reconciliation: before the first poll, bring every live trade
     # in line with Binance. SQLite alone is never trusted after a restart.
     try:
@@ -397,6 +408,6 @@ async def run_forever(settings: Settings) -> None:
     except Exception:
         logger.exception("startup reconciliation failed")
     await asyncio.gather(
-        _supervised("poll loop", lambda: run_poll_forever(settings)),
+        _supervised("poll loop", lambda: run_poll_forever(settings, billing=billing)),
         _supervised("recovery loop", lambda: run_recovery_forever(settings)),
     )

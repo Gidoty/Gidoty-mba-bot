@@ -1,0 +1,23 @@
+# TEMPLATE, NOT INSTALLED. Owner-run (docs/safety/process_split.md): copy to /etc/systemd/system/, adjust the paths, `systemctl daemon-reload`.
+# The API and billing process: HTTP (including the Telegram and payment webhooks) and the billing jobs, and NO trading. It may be restarted while a live trade is open: the worker keeps managing it.
+[Unit]
+Description=MBA Bot API and billing
+After=network-online.target
+
+[Service]
+Type=simple
+User=mba
+WorkingDirectory=/opt/mba-bot
+EnvironmentFile=/opt/mba-bot/.env
+Environment=PYTHONPATH=/opt/mba-bot/src
+Environment=PROCESS_ROLE=api
+Environment=SQLITE_WAL=1
+Environment=API_SINGLE_INSTANCE_LOCK=1
+# one worker process only: the billing jobs and the lock assume it (uvicorn's default)
+ExecStart=/opt/mba-bot/.venv/bin/python -m uvicorn mba_bot.api.app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
