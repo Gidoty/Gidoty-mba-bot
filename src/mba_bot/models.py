@@ -407,6 +407,14 @@ class Trade(Base):
     # known (no fee data, or a fee paid in an asset the bot cannot value such as BNB). Paper rows stay NULL. Reporting only: nothing in the trading path reads these.
     entry_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_fee_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Futures funding (docs/safety/net_pnl.md): the sum of the account's FUNDING_FEE income on this symbol over the holding period, in the quote currency, from the account's own income history, SIGNED from the
+    # account's side (negative = paid, positive = received). NULL = not read yet or the read failed (never guessed); 0.0 = the read worked and there was none. A Spot trade is written 0.0 at close. Reporting and the cost
+    # buffer only: a failed read never blocks a close. `funding_read_at` is when it was last read (an open trade is re-read at most every 30 minutes).
+    funding_quote: Mapped[float | None] = mapped_column(Float, nullable=True)
+    funding_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A commission paid in an asset the bot does not value (BNB): the asset and the total amount of it, recorded as paid. The quote-currency fee stays NULL (it is never guessed), so net stays unknown for that trade.
+    fee_asset: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    fee_asset_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Counters that make every retry idempotent without storing client ids:
     # the client order id of the Nth protective stop / exit order is a pure
     # function of (trade.id, role, N). The counter is committed BEFORE the
