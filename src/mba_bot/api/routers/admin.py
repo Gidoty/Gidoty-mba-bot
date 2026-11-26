@@ -36,6 +36,7 @@ from ..admin_schemas import (
     CustomerList,
     CustomersPanel,
     HealthPanel,
+    OpenTradesPanel,
     ResultsPanel,
     RevealOut,
     RevealRequest,
@@ -205,6 +206,11 @@ def reveal(body: RevealRequest, request: Request, admin: Customer = Depends(requ
 @router.get("/skipped-pairs", response_model=SkipsPanel)
 def skipped_pairs(admin: Customer = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
     return admin_service.cached(("skips",), lambda: admin_service.skips_panel(db, _now()))
+
+
+@router.get("/open-trades", response_model=OpenTradesPanel)
+def open_trades(admin: Customer = Depends(require_admin), db: Session = Depends(get_db)) -> dict:
+    return admin_service.cached(("open_trades",), lambda: admin_service.open_trades_panel(db, _now()))
 
 
 @router.get("/billing", response_model=BillingPanelOut)

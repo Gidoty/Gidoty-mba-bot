@@ -21,7 +21,7 @@ from mba_bot.billing import entitlement
 from mba_bot.db import session_scope
 from mba_bot.models import AdminAudit, AdminTotp, BillingPayment, Customer, PairSkip, Subscription
 
-ADMIN_GETS = ["/api/admin/customers/summary", "/api/admin/bots", "/api/admin/health", "/api/admin/results", "/api/admin/customers", "/api/admin/skipped-pairs", "/api/admin/billing"]
+ADMIN_GETS = ["/api/admin/customers/summary", "/api/admin/bots", "/api/admin/health", "/api/admin/results", "/api/admin/customers", "/api/admin/skipped-pairs", "/api/admin/billing", "/api/admin/open-trades"]
 EMAIL_LIKE = re.compile(r"[\w.+\-]+@[\w\-]+\.[\w.\-]+")
 FORGED = {"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1", "X-Forwarded-User": ADMIN_EMAIL, "X-Forwarded-Email": ADMIN_EMAIL, "X-Admin": "1", "CF-Connecting-IP": "127.0.0.1",
           "Forwarded": "for=127.0.0.1", "X-Original-Forwarded-For": "127.0.0.1", "X-Forwarded-Host": "localhost", "X-Authenticated-User": ADMIN_EMAIL, "Remote-User": ADMIN_EMAIL}
@@ -733,7 +733,7 @@ def test_the_migration_is_additive_idempotent_reversible_and_matches_the_models(
     run(mig.downgrade)  # reversible and repeatable
     assert not inspect(eng).has_table("admin_totp") and not inspect(eng).has_table("admin_audit")
     script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
-    assert script.get_heads() == ["c3f8a2d5b7e9"] and mig.down_revision == "d9b5f7c2e4a6"
+    assert script.get_heads() == ["d4a1b7c3e9f2"] and mig.down_revision == "d9b5f7c2e4a6"
 
 
 # ------------------------------------------------------------------------------------------------ "paid" and the modes follow the entitlement rule, flag off and on
