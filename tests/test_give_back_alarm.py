@@ -160,3 +160,121 @@ def test_a_paper_trade_never_alerts_the_owner(db, monkeypatch):
 
         asyncio.run(trader._giveback_alert(s, acct, t, 105.0, make_settings(giveback_alert_fraction=0.5), now=now))
     assert sent == []
+
+
+# ---------------------------------------------------------------------------------------------- the alert never raises into the cycle
+def _locked_error():
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+
+    return OperationalError("stmt", {}, sqlite3.OperationalError("database is locked"))
+
+
+class _ExpiredTrade:
+    """Every attribute read fails once broken: an expired ORM object whose reload hits 'database is locked'. The id is readable only before that."""
+
+    def __init__(self):
+        object.__setattr__(self, "broken", False)
+        object.__setattr__(self, "_v", dict(id="trade-789", is_paper=False, status="open", side="long", entry_price=100.0, initial_stop_price=90.0, peak_price=140.0, pair="BTCUSDT"))
+
+    def __getattr__(self, name):
+        if object.__getattribute__(self, "broken"):
+            raise _locked_error()
+        try:
+            return object.__getattribute__(self, "_v")[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value) if name == "broken" else object.__getattribute__(self, "_v").__setitem__(name, value)
+
+
+class _Sess:
+    def __init__(self, *, active=True, rollback_fails=False):
+        self.is_active, self.rollbacks, self.rollback_fails = active, 0, rollback_fails
+
+    def rollback(self):
+        self.rollbacks += 1
+        if self.rollback_fails:
+            raise _locked_error()
+
+
+def _alert(trade, session, settings, price=100.0):
+    import asyncio
+
+    asyncio.run(trader._giveback_alert(session, SimpleNamespace(id="a", pair="BTCUSDT", bot_code="X"), trade, price, settings, now=datetime.now(U)))
+
+
+def test_the_handler_reads_no_orm_attribute_when_the_trade_is_expired_and_nothing_escapes(monkeypatch, caplog):
+    t = _ExpiredTrade()
+    settings = make_settings(giveback_alert_fraction=0.5)
+
+    def claim(*a, **k):
+        t.broken = True  # the failed commit leaves the trade expired, then the reload fails
+        raise _locked_error()
+
+    monkeypatch.setattr(trader.protection_guard, "claim_alert", claim)
+    s = _Sess(active=False)
+    with caplog.at_level("ERROR"):
+        _alert(t, s, settings)  # must return normally
+    assert "trade trade-789: could not send the give-back alert" in caplog.text
+    assert s.rollbacks == 1  # a transaction that cannot continue is rolled back
+
+
+def test_a_healthy_transaction_is_not_rolled_back_by_the_handler(monkeypatch):
+    t = _ExpiredTrade()
+    monkeypatch.setattr(trader.protection_guard, "claim_alert", lambda *a, **k: (_ for _ in ()).throw(_locked_error()))
+    s = _Sess(active=True)
+    _alert(t, s, make_settings(giveback_alert_fraction=0.5))
+    assert s.rollbacks == 0  # the cycle's other pending changes are kept
+
+
+def test_a_failing_rollback_and_a_failing_log_are_swallowed(monkeypatch):
+    t = _ExpiredTrade()
+    monkeypatch.setattr(trader.protection_guard, "claim_alert", lambda *a, **k: (_ for _ in ()).throw(_locked_error()))
+    monkeypatch.setattr(trader.logger, "exception", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("log broken")))
+    _alert(t, _Sess(active=False, rollback_fails=True), make_settings(giveback_alert_fraction=0.5))  # raises nothing
+
+
+def test_the_owner_send_failing_is_swallowed(monkeypatch):
+    t = _ExpiredTrade()
+    monkeypatch.setattr(trader.protection_guard, "claim_alert", lambda *a, **k: True)
+
+    async def boom(settings, text):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(trader.strategy_guards, "alert_owner", boom)
+    _alert(t, _Sess(), make_settings(giveback_alert_fraction=0.5))
+
+
+def test_a_commit_that_fails_in_the_claim_never_breaks_the_real_cycle(db, monkeypatch):
+    """Real cycle, real database: the claim's commit hits 'database is locked'. claim_alert falls back to its in-memory rule, the cycle runs to the end, the trade is untouched, no cycle failure is recorded."""
+    import sqlite3
+
+    from sqlalchemy import event
+
+    from mba_bot import db as dbmod
+
+    sent = recorder(monkeypatch)
+    client, settings, aid, base = live(monkeypatch, giveback_alert_fraction=0.5)
+    candles(client, base, [(95, 100, 92, 99), (99, 140, 98, 110)])
+    state = {"n": 0}
+
+    def lock_commit(conn, cursor, statement, parameters, context, executemany):
+        if "alert_marks" in statement and statement.lstrip().upper().startswith("INSERT"):
+            state["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+    event.listen(dbmod._engine, "before_cursor_execute", lock_commit)
+    try:
+        run_cycle(aid, settings)  # raises nothing
+    finally:
+        event.remove(dbmod._engine, "before_cursor_execute", lock_commit)
+    assert state["n"] >= 1
+    t = the_trade(aid)
+    assert t.status == "open" and t.stop_loss_price == 43.0 and not client.orders_by_role("exit")
+    with session_scope() as s:
+        from mba_bot.models import TradingAccount
+
+        assert s.get(TradingAccount, aid).last_error is None

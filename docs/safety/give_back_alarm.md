@@ -15,3 +15,7 @@ ALERT ONLY. It places no order, moves no stop and changes no state on the trade;
 ## Limits
 - The price used is the last candle's close from the round's candle read, so a fall and recovery between two rounds is not seen.
 - The alert tells you a trade is giving profit back; it does not say what to do. That is the point of the staged lock, the time stop and Part H.
+
+## The alert never raises into the cycle
+
+The trade id is read before anything can fail, and the failure handler reads no ORM attribute. The claim (`protection_guard.claim_alert`, which commits once per trade) already falls back to its in-memory rule on any database trouble; a failure that still escapes it, or a failing owner send, is logged and swallowed. The handler rolls the session back only if its transaction cannot continue, so the cycle's other pending changes are kept. The log call and the rollback are each guarded.

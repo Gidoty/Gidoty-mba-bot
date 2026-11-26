@@ -2288,7 +2288,9 @@ def _track_peak(session, trade: Trade, candles: list, price: float | None, *, no
 async def _giveback_alert(session, account, trade: Trade, price: float | None, settings: Settings, *, now) -> None:
     """ONE owner alert per open LIVE trade that has given back GIVEBACK_ALERT_FRACTION of the profit at its best price, once that best price was at least GIVEBACK_ALERT_MIN_PEAK_R x R (Part G,
     docs/safety/give_back_alarm.md). Off at 0. Alert only: no order, no stop move, no change to anything. Claimed once per trade in the database (alert_marks), so a restart or a second process does not repeat it. Text
-    holds the bot code, the pair and numbers, never a name, an email or a key. Never raises."""
+    holds the bot code, the pair and numbers, never a name, an email or a key. Never raises: the trade id is read before anything can fail, the handler reads no ORM attribute, and the claim's own commit is inside the same guard.
+    A failure of the claim or the send is logged and swallowed; the session is rolled back only if its transaction cannot continue."""
+    trade_id = _safe_trade_id(trade)
     try:
         frac = settings.giveback_alert_fraction
         if frac <= 0 or trade.is_paper or trade.status != TRADE_OPEN or not trade.initial_stop_price or trade.peak_price is None or price is None:
@@ -2306,7 +2308,15 @@ async def _giveback_alert(session, account, trade: Trade, price: float | None, s
         await strategy_guards.alert_owner(settings, f"Give-back: bot {account.bot_code or 'unknown'} {trade.pair or account.pair} {trade.side}: best price was {peak_gain / r:+.1f} R, now {now_gain / r:+.1f} R "
                                           f"({(peak_gain - now_gain) / peak_gain * 100:.0f}% of the peak profit given back). Alert only, nothing was changed.")
     except Exception:  # noqa: BLE001 - an alert must never stop trade management
-        logger.exception("trade %s: could not send the give-back alert", getattr(trade, "id", "?"))
+        try:
+            logger.exception("trade %s: could not send the give-back alert", trade_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if not session.is_active:
+                session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _maybe_exit(session, account, client, open_trade: Trade, signal, current_price, notifier, *, is_paper, now, settings=None, multi_label=False):
