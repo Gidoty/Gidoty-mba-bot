@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 from .config import load_settings, warn_about_legacy_futures_testnet_env
-from . import daily_limit
+from . import daily_limit, lock_watch
 from .db import init_db
 from .log_safety import install_log_safety
 from .instance_lock import AlreadyRunning, acquire_single_instance_lock
@@ -34,8 +34,9 @@ def main() -> None:
         lock = acquire_single_instance_lock(settings.lock_file)  # noqa: F841
     except AlreadyRunning as exc:
         raise SystemExit(str(exc))
-    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms)
-    daily_limit.run_startup_default()
+    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms, lock_watch_seconds=settings.lock_watch_seconds)
+    with lock_watch.startup_probe("run_startup_default"):
+        daily_limit.run_startup_default()
     asyncio.run(run_forever(settings))
 
 

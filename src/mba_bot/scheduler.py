@@ -29,7 +29,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from . import exchange
+from . import exchange, lock_watch
 from .config import Settings
 from .db import list_active_accounts, list_live_unsettled_trades, list_open_stop_limit_trades, session_scope
 from .models import PROTECTION_PROTECTED, TRADE_OPEN, TradingAccount
@@ -392,7 +392,8 @@ async def run_forever(settings: Settings) -> None:
     # Startup reconciliation: before the first poll, bring every live trade
     # in line with Binance. SQLite alone is never trusted after a restart.
     try:
-        await recover_once(settings, include_healthy=True)
+        with lock_watch.startup_probe("recover_once"):
+            await recover_once(settings, include_healthy=True)
     except Exception:
         logger.exception("startup reconciliation failed")
     await asyncio.gather(
