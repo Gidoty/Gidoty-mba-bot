@@ -49,8 +49,20 @@ export function killSwitchTone(state) {
 export function resultLine(g, unit = "USDT") {
   const n = (x) => `${x >= 0 ? "+" : ""}${Number(x).toFixed(2)}`;
   if (g.simulated) return `${n(g.gross_pnl)} ${unit} (simulated, no fees or slippage)`;
-  if (g.net_pnl !== null && g.net_pnl !== undefined) return `${n(g.net_pnl)} ${unit} net after fees (${n(g.gross_pnl)} before fees)`;
+  if (g.net_pnl !== null && g.net_pnl !== undefined) {
+    const withFunding = g.funding_complete === true && g.funding !== null && g.funding !== undefined;
+    return withFunding ? `${n(g.net_pnl)} ${unit} net after fees and funding (gross ${n(g.gross_pnl)}, funding ${n(g.funding)})` : `${n(g.net_pnl)} ${unit} net after fees (${n(g.gross_pnl)} before fees)`;
+  }
+  if (g.fees_complete && g.funding_complete === false) return `${n(g.gross_pnl)} ${unit} gross, after fees, before funding`;
   return `${n(g.gross_pnl)} ${unit} before fees`;
+}
+
+// The give-back figures exactly as the server counted them: trades whose best price reached +1 R and closed below the entry net of (assumed) costs, and trades that closed more than 1 R below their best price.
+// Empty when no closed trade in the group has a recorded best price (older trades have none).
+export function giveBackLine(g) {
+  if (!g || !g.trades_with_peak) return "";
+  const rate = g.give_back_rate === null || g.give_back_rate === undefined ? "-" : `${Math.round(g.give_back_rate * 100)}%`;
+  return `Give-back: ${g.gave_back_to_loss || 0} of ${g.reached_1r || 0} trades that reached +1R closed below entry net of costs (${rate}); ${g.closed_far_below_peak || 0} closed more than 1R below their best price (${g.trades_with_peak} trades with a recorded best price)`;
 }
 
 export function winRate(g) {

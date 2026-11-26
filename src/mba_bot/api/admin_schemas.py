@@ -61,6 +61,11 @@ class ResultGroup(BaseModel):
     funding: float | None = None
     trades_with_funding: int = 0
     funding_complete: bool = False
+    trades_with_peak: int = 0
+    reached_1r: int = 0
+    gave_back_to_loss: int = 0
+    give_back_rate: float | None = None
+    closed_far_below_peak: int = 0
     net_pnl: float | None
     simulated: bool
     label: str
