@@ -36,11 +36,12 @@ _engine: Engine | None = None
 _SessionLocal: sessionmaker | None = None
 
 
-def init_db(database_url: str, *, wal: bool = False, busy_timeout_ms: int = 15000) -> None:
+def init_db(database_url: str, *, wal: bool = False, busy_timeout_ms: int = 15000, lock_watch_seconds: float = 0.0) -> None:
     """`wal=False` (the default) is exactly the previous behaviour. `wal=True` (SQLITE_WAL, prepared but not
     deployed) switches a SQLite file to write-ahead logging with a busy timeout on every connection; see
     docs/security/wal_runbook.md for the backup, enable and rollback steps. The journal mode is stored in the
-    database file, so turning the flag off later does NOT revert it: follow the runbook's rollback."""
+    database file, so turning the flag off later does NOT revert it: follow the runbook's rollback.
+    `lock_watch_seconds` above 0 attaches the observation-only write-transaction timer (lock_watch.py, docs/safety/lock_watch.md); 0 (the default here) attaches nothing."""
     global _engine, _SessionLocal
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     _engine = create_engine(database_url, connect_args=connect_args)
@@ -52,6 +53,10 @@ def init_db(database_url: str, *, wal: bool = False, busy_timeout_ms: int = 1500
             cur.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
             cur.execute("PRAGMA synchronous=NORMAL")
             cur.close()
+    if lock_watch_seconds > 0:
+        from . import lock_watch
+
+        lock_watch.install(_engine, threshold_seconds=lock_watch_seconds)
     Base.metadata.create_all(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
     # First run only: give the kill switch its RELEASED row (see kill_switch.ensure_state_row). Never raises.

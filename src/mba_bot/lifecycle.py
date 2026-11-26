@@ -583,9 +583,27 @@ async def _fee_from_fills(venue, trade: Trade, *, order_side: str, quantity: flo
         return None
 
 
+def _safe_account_id(ctx) -> str:
+    """The account id for a log line, read in a way that cannot raise (an expired ORM object whose reload hits 'database is locked' raises on any attribute read, and that must not turn a log line into an error)."""
+    try:
+        return str(ctx.account.id)
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+def _safe_log(level: str, message: str, *args) -> None:
+    """Log without ever raising."""
+    try:
+        getattr(logger, level)(message, *args)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def read_funding(ctx: LiveContext, trade: Trade) -> float | None:
     """The Futures funding of this trade so far (signed from the account's side: negative = paid), from the account's own income history, or None when it cannot be read. A Spot trade has none (0.0).
-    Read-only; never raises, never changes a trade, never delays an exit decision (docs/safety/net_pnl.md)."""
+    Read-only; never raises, never changes a trade, never delays an exit decision (docs/safety/net_pnl.md). The account id is read before anything can fail and the handler reads no ORM attribute, so an expired
+    object that cannot be reloaded gives None and a guarded log line, never an error out of the close path (docs/safety/funding_never_blocks_close.md)."""
+    account_id = _safe_account_id(ctx)
     try:
         if ctx.venue.market_type != "futures":
             return 0.0
@@ -593,21 +611,34 @@ async def read_funding(ctx: LiveContext, trade: Trade) -> float | None:
         end = int(ctx.now.timestamp() * 1000) + 60_000
         return await ctx.venue.funding_income(start_ms=start, end_ms=end)
     except Exception as exc:  # noqa: BLE001
-        logger.info("account %s: could not read the funding income (%s)", ctx.account.id, type(exc).__name__)
+        _safe_log("info", "account %s: could not read the funding income (%s)", account_id, type(exc).__name__)
         return None
 
 
 async def refresh_funding(ctx: LiveContext, trade: Trade, *, min_interval_seconds: float = 1800.0) -> float:
     """The funding PAID so far on an open trade (a positive number; funding received counts as 0), re-read at most every `min_interval_seconds`. Used only for the cost buffer of the staged profit lock; a
-    failed read returns what is stored (or 0.0): it never blocks anything."""
-    stored = trade.funding_quote
-    last = _aware(trade.funding_read_at) if trade.funding_read_at else None
-    if ctx.venue.market_type == "futures" and (last is None or (ctx.now - last).total_seconds() >= min_interval_seconds):
-        read = await read_funding(ctx, trade)
-        if read is not None:
-            _set(ctx.session, trade, funding_quote=read, funding_read_at=ctx.now)
-            stored = read
-    return max(0.0, -(stored or 0.0))
+    failed read returns what is stored (or 0.0): it never blocks anything. It NEVER raises: the stored value is saved with a commit, and a failure of that commit (database locked) or of any attribute read is
+    logged and swallowed; the freshly read value is still used for this call, and the next call reads again (docs/safety/funding_never_blocks_close.md)."""
+    account_id = _safe_account_id(ctx)
+    stored = 0.0
+    try:
+        stored = trade.funding_quote
+        last = _aware(trade.funding_read_at) if trade.funding_read_at else None
+        if ctx.venue.market_type == "futures" and (last is None or (ctx.now - last).total_seconds() >= min_interval_seconds):
+            read = await read_funding(ctx, trade)
+            if read is not None:
+                stored = read  # a value read from the exchange is good for this call whether or not it could be saved
+                try:
+                    _set(ctx.session, trade, funding_quote=read, funding_read_at=ctx.now)
+                except Exception:  # noqa: BLE001 - _set has already rolled back; the funding figure is only a cost estimate
+                    _safe_log("warning", "account %s: could not save the funding figure; using the value just read", account_id)
+        return max(0.0, -(stored or 0.0))
+    except Exception:  # noqa: BLE001 - never into the stop and lock path
+        _safe_log("warning", "account %s: could not refresh the funding figure; using the last known value", account_id)
+        try:
+            return max(0.0, -(stored or 0.0))
+        except Exception:  # noqa: BLE001
+            return 0.0
 
 
 async def _resolve_spot_quantity(ctx: LiveContext, trade: Trade) -> bool:

@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import guard_mode_is_unrecognised, load_settings, verify_mode_is_unrecognised, warn_about_legacy_futures_testnet_env
-from .. import daily_limit
+from .. import daily_limit, lock_watch
 from ..db import init_db
 from ..instance_lock import AlreadyRunning, acquire_single_instance_lock
 from ..log_safety import install_log_safety
@@ -80,8 +80,9 @@ async def lifespan(app: FastAPI):
             lock_handle = acquire_single_instance_lock(settings.lock_file)
         except AlreadyRunning as exc:
             raise RuntimeError(str(exc)) from None
-    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms)
-    daily_limit.run_startup_default()  # one time, the same rule for every account (docs/safety/account_daily_loss.md)
+    init_db(settings.database_url, wal=settings.sqlite_wal, busy_timeout_ms=settings.sqlite_busy_timeout_ms, lock_watch_seconds=settings.lock_watch_seconds)
+    with lock_watch.startup_probe("run_startup_default"):
+        daily_limit.run_startup_default()  # one time, the same rule for every account (docs/safety/account_daily_loss.md)
     _ensure_scheduler_logs_are_visible()
     scheduler_task = asyncio.create_task(run_forever(settings))
     scheduler_task.add_done_callback(_log_scheduler_task_ended)
