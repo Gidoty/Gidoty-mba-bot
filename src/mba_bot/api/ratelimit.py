@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 
 # Never limited: the providers' callbacks and the health probe.
 EXEMPT_PATHS = frozenset({"/api/health", "/api/billing/webhook", "/api/billing/nowpayments/ipn", "/api/telegram/webhook"})
-AUTH_PATHS = frozenset({"/api/auth/login", "/api/auth/signup"})
+AUTH_PATHS = frozenset({"/api/auth/login", "/api/auth/signup", "/api/auth/password-reset/request", "/api/auth/password-reset/confirm", "/api/auth/email/verify/confirm"})
 _MAX_KEYS = 20_000
 
 

@@ -30,6 +30,8 @@ import Positions from "./pages/Positions.jsx";
 import Practice from "./pages/Practice.jsx";
 import Signup from "./pages/Signup.jsx";
 import TradeHistory from "./pages/TradeHistory.jsx";
+import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/RecoveryPages.jsx";
+import { isRecoveryRoute } from "./lib/recovery.js";
 import { navigate, useHashRoute } from "./useHashRoute.js";
 
 // Static legal pages - reachable regardless of auth state, and
@@ -92,6 +94,9 @@ export default function App() {
     // Always reachable, even while a logged-in customer is blocked by
     // the legal-consent gate below, or still "loading".
     content = <LegalPage document={LEGAL_ROUTES[route]} />;
+  } else if (isRecoveryRoute(route)) {
+    // Reachable signed in or out: the link in an email opens here (the token is in the URL fragment).
+    content = route === "forgot-password" ? <ForgotPassword /> : route.startsWith("reset-password/") ? <ResetPassword route={route} /> : <VerifyEmail route={route} />;
   } else if (customer === undefined) {
     content = <div className="flex min-h-screen items-center justify-center text-muted">Loading...</div>;
   } else if (!customer) {

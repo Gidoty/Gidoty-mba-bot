@@ -199,8 +199,27 @@ async def run_reminders_once(settings: Settings, now: datetime | None = None) ->
         return 0
     now = now or datetime.now(timezone.utc)
     with session_scope() as db:
-        due = due_period_end_reminders(db, settings, now) + due_period_ended_notices(db, settings, now)
+        soon = due_period_end_reminders(db, settings, now)
+        ended = due_period_ended_notices(db, settings, now)
+        due = soon + ended
         targets = [(telegram_target(db, cid), text) for cid, text in due]
     for target, text in targets:  # after the commit
         await send_to_customer(settings, target, text)
+    await _email_copies(settings, soon, ended)
     return len(targets)
+
+
+async def _email_copies(settings: Settings, soon: list, ended: list) -> None:
+    """The same notices by email, when email is set up (docs/safety/email_and_recovery.md). The reminder is non-essential (a customer can opt out); "your period has ended" is essential. Never raises."""
+    if settings.email_transport == "off":
+        return
+    try:
+        from ..email_flows import send_notice
+
+        with session_scope() as db:
+            for cid, text in soon:
+                await send_notice(db, settings, cid, "Your MBA Bot subscription renews soon", text, essential=False)
+            for cid, text in ended:
+                await send_notice(db, settings, cid, "Your MBA Bot subscription period has ended", text, essential=True)
+    except Exception:  # noqa: BLE001
+        logger.warning("billing notice emails could not be sent")

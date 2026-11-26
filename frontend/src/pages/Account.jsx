@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+import { api } from "../api/client.js";
+import { emailStatusText } from "../lib/recovery.js";
 
 import { linkButton, secondaryButton } from "../components/form.jsx";
 import DataRequestCard from "../components/DataRequestCard.jsx";
@@ -9,6 +12,29 @@ import { dayMonthYear } from "../lib/format.js";
 import { navigate } from "../useHashRoute.js";
 
 const STATEMENT_URL = `${import.meta.env.VITE_API_URL || "/api"}/statements/trades.csv`;
+
+function EmailPanel() {
+  const [status, setStatus] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const load = () => api.get("/auth/email/status").then(setStatus, () => setStatus({ available: false }));
+  useEffect(() => { load(); }, []);
+  return (
+    <Card>
+      <CardTitle>Email</CardTitle>
+      <p className="text-sm text-fg">{emailStatusText(status)}</p>
+      {status?.available && !status.verified && (
+        <button type="button" className={secondaryButton} onClick={() => api.post("/auth/email/verify/request").then((r) => setMsg(r.message), (e) => setMsg(e.message))}>Send a confirmation link</button>
+      )}
+      {status?.available && (
+        <label className="mt-3 flex items-center gap-2 text-sm text-fg">
+          <input type="checkbox" checked={status.opt_out_non_essential} onChange={(e) => api.post("/auth/email/preferences", { opt_out_non_essential: e.target.checked }).then(load)} />
+          Do not send me reminders and product notices by email (important account and billing messages are still sent).
+        </label>
+      )}
+      {msg && <p className="mt-2 text-sm text-muted" role="status">{msg}</p>}
+    </Card>
+  );
+}
 
 export default function Account({ customer, onLogout }) {
   const { account } = useAccount();
@@ -34,6 +60,7 @@ export default function Account({ customer, onLogout }) {
         <p className="text-sm text-fg">A spreadsheet file (CSV) of your closed trades with results before fees, fees, funding and net as separate columns. A column is empty when the figure was not recorded for that trade (funding is not recorded yet).</p>
         <a className={secondaryButton} href={STATEMENT_URL} download>Download statement (CSV)</a>
       </Card>
+      <EmailPanel />
 
       <Card>
         <div className="flex items-center gap-4">

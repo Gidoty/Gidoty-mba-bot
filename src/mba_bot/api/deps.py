@@ -5,15 +5,16 @@ from __future__ import annotations
 from typing import Iterator
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings, load_settings
 from ..db import session_scope
 from .. import pair_catalog
 from ..legal import legal_acceptance_current
-from ..models import Customer
+from ..models import Customer, CustomerEmailState
 from ..operator_settings import effective_settings
-from .security import SESSION_COOKIE_NAME, TokenError, read_customer_id
+from .security import SESSION_COOKIE_NAME, TokenError, read_session, to_micros
 
 
 def get_settings() -> Settings:
@@ -33,12 +34,19 @@ def get_current_customer(
     if not token or not settings.jwt_secret:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     try:
-        customer_id = read_customer_id(token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        customer_id, issued_us = read_session(token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm)
     except TokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated") from exc
 
-    customer = db.get(Customer, customer_id)
+    # One query for the customer and the moment of the last password reset (a join, so the number of statements per request is what it was). The Customer comes back through the normal identity map, as db.get gave it.
+    found = db.execute(
+        select(Customer, CustomerEmailState.sessions_valid_after).outerjoin(CustomerEmailState, CustomerEmailState.customer_id == Customer.id).where(Customer.id == customer_id)
+    ).first()
+    customer, valid_after = (found[0], found[1]) if found is not None else (None, None)
     if customer is None or not customer.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
+    # A password reset ends every session issued before it (docs/safety/email_and_recovery.md). No reset yet = no row or NULL = nothing refused.
+    if valid_after is not None and issued_us < to_micros(valid_after):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     return customer
 

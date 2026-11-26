@@ -200,6 +200,17 @@ def parse_signups_mode(raw: str | None) -> str:
     return "open" if value in ("", "open") else "closed"
 
 
+def parse_email_transport(raw: str | None) -> str:
+    """off | smtp | http. Unset, empty or anything else is off: a typo can never start sending mail."""
+    value = (raw or "").strip().lower()
+    return value if value in ("smtp", "http") else "off"
+
+
+def parse_smtp_security(raw: str | None) -> str:
+    value = (raw or "").strip().lower()
+    return value if value in ("ssl", "none") else "starttls"
+
+
 def parse_guard_mode(raw: str | None) -> str:
     """off | observe | enforce for the protection guards. Unset or empty is the default, observe. An unrecognised
     value is also observe (visible in the logs, blocks nothing), never silently off and never enforce."""
@@ -517,6 +528,19 @@ class Settings:
     admin_actions_enabled: bool = False
     # Account closure (docs/safety/statements_and_closure.md): False = off (default). True: an admin can COMPLETE an approved deletion request from the dashboard (erases the customer's personal data).
     account_deletion_enabled: bool = False
+    # Email (docs/safety/email_and_recovery.md): `off` (default) = nothing is sent and the recovery screens say email is not set up. `smtp` or `http` need their credentials below, entered by the owner in the
+    # environment (never in the database, never in the repository).
+    email_transport: str = "off"
+    email_from: str = ""
+    email_smtp_host: str = ""
+    email_smtp_port: int = 587
+    email_smtp_user: str = ""
+    email_smtp_password: str | None = field(default=None, repr=False)
+    email_smtp_security: str = "starttls"  # starttls | ssl | none
+    email_http_url: str = ""
+    email_http_key: str | None = field(default=None, repr=False)
+    email_reset_ttl_minutes: int = 30
+    email_verify_ttl_hours: int = 48
     subscription_billing_enabled: bool = False
     # Hourly recovery of a Paystack renewal whose webhook never arrived (docs/security/billing_paystack_subscriptions.md). OFF by default: it makes read-only calls with the live Paystack key, and the operator
     # enables anything that uses a secret key by hand. Read only while SUBSCRIPTION_BILLING_ENABLED is on.
@@ -757,6 +781,17 @@ def load_settings() -> Settings:
         signups_mode=parse_signups_mode(os.environ.get("SIGNUPS_MODE")),
         admin_actions_enabled=_env_bool("ADMIN_ACTIONS_ENABLED", False),
         account_deletion_enabled=_env_bool("ACCOUNT_DELETION_ENABLED", False),
+        email_transport=parse_email_transport(os.environ.get("EMAIL_TRANSPORT")),
+        email_from=(os.environ.get("EMAIL_FROM") or "").strip(),
+        email_smtp_host=(os.environ.get("EMAIL_SMTP_HOST") or "").strip(),
+        email_smtp_port=min(65535, max(1, _env_int("EMAIL_SMTP_PORT", 587))),
+        email_smtp_user=(os.environ.get("EMAIL_SMTP_USER") or "").strip(),
+        email_smtp_password=os.environ.get("EMAIL_SMTP_PASSWORD") or None,
+        email_smtp_security=parse_smtp_security(os.environ.get("EMAIL_SMTP_SECURITY")),
+        email_http_url=(os.environ.get("EMAIL_HTTP_URL") or "").strip(),
+        email_http_key=os.environ.get("EMAIL_HTTP_KEY") or None,
+        email_reset_ttl_minutes=min(120, max(5, _env_int("EMAIL_RESET_TTL_MINUTES", 30))),
+        email_verify_ttl_hours=min(168, max(1, _env_int("EMAIL_VERIFY_TTL_HOURS", 48))),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         paystack_renewal_reconcile=_env_bool("PAYSTACK_RENEWAL_RECONCILE", False),
         subscription_grace_days=_grace_days_from_env(),

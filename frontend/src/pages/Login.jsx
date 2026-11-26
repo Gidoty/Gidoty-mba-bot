@@ -60,6 +60,11 @@ export default function Login({ onAuthed }) {
           {submitting ? "Logging in..." : "Log in"}
         </button>
         <p className="text-center text-sm text-muted">
+          <button type="button" onClick={() => navigate("forgot-password")} className="font-medium text-brand-text hover:underline">
+            Forgot your password?
+          </button>
+        </p>
+        <p className="text-center text-sm text-muted">
           No account yet?{" "}
           <button type="button" onClick={() => navigate("signup")} className="font-medium text-brand-text hover:underline">
             Sign up
