@@ -900,7 +900,7 @@ class EmailToken(Base):
 
 class CustomerEmailState(Base):
     """Per customer: when the address was verified, and whether the customer opted out of NON-ESSENTIAL mail (reminders and product notices). Essential mail (verification, password reset, a service-affecting
-    billing notice) ignores the opt-out. A missing row means not verified and not opted out. NEW table, no migration."""
+    billing notice) ignores the opt-out. A missing row means not verified, not opted out and no session ended by a reset. NEW table, no migration."""
 
     __tablename__ = "customer_email_state"
 
@@ -908,3 +908,5 @@ class CustomerEmailState(Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notices_opt_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # Set by a successful password reset: a session token issued before this moment is refused (api/deps.py). NULL = no reset yet, nothing refused. A column of this NEW table, so no migration.
+    sessions_valid_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

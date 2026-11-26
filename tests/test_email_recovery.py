@@ -397,3 +397,150 @@ def test_the_reset_and_verify_routes_get_the_stricter_rate_limit():
     from mba_bot.api.ratelimit import AUTH_PATHS
 
     assert {"/api/auth/password-reset/request", "/api/auth/password-reset/confirm", "/api/auth/email/verify/confirm"} <= AUTH_PATHS
+
+
+# ---------------------------------------------------------------------------------------------- a reset ends every earlier session
+def login_client(env, email, password):
+    c = TestClient(env.app, base_url="https://testserver")
+    r = c.post("/api/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.text
+    return c
+
+
+def do_reset(env, new_password="brand-new-pass-9"):
+    request_reset(env, "real@example.com")
+    raw = raw_from(env.mailer)
+    r = env.anon.post("/api/auth/password-reset/confirm", json={"token": raw, "new_password": new_password})
+    assert r.status_code == 204
+    return raw
+
+
+def status_code(client):
+    return client.get("/api/auth/email/status").status_code
+
+
+def test_a_session_issued_before_the_reset_is_refused_after_it_and_one_issued_after_it_works(env):
+    env.turn_on()
+    stolen = login_client(env, "real@example.com", "old-password-1")
+    assert status_code(stolen) == 200
+    do_reset(env)
+    assert status_code(stolen) == 401  # the stolen session does not survive the reset
+    fresh = login_client(env, "real@example.com", "brand-new-pass-9")  # logging in again straight after the reset, in the same second, works
+    assert status_code(fresh) == 200
+
+
+def test_the_old_password_no_longer_works_after_the_reset(env):
+    env.turn_on()
+    do_reset(env)
+    assert env.anon.post("/api/auth/login", json={"email": "real@example.com", "password": "old-password-1"}).status_code == 401
+    assert env.anon.post("/api/auth/login", json={"email": "real@example.com", "password": "brand-new-pass-9"}).status_code == 200
+
+
+def test_a_reset_link_used_twice_is_refused_the_second_time_and_the_second_use_changes_nothing(env):
+    env.turn_on()
+    raw = do_reset(env)
+    fresh = login_client(env, "real@example.com", "brand-new-pass-9")
+    again = env.anon.post("/api/auth/password-reset/confirm", json={"token": raw, "new_password": "attacker-chosen-1"})
+    assert again.status_code == 400 and "not valid" in again.json()["detail"]
+    assert status_code(fresh) == 200  # a refused second use does not end the sessions opened after the first
+    assert env.anon.post("/api/auth/login", json={"email": "real@example.com", "password": "attacker-chosen-1"}).status_code == 401
+    assert env.anon.post("/api/auth/login", json={"email": "real@example.com", "password": "brand-new-pass-9"}).status_code == 200
+
+
+def test_the_order_of_issue_and_reset_is_exact_even_inside_one_second(env):
+    env.turn_on()
+    def token():
+        return create_session_token(customer_id=env.cid, secret=env.settings.jwt_secret, algorithm=env.settings.jwt_algorithm, expires_minutes=60)
+
+    def client_with(tok):
+        c = TestClient(env.app, base_url="https://testserver")
+        c.cookies.set(SESSION_COOKIE_NAME, tok, path="/")
+        return c
+
+    before = token()
+    do_reset(env)
+    after = token()
+    assert status_code(client_with(before)) == 401 and status_code(client_with(after)) == 200
+
+
+def test_a_token_from_before_the_microsecond_claim_existed_is_treated_as_older_and_refused_after_a_reset(env):
+    from jose import jwt as jose_jwt
+
+    env.turn_on()
+    now = datetime.now(timezone.utc)
+    legacy = jose_jwt.encode({"sub": env.cid, "iat": now, "exp": now + timedelta(minutes=60)}, env.settings.jwt_secret, algorithm=env.settings.jwt_algorithm)
+    c = TestClient(env.app, base_url="https://testserver")
+    c.cookies.set(SESSION_COOKIE_NAME, legacy, path="/")
+    assert status_code(c) == 200  # no reset yet: nothing is refused
+    do_reset(env)
+    assert status_code(c) == 401
+
+
+def test_a_reset_works_for_a_customer_with_no_session_and_touches_no_other_customer(env):
+    env.turn_on()
+    with session_scope() as db:
+        other = mk_customer(db, "other@example.com", paid=True)
+        other_id = other.id
+    other_session = client_for(env.app, other_id, env.settings)
+    assert status_code(other_session) == 200
+    do_reset(env)  # the customer has never logged in
+    with session_scope() as db:
+        mine, theirs = db.get(CustomerEmailState, env.cid), db.get(CustomerEmailState, other_id)
+        assert mine is not None and mine.sessions_valid_after is not None and (theirs is None or theirs.sessions_valid_after is None)
+    assert status_code(other_session) == 200
+
+
+def test_nothing_ends_sessions_without_a_reset(env):
+    env.turn_on()
+    c = login_client(env, "real@example.com", "old-password-1")
+    with session_scope() as db:
+        F.mark_verified(db, env.cid)
+        F.set_opt_out(db, env.cid, True)
+    request_reset(env, "real@example.com")  # asking for a link ends nothing
+    assert status_code(c) == 200
+
+
+def test_a_refused_link_ends_no_session(env):
+    env.turn_on()
+    c = login_client(env, "real@example.com", "old-password-1")
+    r = env.anon.post("/api/auth/password-reset/confirm", json={"token": "x" * 40, "new_password": "brand-new-pass-9"})
+    assert r.status_code == 400 and status_code(c) == 200
+
+
+def test_no_token_or_password_reaches_the_log_during_a_reset(env, caplog):
+    env.turn_on()
+    with caplog.at_level(logging.DEBUG):
+        raw = do_reset(env, "very-secret-new-pass-77")
+    assert raw not in caplog.text and "very-secret-new-pass-77" not in caplog.text and "old-password-1" not in caplog.text
+
+
+# ---------------------------------------------------------------------------------------------- an unknown address looks the same
+def test_the_reset_request_looks_identical_for_a_known_an_unknown_and_a_suspended_address_in_answer_and_timing_class(env):
+    """Same status, same body, same headers (except the date), and the handler itself does the same work: no database statement before the answer, and the follow-up job is scheduled the same way for all three. The
+    only difference is inside that job, which runs after the response is sent."""
+    env.turn_on()
+    scheduled, statements = [], []
+
+    async def recorder(settings, address):
+        scheduled.append(address)
+
+    env.mp.setattr(email_auth, "_issue_reset_and_send", recorder)
+    event.listen(dbmod._engine, "before_cursor_execute", lambda *a, **k: statements.append(a[2]))
+    results = {}
+    for name, address in (("known", "real@example.com"), ("unknown", "nobody@example.com"), ("suspended", "suspended@example.com")):
+        email_auth._addr_limiter = SlidingWindowLimiter()
+        statements.clear()
+        r = request_reset(env, address)
+        results[name] = (r.status_code, r.text, {k: v for k, v in r.headers.items() if k.lower() not in ("date", "x-request-id")}, len(statements))
+    assert len({results[k][0] for k in results}) == 1 and len({results[k][1] for k in results}) == 1
+    assert len({tuple(sorted(results[k][2].items())) for k in results}) == 1
+    assert [results[k][3] for k in ("known", "unknown", "suspended")] == [0, 0, 0]  # the request itself touches no table
+    assert scheduled == ["real@example.com", "nobody@example.com", "suspended@example.com"]  # the same job is scheduled for every address
+
+
+def test_the_confirm_route_answers_the_same_for_an_unknown_used_and_expired_link(env):
+    env.turn_on()
+    raw = do_reset(env)
+    used = env.anon.post("/api/auth/password-reset/confirm", json={"token": raw, "new_password": "another-pass-10"})
+    unknown = env.anon.post("/api/auth/password-reset/confirm", json={"token": "y" * 43, "new_password": "another-pass-10"})
+    assert (used.status_code, used.text) == (unknown.status_code, unknown.text)

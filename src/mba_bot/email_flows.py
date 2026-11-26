@@ -66,6 +66,14 @@ def state_of(db: Session, customer_id: str) -> CustomerEmailState:
     return row
 
 
+def end_all_sessions(db: Session, customer_id: str, now: datetime | None = None) -> None:
+    """Every session token issued before `now` stops working (api/deps.py compares the token's issue time with this moment). Works for a customer who has no session. The caller commits."""
+    row = state_of(db, customer_id)
+    now = now or datetime.now(timezone.utc)
+    row.sessions_valid_after = now
+    row.updated_at = now
+
+
 def mark_verified(db: Session, customer_id: str, now: datetime | None = None) -> None:
     row = state_of(db, customer_id)
     row.verified_at = row.verified_at or (now or datetime.now(timezone.utc))

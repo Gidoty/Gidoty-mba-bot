@@ -34,13 +34,25 @@ class TokenError(ValueError):
     pass
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def to_micros(moment: datetime) -> int:
+    """A moment as whole microseconds since 1970 (exact integer arithmetic; a naive value is read as UTC)."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (moment - _EPOCH) // timedelta(microseconds=1)
+
+
 def create_session_token(*, customer_id: str, secret: str, algorithm: str, expires_minutes: int) -> str:
     now = datetime.now(timezone.utc)
-    payload = {"sub": customer_id, "iat": now, "exp": now + timedelta(minutes=expires_minutes)}
+    # `iat` is whole seconds (a JWT standard); `iat_us` is the same moment in microseconds, so "issued before or after a password reset" is exact even within one second.
+    payload = {"sub": customer_id, "iat": now, "iat_us": to_micros(now), "exp": now + timedelta(minutes=expires_minutes)}
     return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-def read_customer_id(token: str, *, secret: str, algorithm: str) -> str:
+def read_session(token: str, *, secret: str, algorithm: str) -> tuple[str, int]:
+    """(customer id, issued-at in microseconds). A token from before `iat_us` existed has only whole seconds, rounded down: that can only make an old token look older, never newer."""
     try:
         payload = jwt.decode(token, secret, algorithms=[algorithm])
     except JWTError as exc:
@@ -48,4 +60,12 @@ def read_customer_id(token: str, *, secret: str, algorithm: str) -> str:
     customer_id = payload.get("sub")
     if not customer_id:
         raise TokenError("session token missing subject")
-    return customer_id
+    issued = payload.get("iat_us")
+    if not isinstance(issued, int) or isinstance(issued, bool):
+        iat = payload.get("iat")
+        issued = int(iat) * 1_000_000 if isinstance(iat, (int, float)) and not isinstance(iat, bool) else 0
+    return customer_id, issued
+
+
+def read_customer_id(token: str, *, secret: str, algorithm: str) -> str:
+    return read_session(token, secret=secret, algorithm=algorithm)[0]

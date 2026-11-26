@@ -104,6 +104,7 @@ def password_reset_confirm(body: ResetConfirm, request: Request, db: Session = D
         db.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is not valid or has expired. Ask for a new one.")
     customer.password_hash = hash_password(body.new_password)
+    F.end_all_sessions(db, customer.id)  # a session stolen before the reset must not survive it; the same commit as the new password
     db.commit()
 
 
