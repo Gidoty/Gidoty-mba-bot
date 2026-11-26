@@ -1,15 +1,22 @@
 import { useState } from "react";
 
 import { api } from "../api/client.js";
-import { CANCEL_WORDING, channels, renewView, stateView } from "../lib/billing.js";
+import { CANCEL_WORDING, CARD_FEE_NOTICE, channels, clickAction, renewView, stateView } from "../lib/billing.js";
 import { primaryButton, secondaryButton } from "./form.jsx";
 import { Card } from "./ui.jsx";
 
-// The pay buttons for the channels the server says may start now. A click asks the matching checkout route (card: subscription, crypto: crypto invoice) and goes to the address it returns.
+// The pay buttons for the channels the server says may start now. USDT: a click asks the checkout route and goes to the address it returns. Card: a click first shows the muted fee notice above a "Continue to Paystack"
+// button, and only that button calls the checkout route, so the line is read before the redirect (no flash).
 export function PayButtons({ options }) {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const [confirming, setConfirming] = useState(null);
   const list = channels(options);
+  function click(c) {
+    setError(null);
+    if (clickAction(c) === "confirm") setConfirming(c.kind);
+    else go(c);
+  }
   async function go(c) {
     setBusy(c.kind);
     setError(null);
@@ -32,9 +39,23 @@ export function PayButtons({ options }) {
       <ul className="grid gap-3">
         {list.map((c, i) => (
           <li key={c.kind} className="min-w-0">
-            <button type="button" onClick={() => go(c)} disabled={busy !== null} className={`${i === 0 ? primaryButton : secondaryButton} w-full sm:w-auto`}>
-              {busy === c.kind ? "Opening payment..." : c.price ? `${c.label}: ${c.price} a month` : c.label}
-            </button>
+            {confirming === c.kind ? (
+              <div>
+                <p className="mb-2 text-xs text-muted">{CARD_FEE_NOTICE}</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button type="button" onClick={() => go(c)} disabled={busy !== null} className={`${primaryButton} w-full sm:w-auto`}>
+                    {busy === c.kind ? "Opening payment..." : "Continue to Paystack"}
+                  </button>
+                  <button type="button" onClick={() => setConfirming(null)} disabled={busy !== null} className="text-xs text-muted hover:underline">
+                    Back
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => click(c)} disabled={busy !== null || confirming !== null} className={`${i === 0 ? primaryButton : secondaryButton} w-full sm:w-auto`}>
+                {busy === c.kind ? "Opening payment..." : c.price ? `${c.label}: ${c.price} a month` : c.label}
+              </button>
+            )}
             {c.note && <p className="mt-1 text-xs text-muted">{c.note}</p>}
           </li>
         ))}

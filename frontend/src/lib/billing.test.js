@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { CANCEL_WORDING, CHECKOUT_PATH, EXPIRED_NOTE, FEE_NOTE, channels, dateText, formatMinor, formatUsd, renewView, screenKind, stateView } from "./billing.js";
+import { CANCEL_WORDING, CHECKOUT_PATH, CARD_FEE_NOTICE, EXPIRED_NOTE, channels, clickAction, dateText, formatMinor, formatUsd, renewView, screenKind, stateView } from "./billing.js";
 
 const options = (over = {}) => ({
   state: "none", provider: null, period_end: null, grace_end: null, grace_days: 5,
@@ -45,10 +45,10 @@ test("only channels the server says are available and may start are offered, car
   assert.deepEqual(channels({}), []);
 });
 
-test("the card channel carries the fee note and calls the subscription route, crypto calls the crypto route", () => {
+test("the card channel carries no note on the Activate screen and calls the subscription route, crypto calls the crypto route", () => {
   const [card, crypto] = channels(options());
-  assert.equal(card.note, FEE_NOTE);
-  assert.match(FEE_NOTE, /Paystack adds its own fee at checkout/);
+  assert.equal(card.note, null); // no fee text on the Activate screen
+  assert.equal(crypto.note, null);
   assert.equal(card.path, "/billing/subscription/initialize");
   assert.equal(crypto.path, "/billing/crypto/initialize");
   assert.equal(crypto.note, null);
@@ -95,4 +95,26 @@ test("a lapsed customer sees Renew wording and the lapse date, not the first-tim
   assert.deepEqual(channels(options({ state: "grace", period_end: "2026-11-10T10:00:00Z" })).map((c) => c.label), ["Renew by card", "Renew with USDT"]);
   assert.deepEqual(channels(options({ state: "none" })).map((c) => c.label), ["Pay by card", "Pay with USDT"]); // a first-time customer keeps the first-time wording
   for (const state of ["none", "active", "grace", "cancelled", "legacy_lifetime"]) assert.equal(renewView(options({ state })), null);
+});
+
+test("the fee notice appears only after the click, for the card only, and only Continue calls the checkout route", () => {
+  const [card, crypto] = channels(options());
+  assert.equal(clickAction(card), "confirm"); // a card click shows the notice and waits: no request, no redirect
+  assert.equal(clickAction(crypto), "go"); // USDT is unchanged
+  assert.equal(CARD_FEE_NOTICE, "Paystack may add a small processing fee at checkout, so the total on the next page can be a little higher than the price shown.");
+  const src = readFileSync(new URL("../components/SubscribeCard.jsx", import.meta.url), "utf8");
+  assert.ok(src.includes("Continue to Paystack") && src.includes("{CARD_FEE_NOTICE}"));
+  assert.ok(src.includes('className="mb-2 text-xs text-muted"')); // small, muted, normal weight, like the cancel wording
+  assert.equal(src.split("api.post(").length - 1, 1); // the checkout route is called from one place only: go()
+  assert.ok(src.includes("onClick={() => click(c)}") && src.includes("onClick={() => go(c)}")); // the pay button only clicks; Continue calls go
+  assert.ok(!src.includes("font-semibold text-muted") && !/CARD_FEE_NOTICE[^\n]*font-/.test(src));
+  const activate = readFileSync(new URL("./billing.js", import.meta.url), "utf8");
+  assert.ok(!/note: CARD_FEE_NOTICE/.test(activate) && !activate.includes("FEE_NOTE")); // the notice is not part of the channel the Activate screen draws
+  for (const label of ["Renew by card", "Renew with USDT"]) assert.ok(activate.includes(label)); // #81's Renew labels stay
+});
+
+test("Terms section 11 carries the one Paystack fee sentence", () => {
+  const terms = readFileSync(new URL("../legalContent.js", import.meta.url), "utf8");
+  assert.ok(terms.includes("Card payments are processed by Paystack, which may add its own processing fee at checkout; the total is shown on Paystack's payment page before you pay."));
+  assert.ok(terms.includes('export const TERMS_VERSION = "2026-11-23"') && terms.includes('export const PRIVACY_VERSION = "2026-11-21"') && terms.includes('export const RISK_DISCLOSURE_VERSION = "2026-11-21"'));
 });

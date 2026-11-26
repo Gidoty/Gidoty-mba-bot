@@ -1,8 +1,8 @@
 // Billing Stage 4 helpers: what the Activate screen and the subscription card show, from what GET /api/billing/options sends (the server settings decide prices and what is available).
 // Pure functions only. Nothing here holds a price, a key, a reference or a link. Run with: node --test frontend/src/lib/billing.test.js (also run by tests/test_frontend_lib.py)
 
-// Paystack adds its fee to the plan price at checkout (observed in test mode: price plus fee).
-export const FEE_NOTE = "Paystack adds its own fee at checkout, so the amount you are charged is a little more than the price shown.";
+// Shown ONLY after the customer has clicked to pay by card, before the redirect (never on the Activate screen itself): Paystack may add its own fee at its checkout. Muted, normal weight (text-xs text-muted).
+export const CARD_FEE_NOTICE = "Paystack may add a small processing fee at checkout, so the total on the next page can be a little higher than the price shown.";
 // Word for word from the Terms of Service, section 11 (frontend/src/legalContent.js; a test fails if the two drift apart).
 export const CANCEL_WORDING = "Where access is sold as a subscription, cancelling stops the next charge, and your access continues until the end of the period you have already paid for.";
 
@@ -40,7 +40,7 @@ export function channels(options) {
   const out = [];
   const renewing = options?.state === "grace" || options?.state === "expired"; // a customer who subscribed before sees Renew, not the first-time wording
   if (options?.card?.available && options.card.can_start) {
-    out.push({ kind: "card", label: renewing ? "Renew by card" : "Pay by card", price: formatMinor(options.card.amount_minor, options.card.currency), note: FEE_NOTE, path: CHECKOUT_PATH.card });
+    out.push({ kind: "card", label: renewing ? "Renew by card" : "Pay by card", price: formatMinor(options.card.amount_minor, options.card.currency), note: null, path: CHECKOUT_PATH.card });
   }
   if (options?.crypto?.available && options.crypto.can_start) {
     out.push({ kind: "crypto", label: renewing ? "Renew with USDT" : "Pay with USDT", price: formatUsd(options.crypto.price_usd), note: null, path: CHECKOUT_PATH.crypto });
@@ -83,4 +83,9 @@ export function screenKind(options) {
   if (options.state === "expired") return "renew";
   if (options.state === "none") return "offer";
   return "status";
+}
+
+// What a click on a pay button does. Card: show the fee notice and wait for "Continue to Paystack" (no request is made yet). USDT: go straight to the existing checkout route, unchanged.
+export function clickAction(channel) {
+  return channel && channel.kind === "card" ? "confirm" : "go";
 }
