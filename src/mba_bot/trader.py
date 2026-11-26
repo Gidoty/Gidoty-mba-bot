@@ -2328,17 +2328,49 @@ async def _maybe_exit(session, account, client, open_trade: Trade, signal, curre
 async def _flag_withdrawal_block(session, account, notifier, *, now) -> None:
     """Record, durably and once, that the stored key can withdraw, and alert
     the customer once. Committed BEFORE the alert so a crash or restart never
-    repeats it (at-most-once; the dashboard shows the block regardless)."""
-    if account.withdrawal_blocked_at is not None:
-        return
-    account.withdrawal_blocked_at = now
-    session.commit()
-    logger.warning("account %s: stored key has withdrawal permission; new entries blocked", account.id)
-    if account.notification_target is not None:
+    repeats it (at-most-once; the dashboard shows the block regardless).
+
+    It runs BEFORE an open trade is managed, so it never raises: the account id and the notification target are read first, a failed commit (or any failed read) is logged with those values and the function
+    returns without sending the alert (the next round tries again; this round's entry block does not depend on the stored flag), and the session is rolled back only if its transaction cannot continue. The alert
+    is sent only after the commit succeeded, as before. Nothing in the failure handlers reads from the database."""
+    account_id = _safe_account_id_of(account)
+    try:
+        if account.withdrawal_blocked_at is not None:
+            return
+        target = account.notification_target
+        account.withdrawal_blocked_at = now
+        session.commit()
+    except Exception:  # noqa: BLE001 - never into the management of an open trade
         try:
-            await notifier.send(account.notification_target, exchange.WITHDRAWAL_BLOCK_MESSAGE)
-        except Exception:
-            logger.exception("account %s: failed to send the withdrawal-permission alert", account.id)
+            logger.exception("account %s: could not record the withdrawal-permission block this round", account_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if not session.is_active:
+                session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        logger.warning("account %s: stored key has withdrawal permission; new entries blocked", account_id)
+    except Exception:  # noqa: BLE001
+        pass
+    if target is not None:
+        try:
+            await notifier.send(target, exchange.WITHDRAWAL_BLOCK_MESSAGE)
+        except Exception:  # noqa: BLE001
+            try:
+                logger.exception("account %s: failed to send the withdrawal-permission alert", account_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _safe_account_id_of(account) -> str:
+    """The account's id for a log line, or "?"; never raises (see _safe_trade_id)."""
+    try:
+        return str(account.id)
+    except Exception:  # noqa: BLE001
+        return "?"
 
 
 async def _manage_live_trade(session, account, client, trade: Trade, settings, notifier, *, now, is_demo: bool = False):
