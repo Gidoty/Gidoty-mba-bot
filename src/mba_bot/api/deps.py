@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Iterator
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings, load_settings
@@ -37,12 +38,15 @@ def get_current_customer(
     except TokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated") from exc
 
-    customer = db.get(Customer, customer_id)
+    # One query for the customer and the moment of the last password reset (a join, so the number of statements per request is what it was). The Customer comes back through the normal identity map, as db.get gave it.
+    found = db.execute(
+        select(Customer, CustomerEmailState.sessions_valid_after).outerjoin(CustomerEmailState, CustomerEmailState.customer_id == Customer.id).where(Customer.id == customer_id)
+    ).first()
+    customer, valid_after = (found[0], found[1]) if found is not None else (None, None)
     if customer is None or not customer.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     # A password reset ends every session issued before it (docs/safety/email_and_recovery.md). No reset yet = no row or NULL = nothing refused.
-    state = db.get(CustomerEmailState, customer.id)
-    if state is not None and state.sessions_valid_after is not None and issued_us < to_micros(state.sessions_valid_after):
+    if valid_after is not None and issued_us < to_micros(valid_after):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
     return customer
 
