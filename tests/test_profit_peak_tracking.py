@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from helpers_live import run_cycle, the_trade
+from helpers_live import open_protected, run_cycle, the_trade
 from helpers_profit import HOUR, candles, live
 
 from mba_bot import admin_service, profit_protect, trader
@@ -179,3 +179,140 @@ def test_the_migration_adds_one_nullable_column_is_idempotent_and_reversible(tmp
     run(mig.downgrade)
     run(mig.downgrade)
     assert "peak_price" not in {c["name"] for c in inspect(eng).get_columns("trades")}
+
+
+# ---------------------------------------------------------------------------------------------- the failure handler (database is locked)
+import sqlite3  # noqa: E402
+
+from sqlalchemy import event  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
+
+
+def _locked():
+    return OperationalError("UPDATE trades", {}, sqlite3.OperationalError("database is locked"))
+
+
+class _Expired:
+    """A trade whose every attribute read fails once `broken` is set: what an expired ORM object does when the database cannot be reloaded."""
+
+    def __init__(self):
+        object.__setattr__(self, "broken", False)
+        object.__setattr__(self, "_v", dict(id="trade-123", status="open", entry_price=100.0, opened_at=datetime.now(U), side="long", peak_price=None))
+
+    def __getattr__(self, name):
+        if object.__getattribute__(self, "broken"):
+            raise _locked()
+        try:
+            return object.__getattribute__(self, "_v")[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name, value):
+        if name == "broken":
+            object.__setattr__(self, name, value)
+        else:
+            object.__getattribute__(self, "_v")[name] = value
+
+
+class _Session:
+    def __init__(self, *, active=True):
+        self.commits, self.rollbacks, self.is_active, self.broken = 0, 0, active, False
+
+    def commit(self):
+        self.commits += 1
+        raise AssertionError("_track_peak must not commit")
+
+    def rollback(self):
+        self.rollbacks += 1
+        raise _locked() if self.broken else None
+
+
+def test_the_handler_reads_no_orm_attribute_after_a_failure_and_nothing_escapes(monkeypatch, caplog):
+    t, s = _Expired(), _Session(active=False)
+
+    def fail(*a, **k):
+        object.__setattr__(t, "broken", True)  # the object is now expired and cannot be reloaded
+        s.broken = True  # and so is the session: even its rollback fails
+        raise _locked()
+
+    monkeypatch.setattr(profit_protect, "peak_from_candles", fail)
+    with caplog.at_level("ERROR"):
+        trader._track_peak(s, t, [], 150.0, now_ms=0)  # nothing is raised
+    assert s.rollbacks == 1 and s.commits == 0
+    assert any("trade-123" in r.getMessage() for r in caplog.records)  # the id was read before the failure
+
+
+def test_an_unreadable_id_is_logged_as_a_question_mark_and_still_raises_nothing(monkeypatch, caplog):
+    t = _Expired()
+    object.__setattr__(t, "broken", True)
+    with caplog.at_level("ERROR"):
+        trader._track_peak(_Session(), t, [], 150.0, now_ms=0)
+    assert trader._safe_trade_id(t) == "?"
+    assert any("trade ?:" in r.getMessage() for r in caplog.records)
+
+
+def test_a_logging_failure_in_the_handler_cannot_escape_either(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("log broken")
+
+    monkeypatch.setattr(profit_protect, "peak_from_candles", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
+    monkeypatch.setattr(trader.logger, "exception", boom)
+    trader._track_peak(_Session(active=False), _Expired(), [], 150.0, now_ms=0)
+
+
+def test_the_peak_joins_the_cycles_transaction_and_makes_no_commit_of_its_own():
+    t, s = _Expired(), _Session()
+    trader._track_peak(s, t, [], 150.0, now_ms=0)
+    assert t.peak_price == 150.0 and s.commits == 0 and s.rollbacks == 0
+    src = inspect.getsource(trader._track_peak)
+    assert ".commit(" not in src.split('"""')[2]  # no commit call in the body (the docstring explains why)
+
+
+def test_a_healthy_session_is_not_rolled_back_by_a_calculation_failure(monkeypatch):
+    s = _Session(active=True)
+    monkeypatch.setattr(profit_protect, "peak_from_candles", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
+    trader._track_peak(s, _Expired(), [], 150.0, now_ms=0)
+    assert s.rollbacks == 0  # the cycle's other pending changes are kept
+
+
+def test_a_locked_database_during_the_peak_write_does_not_stop_the_cycle_or_change_the_trade(db, monkeypatch):
+    """The real cycle, a real database: the peak step fails with 'database is locked' and leaves the trade expired. The cycle still runs to the end, the trade row is exactly as it was, nothing is raised."""
+    from mba_bot import db as dbmod
+
+    client, settings, aid = open_protected(monkeypatch, market="futures")
+    before = the_trade(aid)
+    snapshot = {c.name: getattr(before, c.name) for c in Trade.__table__.columns if c.name not in ("peak_price", "updated_at", "protection_verified_at")}
+    state = {"locked": False, "tracked": 0}
+
+    def lock_all(conn, cursor, statement, parameters, context, executemany):
+        if state["locked"]:
+            raise sqlite3.OperationalError("database is locked")
+
+    event.listen(dbmod._engine, "before_cursor_execute", lock_all)
+    orig = trader._track_peak
+
+    def failing_peak(*a, **k):
+        def fail(*aa, **kk):
+            state["locked"] = True
+            a[0].expire_all()  # what a failed commit leaves behind: every object expired
+            raise _locked()
+
+        with monkeypatch.context() as m:
+            m.setattr(profit_protect, "peak_from_candles", fail)
+            orig(*a, **k)  # must return normally
+        state["locked"] = False
+        state["tracked"] += 1
+
+    monkeypatch.setattr(trader, "_track_peak", failing_peak)
+    try:
+        run_cycle(aid, settings)  # raises nothing
+    finally:
+        event.remove(dbmod._engine, "before_cursor_execute", lock_all)
+    after = the_trade(aid)
+    assert state["tracked"] >= 1
+    assert {c.name: getattr(after, c.name) for c in Trade.__table__.columns if c.name not in ("peak_price", "updated_at", "protection_verified_at")} == snapshot
+    assert after.status == "open" and after.protection_status == "protected"
+    with session_scope() as s:
+        from mba_bot.models import TradingAccount
+
+        assert s.get(TradingAccount, aid).last_error is None  # no cycle failure was recorded on the account

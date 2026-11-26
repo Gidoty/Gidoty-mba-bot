@@ -9,7 +9,7 @@ Rules the code enforces (each has a test):
 1. It only moves in the favourable direction. A pullback never lowers a long's peak.
 2. A candle that started before the entry is never counted (its extreme may predate the trade). The still-forming candle that started after the entry is counted.
 3. It is never worse than the entry price.
-4. A failed write is logged and rolled back. It never stops trade management, an exit or a stop move.
+4. A failure is logged and never stops trade management, an exit or a stop move. The write makes no commit of its own: the peak is a pending change that joins the cycle's transaction (it is saved with the cycle's next commit). The handler reads no attribute from the trade (the id is read before anything can fail) and rolls the session back only if its transaction cannot continue.
 5. Nothing in the entry path reads it. A test inspects the source of `_maybe_enter`, `_ema_entry_stale`, `_live_strategy_signal` and the RSI and Donchian entry functions.
 
 ## Migration (not run by Claude)

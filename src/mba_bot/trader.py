@@ -2247,9 +2247,23 @@ async def _live_ema_lock(ctx, trade: Trade, settings: Settings, *, candles: list
     await _live_profit_lock(ctx, trade, settings, closed=closed, price=price, now_ms=now_ms, atr_period=settings.atr_period)
 
 
+def _safe_trade_id(trade) -> str:
+    """The trade's id for a log line, or "?". Read BEFORE anything can fail, because after a failed write the session's objects are expired and reading an attribute loads from the database again, which can raise
+    (e.g. "database is locked"); a `getattr` default does not catch that. Never raises."""
+    try:
+        return str(trade.id)
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
 def _track_peak(session, trade: Trade, candles: list, price: float | None, *, now_ms: int) -> None:
     """Record the best price reached since the entry on `trade` (live or paper, any strategy): from the live price and the highs and lows of the candles that started after the entry. It only moves in the
-    favourable direction. It is observation only (docs/safety/profit_peak_tracking.md): it never decides an entry or an exit by itself, it never raises into the cycle, and a failed write is rolled back and logged."""
+    favourable direction. It is observation only (docs/safety/profit_peak_tracking.md): it never decides an entry or an exit by itself and it never raises into the cycle.
+
+    It makes NO commit of its own: the new peak is a pending change on the trade that joins the cycle's own transaction (the next durable checkpoint, or the commit when the cycle's session scope ends), like the
+    account's last_scanned_at. A failure here (a bad value, or an expired object that cannot be reloaded) is logged with the trade id read before anything could fail, the session is rolled back only if its transaction cannot continue, and
+    nothing is read from an ORM object in the handler: the handler can fail only into its own guards, never out of this function."""
+    trade_id = _safe_trade_id(trade)
     try:
         if trade.status not in (TRADE_OPEN, "pending", "closing", "attention") or not trade.entry_price:
             return
@@ -2257,11 +2271,14 @@ def _track_peak(session, trade: Trade, candles: list, price: float | None, *, no
         new = profit_protect.peak_from_candles(trade.side, trade.entry_price, int(opened.timestamp() * 1000), candles, price, trade.peak_price)
         if trade.peak_price is None or profit_protect.is_better(trade.side, new, trade.peak_price):
             trade.peak_price = new
-            session.commit()
     except Exception:  # noqa: BLE001 - an observation must never stop trade management
-        logger.exception("trade %s: could not record the peak price", getattr(trade, "id", "?"))
         try:
-            session.rollback()
+            logger.exception("trade %s: could not record the peak price", trade_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if not session.is_active:  # only a transaction that cannot continue needs a rollback; a healthy one keeps the cycle's other pending changes (scheduler._guarded_cycle does the same)
+                session.rollback()
         except Exception:  # noqa: BLE001
             pass
 
