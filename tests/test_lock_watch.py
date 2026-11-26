@@ -101,6 +101,39 @@ def test_at_most_the_set_number_of_lines_per_hour(tmp_path, caplog):
     assert len(warnings(caplog)) == 20
 
 
+def test_the_duration_covers_the_whole_span_from_the_first_write_not_the_last(tmp_path, caplog, monkeypatch):
+    """A transaction with several write statements is timed from the FIRST one. On a fake clock: first write at t=0, a second at t=2.5, a third at t=4.0, commit at t=5.0. The logged hold is 5.0 s, not the 1.0 s since the last write."""
+    eng = make_engine(tmp_path, threshold=3.0)
+    clock = [100.0]
+    monkeypatch.setattr(lock_watch.time, "monotonic", lambda: clock[0])
+    with caplog.at_level("WARNING"):
+        with eng.begin() as c:
+            c.execute(text("insert into t (v) values ('a')"))  # first write: the clock starts here
+            clock[0] += 2.5
+            c.execute(text("insert into t (v) values ('b')"))  # a later write must not restart it
+            clock[0] += 1.5
+            c.execute(text("update t set v = 'c' where id = 1"))
+            clock[0] += 1.0
+    lines = warnings(caplog)
+    assert len(lines) == 1
+    assert "held the database for 5.0s" in lines[0].getMessage()
+
+
+def test_a_read_between_writes_does_not_start_or_restart_the_clock(tmp_path, caplog, monkeypatch):
+    eng = make_engine(tmp_path, threshold=3.0)
+    clock = [100.0]
+    monkeypatch.setattr(lock_watch.time, "monotonic", lambda: clock[0])
+    with caplog.at_level("WARNING"):
+        with eng.begin() as c:
+            c.execute(text("select * from t"))
+            clock[0] += 10.0  # reads before the first write do not count
+            c.execute(text("insert into t (v) values ('a')"))
+            clock[0] += 2.0
+            c.execute(text("select * from t"))
+            clock[0] += 2.0
+    assert "held the database for 4.0s" in warnings(caplog)[0].getMessage()
+
+
 def test_the_hourly_window_slides(tmp_path, caplog, monkeypatch):
     eng = make_engine(tmp_path, threshold=0.001, max_lines=2)
     clock = [1000.0]
