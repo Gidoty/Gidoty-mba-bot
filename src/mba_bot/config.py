@@ -45,6 +45,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _lock_r_from_env(name: str) -> float:
+    """The +1R profit lock's activation, in R. Unset, empty, malformed, zero, negative or not finite is 0 = OFF, so a typo can never switch the lock on. Clamped to 0.25..50 when on."""
+    import math
+
+    try:
+        value = float((os.environ.get(name) or "0").strip())
+    except ValueError:
+        return 0.0
+    if not math.isfinite(value) or value <= 0:
+        return 0.0
+    return min(50.0, max(0.25, value))
+
+
 SUPPORTED_PAIRS = ("BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT")
 # Not tradeable yet - CORE isn't listed on Binance. Shown in the
 # frontend's pair selector as a disabled "coming soon" option; never
@@ -403,6 +416,13 @@ class Settings:
     fee_guard_fee_bps: float = 5.0  # taker fee per side, basis points (research assumption; the account's real tier is not read here)
     fee_guard_slippage_bps: float = 11.0  # round-trip slippage, basis points (research assumption: 3 on entry, 8 on a stop exit)
     fee_guard_expected_move_atr: float = 1.0  # expected gross move of a trade in ATRs (the strategy has no profit target: a proxy)
+    # The profit lock (docs/safety/profit_lock.md): once a trade's best price has been profit_lock_r x R beyond the entry (R = distance from the entry to the initial stop), its stop moves to the entry plus the
+    # round-trip cost buffer. 0 = OFF (the default). profit_lock_every_round False (the default) judges it on CLOSED candles, the mode the sealed test simulated; True judges it every round (5 minutes) from the running
+    # best price, which was NOT simulated, with a minimum improvement and a minimum interval per stop move to bound the exchange calls.
+    profit_lock_r: float = 0.0
+    profit_lock_every_round: bool = False
+    profit_move_min_interval_seconds: int = 900
+    profit_move_min_improve_atr: float = 0.25
     max_open_positions: int = 1  # open positions per account (0 = no cap in the guards). Also the multi-trade setting: PAPER accounts only, clamped to 1..3 (multi_trade.py)
     max_total_risk_pct: float = 2.0  # sum of the risk % of open positions plus the new one (0 = no cap)
     strategy_daily_loss_pct: float = 0.0  # stop NEW entries for the rest of the UTC day once the day's net loss reaches this % of capital (0 = off)
@@ -643,6 +663,10 @@ def load_settings() -> Settings:
         fee_guard_fee_bps=min(100.0, max(0.0, _env_float("FEE_GUARD_FEE_BPS", 5.0))),
         fee_guard_slippage_bps=min(500.0, max(0.0, _env_float("FEE_GUARD_SLIPPAGE_BPS", 11.0))),
         fee_guard_expected_move_atr=min(20.0, max(0.0, _env_float("FEE_GUARD_EXPECTED_MOVE_ATR", 1.0))),
+        profit_lock_r=_lock_r_from_env("PROFIT_LOCK_R"),
+        profit_lock_every_round=_env_bool("PROFIT_LOCK_EVERY_ROUND", False),
+        profit_move_min_interval_seconds=min(86_400, max(60, _env_int("PROFIT_MOVE_MIN_INTERVAL_SECONDS", 900))),
+        profit_move_min_improve_atr=min(5.0, max(0.01, _env_float("PROFIT_MOVE_MIN_IMPROVE_ATR", 0.25))),
         max_open_positions=min(50, max(0, _env_int("MAX_OPEN_POSITIONS", 1))),
         max_total_risk_pct=min(100.0, max(0.0, _env_float("MAX_TOTAL_RISK_PCT", 2.0))),
         strategy_daily_loss_pct=min(100.0, max(0.0, _env_float("STRATEGY_DAILY_LOSS_PCT", 0.0))),

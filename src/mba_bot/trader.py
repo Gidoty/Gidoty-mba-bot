@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, object_session
 
-from . import profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
+from . import fee_tier, profit_lock, profit_protect, opportunity, account_loss, daily_limit as daily_limit_module, demo as demo_module, donchian_trail, live_multi, reporting, small_capital, donchian, exchange, foreign_orders, kill_switch, leverage as leverage_module, risk_limits as risk_limits_module, lifecycle, multi_trade, pair_catalog, rsi_mr, pnl_labels, protection_guard, strategy_guard_rules, strategy_guards, telemetry
 from . import risk as risk_module
 from .billing.entitlement import is_entitled
 from .config import Settings, auto_pairs, manual_pairs
@@ -230,8 +230,10 @@ async def process_account(session: Session, account: TradingAccount, settings: S
             )  # an RSI trade is exited by its own rules below, never by an EMA crossover
             _track_peak(session, open_trade, candles, candles[-1].close, now_ms=now_ms)  # the best price since entry (observation only)
             await lifecycle.monitor_trade(ctx, open_trade, crossover_exit=opposite_cross, current_price=candles[-1].close)
+            if not rsi_trade and not don_trade and open_trade.status == TRADE_OPEN:
+                await _live_ema_lock(ctx, open_trade, settings, candles=candles, price=candles[-1].close, now_ms=now_ms)  # the +1R profit lock (off by default)
             if rsi_trade and open_trade.status == TRADE_OPEN:
-                await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms)
+                await _live_rsi_exit(ctx, open_trade, client, settings, now_ms=now_ms, current_price=candles[-1].close)
             if don_trade and open_trade.status == TRADE_OPEN:
                 await _live_donchian_manage(ctx, open_trade, client, settings, now_ms=now_ms, current_price=candles[-1].close)
             await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
@@ -372,6 +374,7 @@ async def process_account(session: Session, account: TradingAccount, settings: S
         else:
             # Only a PAPER trade reaches here: live trades returned above.
             _track_peak(session, open_trade, candles, current_price, now_ms=now_ms)  # the best price since entry (observation only)
+            _paper_profit_lock(open_trade, rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])), current_price, settings, account)
             await _maybe_exit(
                 session, account, client, open_trade, signal, current_price, notifier, is_paper=effective_is_paper, now=now,
                 settings=settings,
@@ -1716,10 +1719,12 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
         pair = t.pair or account.pair
         if multi_trade.strategy_of(t) == donchian.STRATEGY_ID:
             _track_peak(session, t, await don_closed_for(pair), None, now_ms=now_ms)
+            _paper_profit_lock(t, await don_closed_for(pair), None, settings, account)
             await _manage_donchian_trade(session, account, t, await don_closed_for(pair), settings, notifier, p=don_p, tf_ms=don_tf_ms, now=now)
             continue
         if multi_trade.strategy_of(t) == rsi_mr.STRATEGY_ID:
             _track_peak(session, t, await rsi_closed_for(pair), None, now_ms=now_ms)
+            _paper_profit_lock(t, await rsi_closed_for(pair), None, settings, account)
             await _manage_rsi_trade(session, account, t, await rsi_closed_for(pair), settings, notifier, p=rsi_p, tf_ms=rsi_tf_ms, now=now)
             continue
         candles = await candles_for(pair)
@@ -1728,6 +1733,7 @@ async def _process_multi(session, account, client, open_trades: list[Trade], set
             await _record_error(notifier, account, "No market data was returned for this account's pair just now.", now=now)
             continue
         _track_peak(session, t, candles, candles[-1].close, now_ms=int(now.timestamp() * 1000))
+        _paper_profit_lock(t, rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(rsi_mr.normalize_timeframe(settings.timeframe)[0])), candles[-1].close, settings, account)
         await _maybe_exit(session, account, client, t, signal_for(candles), candles[-1].close, notifier, is_paper=True, now=now,
                           settings=settings, multi_label=True)
 
@@ -1904,6 +1910,14 @@ async def _live_donchian_entry(session, account, client, settings: Settings, not
 
 
 async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float) -> None:
+    """The strategy's own management (below), then the +1R profit lock (off by default) on the same candles. The better stop wins: the lock never loosens the trail."""
+    seen: list = []
+    await _live_donchian_rules(ctx, trade, client, settings, now_ms=now_ms, current_price=current_price, seen=seen)
+    if seen and trade.status == TRADE_OPEN:
+        await _live_profit_lock(ctx, trade, settings, closed=seen[0], price=current_price, now_ms=now_ms, atr_period=_donchian_params(settings).atr_period)
+
+
+async def _live_donchian_rules(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float, seen: list) -> None:
     """A live donchian_breakout_v1 trade: (1) a CLOSE beyond the opposite 10-candle channel exits through `lifecycle.execute_exit` (the only live exit path); (2) otherwise the protective stop is trailed
     (`lifecycle.move_stop`: favourable direction only, new stop placed first, old one cancelled after, a failed move keeps the old stop). The initial stop and the trailing stop are exchange-side
     stops; touching either inside the candles is left to the exchange and the software backstop. Runs whenever such a trade is open, whatever the switch says."""
@@ -1914,6 +1928,7 @@ async def _live_donchian_manage(ctx, trade: Trade, client, settings: Settings, *
     closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
     if not closed:
         return
+    seen.append(closed)
     p = _donchian_params(settings)
     opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
     opened_ms = int(opened.timestamp() * 1000)
@@ -1960,7 +1975,15 @@ async def _live_rsi_entry(session, account, client, settings: Settings, notifier
     await _maybe_enter(session, account, client, sig, raw[-1].close, settings, notifier, is_paper=False, now=now, is_demo=is_demo)
 
 
-async def _live_rsi_exit(ctx, trade: Trade, client, settings: Settings, *, now_ms: int) -> None:
+async def _live_rsi_exit(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, current_price: float | None = None) -> None:
+    """The strategy's own exits (below), then the +1R profit lock (off by default) on the same candles."""
+    seen: list = []
+    await _live_rsi_rules(ctx, trade, client, settings, now_ms=now_ms, seen=seen)
+    if seen and trade.status == TRADE_OPEN:
+        await _live_profit_lock(ctx, trade, settings, closed=seen[0], price=current_price if current_price is not None else seen[0][-1].close, now_ms=now_ms, atr_period=_rsi_params(settings).atr_period)
+
+
+async def _live_rsi_rules(ctx, trade: Trade, client, settings: Settings, *, now_ms: int, seen: list) -> None:
     """A live rsi_mr_v1 trade is exited by ITS rules (profit target, RSI back to 50, time stop) from the closed candles after it opened, through `lifecycle.execute_exit` (the only live exit path).
     The stop is the exchange-side stop placed at entry (and the software backstop in monitor_trade); a stop touch found here is left to them. Runs whenever such a trade is open, whatever the switch says."""
     tf, _ = rsi_mr.normalize_timeframe(settings.rsi_mr_timeframe)
@@ -1970,6 +1993,7 @@ async def _live_rsi_exit(ctx, trade: Trade, client, settings: Settings, *, now_m
     closed = rsi_mr.closed_only(candles_from_ohlcv(ohlcv), now_ms, tf_ms)
     if not closed:
         return
+    seen.append(closed)
     opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
     ex = rsi_mr.exit_check(side=trade.side, entry=trade.entry_price, stop=trade.stop_loss_price, opened_ms=int(opened.timestamp() * 1000), closed=closed, tf_ms=tf_ms, p=_rsi_params(settings))
     if ex is None or ex.reason == rsi_mr.EXIT_STOP:
@@ -2084,11 +2108,13 @@ async def _process_live_multi(session, account, client, live_trades: list[Trade]
         elif strategy == rsi_mr.STRATEGY_ID:
             await lifecycle.monitor_trade(ctx, t, crossover_exit=False, current_price=price)
             if t.status == TRADE_OPEN:
-                await _live_rsi_exit(ctx, t, client, settings, now_ms=now_ms)
+                await _live_rsi_exit(ctx, t, client, settings, now_ms=now_ms, current_price=price)
         else:
             signal = _ema_generate(_ema_signal_candles(candles, settings, now_ms), settings)
             opposite = (t.side == "long" and signal.signal == SignalType.BEARISH_CROSSOVER) or (t.side == "short" and signal.signal == SignalType.BULLISH_CROSSOVER)
             await lifecycle.monitor_trade(ctx, t, crossover_exit=opposite, current_price=price)
+            if t.status == TRADE_OPEN:
+                await _live_ema_lock(ctx, t, settings, candles=candles, price=price, now_ms=now_ms)
     account.last_error = None
     account.last_error_at = None
 
@@ -2143,6 +2169,82 @@ async def _process_multi_live(session, account, client, live_trades: list[Trade]
     account.last_error = None
     account.last_error_at = None
     await _maybe_send_daily_summary(session, account, notifier, now=now, settings=settings)
+
+
+_LOCK_MOVES: dict[str, int] = {}  # trade id -> time (ms) of the last stop move by the lock, in memory: only used to space moves out in the every-round mode (one extra move is possible after a restart)
+
+
+def _fee_bps_for(account, settings: Settings) -> float:
+    """The ASSUMED taker fee per side in basis points (FEE_GUARD_FEE_BPS, 5 by default): used for paper trades and as the fallback when the account's real tier cannot be read."""
+    return settings.fee_guard_fee_bps
+
+
+async def _live_cost_buffer(ctx, trade: Trade, settings: Settings) -> float:
+    """The price distance a stop must sit beyond the entry to be at or above zero NET (docs/safety/profit_lock.md): both fees at the account's REAL taker rate when it can be read (cached 24 hours, else the assumed
+    FEE_GUARD_FEE_BPS), the assumed round-trip slippage, and for a Futures trade the funding paid so far per unit (re-read at most every 30 minutes; a failed read counts as what is stored). Never raises."""
+    bps, _source = await fee_tier.taker_bps(ctx.venue, ctx.account.id, assumed_bps=_fee_bps_for(ctx.account, settings))
+    funding_per_unit = (await lifecycle.refresh_funding(ctx, trade)) / trade.quantity if trade.quantity > 0 else 0.0
+    return profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=bps, slippage_bps_round_trip=settings.fee_guard_slippage_bps, funding_paid_per_unit=funding_per_unit)
+
+
+def _lock_peak(trade: Trade, closed: list, price: float, settings: Settings) -> float | None:
+    """The best price the lock judges: in the default (closed-candle) mode only what CLOSED candles after the entry show, so the decision depends on the candles alone; in the every-round mode the running best price,
+    which includes the live price and the forming candle (trades.peak_price, refreshed every round)."""
+    if settings.profit_lock_every_round:
+        return profit_protect.advance_peak(trade.side, trade.peak_price, price) or trade.entry_price
+    opened = trade.opened_at if trade.opened_at.tzinfo else trade.opened_at.replace(tzinfo=timezone.utc)
+    return profit_protect.peak_from_candles(trade.side, trade.entry_price, int(opened.timestamp() * 1000), closed, None, None)
+
+
+async def _live_profit_lock(ctx, trade: Trade, settings: Settings, *, closed: list, price: float, now_ms: int, atr_period: int) -> None:
+    """The +1R profit lock for a healthy, protected LIVE trade of ANY strategy (docs/safety/profit_lock.md). Off at PROFIT_LOCK_R=0. The better stop wins: a stop that already rests above the lock level (a Donchian
+    trail) is left alone. Moves go through lifecycle.move_stop (new stop placed and read back first, never loosened, never on the wrong side of the price, a failed move keeps the old stop); when the price is already
+    through the level the trade exits through lifecycle.execute_exit with the close reason profit_lock."""
+    lock_r = settings.profit_lock_r
+    if lock_r <= 0 or trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not trade.initial_stop_price or not closed:
+        return
+    r = abs(trade.entry_price - trade.initial_stop_price)
+    peak = _lock_peak(trade, closed, price, settings)
+    if r <= 0 or peak is None:
+        return
+    gain = (peak - trade.entry_price) if trade.side == "long" else (trade.entry_price - peak)
+    if gain < lock_r * r:
+        return  # not there yet: no fee-tier or funding read until the lock could act
+    buf = await _live_cost_buffer(ctx, trade, settings)
+    level = profit_lock.lock_level(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, peak=peak, lock_r=lock_r, buffer=buf)
+    atrs = atr_series([c.high for c in closed], [c.low for c in closed], [c.close for c in closed], atr_period)
+    action, _why = profit_lock.decide(side=trade.side, level=level, current_stop=trade.stop_loss_price, price=price, entry=trade.entry_price, atr=atrs[-1] if atrs else None, r=r,
+                                      every_round=settings.profit_lock_every_round, last_move_ms=_LOCK_MOVES.get(trade.id), now_ms=now_ms, min_interval_s=settings.profit_move_min_interval_seconds,
+                                      min_improve_atr=settings.profit_move_min_improve_atr)
+    if action == "exit":
+        await lifecycle.execute_exit(ctx, trade, reason="profit_lock", price_hint=level)
+    elif action == "move" and await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=price) == "moved":
+        _LOCK_MOVES[trade.id] = now_ms
+
+
+def _paper_profit_lock(trade: Trade, closed: list, price: float | None, settings: Settings, account=None) -> None:
+    """PAPER trades, lock on: ratchet the trade's stop to entry plus the (assumed-cost) buffer once the best price has been lock_r x R beyond the entry; never loosened; set AT the price if the price is already through
+    the level (a market exit, as live). The existing paper exit logic fires on the stop. Nothing happens with the lock off."""
+    if settings.profit_lock_r <= 0 or not trade.initial_stop_price or not closed:
+        return
+    price = price if price is not None else closed[-1].close
+    peak = _lock_peak(trade, closed, price, settings)
+    buf = profit_protect.cost_buffer(trade.entry_price, fee_bps_per_side=_fee_bps_for(account, settings), slippage_bps_round_trip=settings.fee_guard_slippage_bps)
+    level = profit_lock.lock_level(side=trade.side, entry=trade.entry_price, initial_stop=trade.initial_stop_price, peak=peak, lock_r=settings.profit_lock_r, buffer=buf)
+    if level is None:
+        return
+    target = min(level, price) if trade.side == "long" else max(level, price)
+    if profit_protect.is_better(trade.side, target, trade.stop_loss_price):
+        trade.stop_loss_price = target
+
+
+async def _live_ema_lock(ctx, trade: Trade, settings: Settings, *, candles: list, price: float, now_ms: int) -> None:
+    """The +1R lock on an EMA trade, from the EMA timeframe's closed candles."""
+    if settings.profit_lock_r <= 0:
+        return
+    tf, _ = rsi_mr.normalize_timeframe(settings.timeframe)
+    closed = rsi_mr.closed_only(candles, now_ms, rsi_mr.timeframe_ms(tf))
+    await _live_profit_lock(ctx, trade, settings, closed=closed, price=price, now_ms=now_ms, atr_period=settings.atr_period)
 
 
 def _track_peak(session, trade: Trade, candles: list, price: float | None, *, now_ms: int) -> None:
