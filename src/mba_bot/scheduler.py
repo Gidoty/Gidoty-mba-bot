@@ -34,6 +34,7 @@ from .config import Settings
 from .db import list_active_accounts, list_live_unsettled_trades, list_open_stop_limit_trades, session_scope
 from .models import PROTECTION_PROTECTED, TRADE_OPEN, TradingAccount
 from .notifications import build_notifier
+from .operator_settings import effective_settings
 from .trader import process_account, reconcile_account
 
 logger = logging.getLogger(__name__)
@@ -361,7 +362,9 @@ async def _renewal_reconcile(settings: Settings) -> None:
 
 
 async def run_poll_forever(settings: Settings) -> None:
+    base = settings
     while True:
+        settings = effective_settings(base)  # the operator's database settings, read fresh each round (docs/safety/operator_settings.md); no rows = `base`
         try:
             await run_once(settings)
         except Exception:

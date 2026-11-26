@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { Card, CardTitle, ErrorBanner, LoadingBlock, PageHeader, Pill, Seg, StatTile } from "../components/ui.jsx";
 import { FormField, inputClass, primaryButton, secondaryButton } from "../components/form.jsx";
+import { ACTIONS, buildRequest, settingBadge, settingProblem } from "../lib/adminActions.js";
 import { KILL_SWITCH_TEXT, MODE_TEXT, REASON_MAX, REFRESH_MS, WINDOWS, adminStage, ageText, codeProblem, killSwitchTone, pageCount, reasonProblem, resultLine, winRate } from "../lib/admin.js";
 
 // Read-only admin dashboard. It shows what the server sends and nothing else: no credentials, no network address, no full email unless the admin asks for one with a reason. The page is reachable only when
@@ -343,6 +344,77 @@ function BillingPanel({ onAuthLost }) {
   );
 }
 
+function ActionsPanel({ onAuthLost }) {
+  const settings = usePanel("/admin/settings", onAuthLost);
+  const changes = usePanel("/admin/changes", onAuthLost);
+  const [action, setAction] = useState("pause");
+  const [form, setForm] = useState({ target: "", reason: "", code: "", days: "30", note: "" });
+  const [edit, setEdit] = useState({ key: "", value: "", reason: "", code: "" });
+  const [msg, setMsg] = useState(null);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const act = ACTIONS.find((a) => a.id === action);
+  const run = async (req, after) => {
+    if (req.error) return setMsg({ bad: true, text: req.error });
+    try {
+      const r = await api.post(req.path, req.body);
+      setMsg({ bad: false, text: `Done: ${r.action}${r.restart_required ? " (takes effect at the next restart)" : ""}.` });
+      after();
+    } catch (err) {
+      if (err.status === 401 && /sign-in/.test(err.message || "")) onAuthLost();
+      setMsg({ bad: true, text: err.message });
+    }
+  };
+  const data = settings.data;
+  const def = data?.settings.find((x) => x.key === edit.key);
+  return (
+    <Card>
+      <CardTitle>Settings and actions</CardTitle>
+      {data && !data.actions_enabled && <p className="text-sm text-muted">Writing is switched off on the server (ADMIN_ACTIONS_ENABLED). You can read everything here.</p>}
+      {msg && <p className={`text-sm ${msg.bad ? "text-bad" : "text-ok"}`} role="status">{msg.text}</p>}
+      <PanelBody panel={settings}>
+        {(d) => (
+          <ul className="grid gap-1 text-sm text-fg">
+            {d.settings.map((x) => (
+              <li key={x.key}><span className="font-medium">{x.key}</span>: <strong>{String(x.effective_value)}</strong> <span className="text-muted">({settingBadge(x)}; {x.description})</span></li>
+            ))}
+          </ul>
+        )}
+      </PanelBody>
+      <h3 className="mb-1 mt-3 text-sm font-semibold text-fg">Change a setting</h3>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <FormField label="Setting"><select className={inputClass} value={edit.key} onChange={(e) => setEdit({ ...edit, key: e.target.value })}><option value="">Choose</option>{(data?.settings || []).map((x) => <option key={x.key} value={x.key}>{x.key}</option>)}</select></FormField>
+        <FormField label="New value"><input className={inputClass} value={edit.value} onChange={(e) => setEdit({ ...edit, value: e.target.value })} /></FormField>
+        <FormField label="Reason"><input className={inputClass} value={edit.reason} maxLength={REASON_MAX} onChange={(e) => setEdit({ ...edit, reason: e.target.value })} /></FormField>
+        <FormField label="Authenticator code"><input className={inputClass} value={edit.code} autoComplete="one-time-code" onChange={(e) => setEdit({ ...edit, code: e.target.value })} /></FormField>
+      </div>
+      <button type="button" className={primaryButton} onClick={() => {
+        const problem = settingProblem(def, edit.value);
+        if (problem) return setMsg({ bad: true, text: problem });
+        run({ path: "/admin/settings/set", body: { key: edit.key, value: edit.value.trim(), reason: edit.reason.trim(), code: edit.code.trim() } }, () => { settings.reload(); changes.reload(); setEdit({ ...edit, code: "" }); });
+      }}>Save setting</button>
+      <h3 className="mb-1 mt-4 text-sm font-semibold text-fg">Act on a customer or request</h3>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <FormField label="Action"><select className={inputClass} value={action} onChange={(e) => setAction(e.target.value)}>{ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select></FormField>
+        {act.target !== "none" && <FormField label={act.target === "ref" ? "Customer ref (from the customer list)" : "Request id"}><input className={inputClass} value={form.target} onChange={set("target")} /></FormField>}
+        {act.days && <FormField label="Days"><input className={inputClass} value={form.days} onChange={set("days")} /></FormField>}
+        {act.note && <FormField label="Note"><input className={inputClass} value={form.note} maxLength={500} onChange={set("note")} /></FormField>}
+        <FormField label="Reason"><input className={inputClass} value={form.reason} maxLength={REASON_MAX} onChange={set("reason")} /></FormField>
+        <FormField label="Authenticator code"><input className={inputClass} value={form.code} autoComplete="one-time-code" onChange={set("code")} /></FormField>
+      </div>
+      <button type="button" className={primaryButton} onClick={() => run(buildRequest(action, form), () => { changes.reload(); setForm({ ...form, code: "" }); })}>Do it</button>
+      <p className="mt-2 text-xs text-muted">None of these places, closes or changes a trade or an exchange order. Open trades stay managed.</p>
+      <h3 className="mb-1 mt-4 text-sm font-semibold text-fg">Recent changes</h3>
+      <PanelBody panel={changes}>
+        {(d) => (d.changes.length === 0 ? <p className="text-sm text-muted">None yet.</p> : (
+          <ul className="grid gap-1 text-sm text-fg">
+            {d.changes.slice(0, 20).map((c, i) => <li key={i}>{new Date(c.at).toLocaleString()}: {c.action} {c.target} ({c.old ?? "-"} to {c.new ?? "-"}), {c.reason}</li>)}
+          </ul>
+        ))}
+      </PanelBody>
+    </Card>
+  );
+}
+
 export default function Admin() {
   const { me, reload } = useAdminMe();
   const stage = adminStage(me);
@@ -352,7 +424,7 @@ export default function Admin() {
   const lost = () => reload();
   return (
     <div className="grid gap-4">
-      <PageHeader title="Admin" subtitle="Read only. Every request is written to the audit log. The session ends after 15 minutes without a request.">
+      <PageHeader title="Admin" subtitle="The panels are read only. Changes need a reason and a fresh code, and every request is written to the audit log. The session ends after 15 minutes without a request.">
         <button type="button" onClick={() => api.post("/admin/logout").then(reload, reload)} className={secondaryButton}>Sign out of admin</button>
       </PageHeader>
       <CustomersPanel onAuthLost={lost} />
@@ -362,6 +434,7 @@ export default function Admin() {
       <BillingPanel onAuthLost={lost} />
       <SkipsPanel onAuthLost={lost} />
       <CustomerList onAuthLost={lost} />
+      <ActionsPanel onAuthLost={lost} />
     </div>
   );
 }

@@ -454,6 +454,8 @@ class Settings:
     admin_emails: tuple = ()
     # Registration of NEW customers: "open" (default) or "closed" (a new signup is refused with a plain message; login, activation of existing customers and the admin dashboard are unaffected).
     signups_mode: str = "open"
+    # Admin actions (docs/safety/operator_settings.md): False = off (default). The admin dashboard stays read-only: every write route (settings, pause, suspend, extend, notes, kill flag) answers 403 until this is on.
+    admin_actions_enabled: bool = False
     subscription_billing_enabled: bool = False
     # Hourly recovery of a Paystack renewal whose webhook never arrived (docs/security/billing_paystack_subscriptions.md). OFF by default: it makes read-only calls with the live Paystack key, and the operator
     # enables anything that uses a secret key by hand. Read only while SUBSCRIPTION_BILLING_ENABLED is on.
@@ -678,6 +680,7 @@ def load_settings() -> Settings:
         admin_dashboard_enabled=_env_bool("ADMIN_DASHBOARD_ENABLED", False),
         admin_emails=tuple(sorted({e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS") or "").split(",") if e.strip()})),
         signups_mode=parse_signups_mode(os.environ.get("SIGNUPS_MODE")),
+        admin_actions_enabled=_env_bool("ADMIN_ACTIONS_ENABLED", False),
         subscription_billing_enabled=_env_bool("SUBSCRIPTION_BILLING_ENABLED", False),
         paystack_renewal_reconcile=_env_bool("PAYSTACK_RENEWAL_RECONCILE", False),
         subscription_grace_days=_grace_days_from_env(),

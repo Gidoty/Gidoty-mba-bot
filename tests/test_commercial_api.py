@@ -137,7 +137,7 @@ def test_closed_leaves_a_registered_unpaid_customer_with_the_activate_screen(mon
 def test_signups_mode_is_read_only_where_a_customer_is_created():
     """The mode is consulted in config and in the one place a customer is created. Nowhere else: login, billing and the admin dashboard cannot be closed by it."""
     users = {str(p.relative_to(ROOT / "src")) for p in (ROOT / "src").rglob("*.py") if "signups_mode" in p.read_text()}
-    assert users == {"mba_bot/config.py", "mba_bot/api/routers/auth.py"}
+    assert users == {"mba_bot/config.py", "mba_bot/api/routers/auth.py", "mba_bot/operator_settings.py"}  # the last one only lists the key on the operator-settings allowlist
     auth = (ROOT / "src/mba_bot/api/routers/auth.py").read_text()
     login_src = auth[auth.index("def login("):auth.index('@router.post("/logout"')]
     assert "signups_mode" not in login_src

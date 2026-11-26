@@ -826,3 +826,46 @@ class AlertMark(Base):
     pair: Mapped[str] = mapped_column(String(20), primary_key=True)
     reason: Mapped[str] = mapped_column(String(48), primary_key=True)
     last_alert_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class OperatorSetting(Base):
+    """One operator switch edited from the admin dashboard (docs/safety/operator_settings.md). NON-SECRET values only: a boolean, a number or one of a fixed list of words, never free text, so a secret cannot be typed into
+    it. Only keys on the allowlist in operator_settings.py are ever written or read. A missing row means "use the environment value", so an empty table changes nothing. The old code ignores this table. NEW table, no migration: init_db() creates it on start (create_all)."""
+
+    __tablename__ = "operator_settings"
+
+    key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    value: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class AdminChange(Base):
+    """Append-only record of every change an admin makes through the dashboard: a setting, or an action on one customer. Who (the admin's customer id), when, what, the old and the new value (short, never a secret,
+    never an email) and the reason the admin typed. Never updated or deleted by the application."""
+
+    __tablename__ = "admin_changes"
+    __table_args__ = (Index("ix_admin_changes_at", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    admin_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False)  # setting | action
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)  # a setting key, or a customer or request id
+    old: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    new: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+
+
+class CustomerNote(Base):
+    """A note an admin attached to a customer, for the operator's own records. Visible only in the admin dashboard; never shown to the customer."""
+
+    __tablename__ = "customer_notes"
+    __table_args__ = (Index("ix_customer_notes_customer", "customer_id", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    customer_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    admin_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    note: Mapped[str] = mapped_column(String(500), nullable=False)

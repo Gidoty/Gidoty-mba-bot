@@ -149,3 +149,83 @@ class BillingPanelOut(BaseModel):
     payments_30_days: list[PaymentRow]
     failed_or_mismatched_30_days: int
     switches: BillingSwitches
+
+
+# ---- writes (docs/safety/operator_settings.md). Every write body carries a reason and a fresh authenticator code (step-up).
+class StepUp(BaseModel):
+    reason: str = Field(max_length=400)
+    code: str = Field(min_length=1, max_length=32)
+
+
+class SettingSet(StepUp):
+    key: str = Field(min_length=1, max_length=48)
+    value: str = Field(min_length=1, max_length=40)
+
+
+class SettingReset(StepUp):
+    key: str = Field(min_length=1, max_length=48)
+
+
+class DaysBody(StepUp):
+    days: int
+
+
+class NoteBody(StepUp):
+    note: str = Field(max_length=600)
+
+
+class SettingOut(BaseModel):
+    key: str
+    type: str
+    description: str
+    default: object
+    min: float | None
+    max: float | None
+    choices: list[str]
+    restart_required: bool
+    customer_visible: bool
+    environment_value: object
+    stored_value: str | None
+    effective_value: object
+    source: str
+    note: str | None = None
+
+
+class SettingsList(BaseModel):
+    settings: list[SettingOut]
+    actions_enabled: bool
+
+
+class ChangeOut(BaseModel):
+    at: datetime
+    admin: str
+    kind: str
+    action: str
+    target: str
+    old: str | None
+    new: str | None
+    reason: str
+
+
+class ChangesList(BaseModel):
+    changes: list[ChangeOut]
+
+
+class ActionDone(BaseModel):
+    ok: bool
+    action: str
+    old: str | None = None
+    new: str | None = None
+    restart_required: bool = False
+
+
+class PendingRequest(BaseModel):
+    id: str
+    kind: str
+    status: str
+    requested_at: datetime
+    account_prefix: str | None
+
+
+class RequestsList(BaseModel):
+    requests: list[PendingRequest]

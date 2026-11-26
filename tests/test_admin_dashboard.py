@@ -598,14 +598,22 @@ def test_the_email_like_check_would_catch_a_leak():
     assert EMAIL_LIKE.search('{"x": "someone@example.com"}') and not EMAIL_LIKE.search('{"x": "s***@example.com"}')
 
 
+# The write routes added by docs/safety/operator_settings.md (403 unless ADMIN_ACTIONS_ENABLED; each needs a fresh authenticator code; tests/test_operator_settings.py). Anything else that writes must be listed here on purpose.
+WRITE_PATHS = {"/api/admin/settings/set", "/api/admin/settings/reset", "/api/admin/customers/{ref}/pause", "/api/admin/customers/{ref}/resume", "/api/admin/customers/{ref}/suspend",
+               "/api/admin/customers/{ref}/reinstate", "/api/admin/customers/{ref}/subscription/extend", "/api/admin/customers/{ref}/subscription/end", "/api/admin/customers/{ref}/note",
+               "/api/admin/requests/{request_id}/approve", "/api/admin/requests/{request_id}/refuse", "/api/admin/kill-switch/engage", "/api/admin/kill-switch/release"}
+
+
 def test_responses_are_built_from_explicit_models_and_the_routes_are_read_only():
     from mba_bot.api.routers import admin as r
 
     for route in r.router.routes:
         methods = route.methods - {"HEAD", "OPTIONS"}
         assert methods <= {"GET", "POST"}, route.path  # no PUT, PATCH or DELETE
-        if route.path not in ("/api/admin/login", "/api/admin/logout", "/api/admin/customers/reveal"):
+        if route.path not in ("/api/admin/login", "/api/admin/logout", "/api/admin/customers/reveal") and route.path not in WRITE_PATHS:
             assert methods == {"GET"}, route.path
+        if route.path in WRITE_PATHS:
+            assert methods == {"POST"}, route.path
         if route.path not in ("/api/admin/logout",):
             assert route.response_model is not None, route.path  # explicit allowed fields
     from pathlib import Path
