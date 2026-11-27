@@ -58,6 +58,9 @@ PENDING_STATUSES = frozenset({"waiting", "confirming", "confirmed", "sending"})
 KNOWN_STATUSES = PENDING_STATUSES | {"finished", "partially_paid", "failed", "expired", "refunded"}
 
 # The fields of the GET /v1/payment/{id} answer this module relies on. NOT in the PDF section we read: UNVERIFIED until one real payment.
+PAYMENT_WINDOW_MINUTES = 20  # how long a customer has to send one payment (the payment window NOWPayments shows; the customer's countdown is this long, from the moment the invoice was created)
+SEEN_PREFIX = "seen:"  # outcome of a payment event written for a not-yet-final status (waiting, confirming, confirmed, sending)
+TRANSFER_OUTCOMES = frozenset({"seen:confirming", "seen:confirmed", "seen:sending", "underpaid", "applied"})  # the payment was SEEN on the network (not merely created)
 RELIED_ON = ("payment_id", "payment_status", "order_id", "price_amount", "price_currency", "pay_currency", "pay_amount", "actually_paid")
 OPTIONAL_FIELDS = ("parent_payment_id",)
 
@@ -269,7 +272,8 @@ def judge(p: Payment, bp: BillingPayment, settings: Settings) -> Verdict:
     if status in PENDING_STATUSES:
         return Verdict("pending", status)
     if status == "partially_paid":
-        return Verdict("underpaid", "partially_paid")
+        usd = p.price_amount * p.actually_paid / p.pay_amount if p.pay_amount and p.pay_amount > 0 and p.actually_paid is not None else None
+        return Verdict("underpaid", "partially_paid", usd)  # the value (when the record has the amounts) lets the customer's page say how much is short
     if status in ("failed", "expired", "refunded"):
         return Verdict(status, status)
     if status != "finished":
@@ -490,8 +494,39 @@ async def handle_ipn(db: Session, raw: bytes, header: str | None, settings: Sett
     if record is None:
         _log_verdict(mode, sig, None, None, None, "payment not found at NOWPayments")
         return {"ok": True, "ignored": "payment_not_found"}
+    return await process_record(db, record, settings, now, mode=mode, sig=sig, callback_order=callback_order)
+
+
+_SEEN: dict[str, tuple[str, str]] = {}  # reference -> (latest payment id, its status), kept in THIS process only (a restart clears it); lets the customer's "I have sent the payment" button work in observe mode, where nothing is written
+_SEEN_MAX = 500
+
+
+def remember_seen(reference: str, payment_id: str | None, status: str | None) -> None:
+    if not reference or not payment_id:
+        return
+    if len(_SEEN) >= _SEEN_MAX and reference not in _SEEN:
+        _SEEN.pop(next(iter(_SEEN)))
+    _SEEN[reference] = (payment_id, status or "-")
+
+
+def seen_payment_id(reference: str) -> str | None:
+    hit = _SEEN.get(reference)
+    return hit[0] if hit else None
+
+
+def reset_seen_for_tests() -> None:
+    _SEEN.clear()
+
+
+async def process_record(db: Session, record: dict, settings: Settings, now: datetime, *, mode: str, sig: str | None, callback_order: str | None = None, expect_customer_id: str | None = None, detail: dict | None = None) -> dict:
+    """THE ONE APPLY RULE, from a payment record read back from NOWPayments to the answer. The IPN calls it with a signed notification's payment; the customer's "I have sent the payment" check calls it with a payment
+    the server asked NOWPayments about itself. observe: verdict logged, nothing written. enforce: the same ladder, the same writes, the same alerts. `expect_customer_id`, when given, makes a record that belongs to
+    another customer's invoice act as an unknown order (nothing is read out of it and nothing is changed). `detail`, when given, is filled with the payment and the verdict for the caller's own answer."""
     p = read_payment(record)
     bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=p.order_id).first() if p.order_id else None
+    if bp is not None and expect_customer_id is not None and bp.customer_id != expect_customer_id:
+        _log_verdict(mode, sig, p, None, None, "the payment belongs to another customer's invoice")
+        return {"ok": True, "ignored": "unknown_order"}
     if bp is None:
         _log_verdict(mode, sig, p, None, None, "no invoice of ours has this order_id")
         if mode == "enforce":
@@ -503,6 +538,10 @@ async def handle_ipn(db: Session, raw: bytes, header: str | None, settings: Sett
     if callback_order is not None and p.order_id is not None and callback_order != p.order_id:
         verdict = Verdict("reject", "callback_order_differs")  # the notification and the record disagree: believe neither
     _log_verdict(mode, sig, p, bp, verdict)
+    if detail is not None:
+        detail.update(payment=p, verdict=verdict, invoice_reference=bp.reference, invoice_cents=bp.amount_minor)
+    if verdict.kind in ("pending", "underpaid", "apply", "failed", "expired", "refunded"):
+        remember_seen(bp.reference, p.payment_id, p.status)  # in memory only: no database write, so observe mode stays write-free
     if mode == "observe":
         return {"ok": True, "observed": verdict.kind}
 
@@ -562,6 +601,10 @@ def _apply(db: Session, bp: BillingPayment, p: Payment, v: Verdict, settings: Se
     status = p.status or "-"
     key = f"nowpayments:{p.payment_id}:{status}"
     if v.kind == "pending":
+        if bp.status == "pending":  # a settled invoice is not touched; this only lets the customer's page show "transfer seen and confirming"
+            subs._begin_write(db)
+            bp.provider_payment_id = p.payment_id  # the latest payment NOWPayments made for this invoice (a new one is made when a payment window runs out)
+            _record_event(db, key, bp, (SEEN_PREFIX + status)[:24], None)
         return {"ok": True, "pending": status}
     if v.kind == "unreadable":
         out.append(("crypto_payment_unreadable", bp.customer_id))

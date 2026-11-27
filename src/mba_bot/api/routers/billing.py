@@ -21,15 +21,18 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing import crypto_status
 from ...billing import nowpayments as now_pay
 from ...billing import notices as sub_notices
 from ...billing import subscriptions as sub_billing
 from ...config import Settings
-from ...models import Customer, PaymentEvent, PaymentReference
+from ...models import BillingPayment, Customer, PaymentEvent, PaymentReference
 from ..deps import get_current_customer, get_db, get_settings
+from ..ratelimit import SlidingWindowLimiter
 from ..schemas import BillingCardOptionOut, BillingCryptoOptionOut, BillingOptionsOut, PaymentInitOut
 
 logger = logging.getLogger(__name__)
@@ -165,6 +168,85 @@ async def nowpayments_ipn(request: Request, db: Session = Depends(get_db), setti
     except Exception:  # noqa: BLE001 - never silent, never a 500 with a body
         logger.error("nowpayments ipn handler failed")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
+
+
+# ---- the customer's USDT panel (docs/safety/crypto_payment_panel.md) -------------------------------------------------------------------------------------------------------------------------------
+CHECK_EVERY_SECONDS = 15  # one "I have sent the payment" call per customer per this many seconds
+CHECK_PER_INVOICE = 20  # and at most this many for one invoice
+_check_limiter = SlidingWindowLimiter()  # in this process's memory (production runs one worker); a restart clears it
+
+
+class CryptoCheckIn(BaseModel):
+    reference: str | None = None
+
+
+def _crypto_gate(settings: Settings) -> None:
+    if not (settings.subscription_billing_enabled and settings.nowpayments_enabled):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+
+
+@router.get("/crypto/status")
+def crypto_panel_status(customer: Customer = Depends(get_current_customer), settings: Settings = Depends(get_settings), db: Session = Depends(get_db)) -> dict:
+    """The state of this customer's latest USDT invoice, read from OUR database only (the panel asks every 10 seconds; nothing is sent to NOWPayments and nothing is written). 404 while billing or NOWPayments is off."""
+    from datetime import datetime, timezone
+
+    _crypto_gate(settings)
+    return crypto_status.invoice_view(db, customer.id, settings, datetime.now(timezone.utc))
+
+
+@router.post("/crypto/check")
+async def crypto_check(body: CryptoCheckIn, customer: Customer = Depends(get_current_customer), settings: Settings = Depends(get_settings), db: Session = Depends(get_db)) -> dict:
+    """"I have sent the payment". Grants nothing by itself: the server asks NOWPayments for the current record of this invoice's payment and passes it through the SAME apply rule the IPN uses (`nowpayments.process_record`).
+    NOWPAYMENTS_IPN_MODE: off answers 404; observe writes nothing and only answers with the status; enforce applies exactly as the IPN would. The invoice must be the logged-in customer's own. Limits: one call per customer per
+    15 seconds, 20 per invoice."""
+    from datetime import datetime, timezone
+
+    _crypto_gate(settings)
+    mode = settings.nowpayments_ipn_mode
+    if mode not in ("observe", "enforce"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    now = datetime.now(timezone.utc)
+    if body.reference is not None and len(body.reference) > 100:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    q = db.query(BillingPayment).filter(BillingPayment.provider == now_pay.PROVIDER, BillingPayment.customer_id == customer.id)
+    bp = q.filter(BillingPayment.reference == body.reference).first() if body.reference else q.order_by(BillingPayment.issued_at.desc()).first()
+    if bp is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")  # also what another customer's reference gets: nothing is said about whose it is
+    allowed, retry = _check_limiter.hit(f"cust:{customer.id}", 1, float(CHECK_EVERY_SECONDS))
+    if not allowed:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Please wait a few seconds before checking again.", headers={"Retry-After": str(retry)})
+    allowed, retry = _check_limiter.hit(f"inv:{bp.reference}", CHECK_PER_INVOICE, 86400.0)
+    if not allowed:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "This invoice has been checked many times. Please contact support with the reference.", headers={"Retry-After": str(retry)})
+
+    base = {"mode": mode, "recorded": False, "reference": bp.reference}
+    payment_id = bp.provider_payment_id or now_pay.seen_payment_id(bp.reference)
+    if not payment_id:
+        return {**base, "stage": crypto_status.NO_PAYMENT_SEEN, "text": crypto_status.TEXT[crypto_status.NO_PAYMENT_SEEN], "short_usd": None}
+    try:
+        record = await now_pay.get_json(f"/v1/payment/{payment_id}", settings)
+    except sub_billing.ProviderUnavailable:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "We could not ask the payment provider just now. Please try again in a minute.") from None
+    if record is None:
+        return {**base, "stage": crypto_status.NO_PAYMENT_SEEN, "text": crypto_status.TEXT[crypto_status.NO_PAYMENT_SEEN], "short_usd": None}
+    detail: dict = {}
+    try:
+        await now_pay.process_record(db, record, settings, now, mode=mode, sig="customer-check", expect_customer_id=customer.id, detail=detail)
+    except (now_pay.NotConfigured, sub_billing.ProviderUnavailable, sub_billing.RetryLater):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "We could not settle this just now. Please try again in a minute.") from None
+    verdict, p = detail.get("verdict"), detail.get("payment")
+    if verdict is None or detail.get("invoice_reference") != bp.reference:
+        return {**base, "stage": crypto_status.UNCLEAR, "text": crypto_status.TEXT[crypto_status.UNCLEAR], "short_usd": None}
+    if mode == "enforce":
+        view = crypto_status.invoice_view(db, customer.id, settings, now)
+        inv = view["invoice"] or {}
+        stage = inv.get("stage") if inv.get("reference") == bp.reference else crypto_status.stage_from_verdict(verdict.kind, p.status)
+        return {**base, "recorded": True, "stage": stage, "text": crypto_status.TEXT.get(stage, ""), "short_usd": inv.get("short_usd") if inv.get("reference") == bp.reference else None, "invoice": inv or None}
+    stage = crypto_status.stage_from_verdict(verdict.kind, p.status)
+    text = crypto_status.TEXT.get(stage, "")
+    if stage == crypto_status.CONFIRMED:
+        text = "The payment provider shows this payment as finished. Payments are not being applied automatically yet, so your access may not change on its own: please send the reference to support."
+    return {**base, "stage": stage, "text": text, "short_usd": crypto_status.short_from_value(bp, verdict.usd_value) if stage == crypto_status.UNDERPAID else None}
 
 
 @router.get("/options", response_model=BillingOptionsOut)

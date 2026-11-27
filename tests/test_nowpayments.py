@@ -508,12 +508,16 @@ def test_a_finished_payment_of_the_full_amount_grants_one_month(app, fake, tg):
 
 
 @pytest.mark.parametrize("status", ["waiting", "confirming", "confirmed", "sending"])
-def test_pending_statuses_grant_nothing_and_write_nothing(app, fake, status):
+def test_pending_statuses_grant_nothing_and_only_note_that_the_payment_was_seen(app, fake, status):
+    """Grants nothing. The only writes are the payment id on the invoice and one 'seen' event, which is what the customer's page reads to say 'transfer seen and confirming'; the invoice stays pending."""
     with app() as c:
         cid = customer(c)
         r = pay(c, fake, cid, status=status)
         assert r.json() == {"ok": True, "pending": status}
-        assert sub_row(cid) is None and bp_state()[0] == "pending" and count(PaymentEvent) == 0 and not entitled(cid)
+        assert sub_row(cid) is None and bp_state()[0] == "pending" and not entitled(cid)
+        assert count(PaymentEvent) == 1 and bp_state()[1] == "5077125051"
+        with session_scope() as s:
+            assert s.query(PaymentEvent).one().outcome == f"seen:{status}"
 
 
 def test_the_tolerance_edge_is_one_percent_of_the_invoices_own_rate(app, fake, tg):
