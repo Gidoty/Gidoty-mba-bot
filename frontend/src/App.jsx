@@ -29,6 +29,7 @@ import Performance from "./pages/Performance.jsx";
 import Positions from "./pages/Positions.jsx";
 import Practice from "./pages/Practice.jsx";
 import Signup from "./pages/Signup.jsx";
+import Subscriptions from "./pages/Subscriptions.jsx";
 import TradeHistory from "./pages/TradeHistory.jsx";
 import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/RecoveryPages.jsx";
 import { isRecoveryRoute } from "./lib/recovery.js";
@@ -55,6 +56,7 @@ const NAV_PAGES = {
   notifications: Notifications,
   practice: Practice,
   help: Help,
+  subscriptions: Subscriptions,
   account: Account,
 };
 

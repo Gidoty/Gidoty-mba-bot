@@ -8,17 +8,18 @@ import RecentTrades from "../../components/dashboard/RecentTrades.jsx";
 import useTrades from "../../components/dashboard/useTrades.js";
 import HelpTip from "../../components/HelpTip.jsx";
 import InfoHelp from "../../components/InfoHelp.jsx";
-import SubscribeCard from "../../components/SubscribeCard.jsx";
+import { secondaryButton } from "../../components/form.jsx";
 import useBillingOptions from "../../components/useBillingOptions.js";
-import { screenKind } from "../../lib/billing.js";
+import { DASHBOARD_LINK_TEXT, SUBSCRIPTIONS_ROUTE, dashboardLine } from "../../lib/subscriptions.js";
 import { Badge, Card, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
 import { GLOSSARY } from "../../glossary.js";
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
 import { PRACTICE_NOTICE_HELP, PRACTICE_NOTICE_LABEL } from "../../practiceNotice.js";
+import { navigate } from "../../useHashRoute.js";
 
 // Practice mode: the bot reads practice-server prices and simulates every trade (no order is sent).
-export default function TestnetDashboard({ account, onAccountChanged, onActivate }) {
+export default function TestnetDashboard({ account, onAccountChanged }) {
   const L = pnlLabels(account, { paper: true });
   const unit = quoteCurrency(account) || "USDT";
   const { status, trades, reload } = useTrades(true, account.id);
@@ -121,23 +122,12 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
 
       <UnderstandingTestnet labels={L} />
 
-      {billing.status === "off" && (
-        <div className="rounded-card border border-line border-l-4 border-l-brand-line bg-surface p-5">
-          <p className="text-sm font-semibold text-fg">Ready to move beyond practice trading?</p>
-          <p className="mt-1 text-sm text-muted">
-            Activating your account unlocks the full trading environment. You'll still choose, separately and
-            explicitly, if and when to connect real funds - activating does not do that by itself.
-          </p>
-          <button
-            type="button"
-            onClick={onActivate}
-            className="mt-4 min-h-[44px] w-full rounded-ctl bg-brand px-5 text-sm font-semibold text-brand-ink hover:brightness-105 sm:w-auto"
-          >
-            Activate
-          </button>
-        </div>
-      )}
-      {billing.status === "ready" && ["offer", "renew"].includes(screenKind(billing.options)) && <SubscribeCard options={billing.options} />}
+      <div className="rounded-card border border-line border-l-4 border-l-brand-line bg-surface p-5">
+        <p className="text-sm text-fg">{dashboardLine(billing)}</p>
+        <button type="button" onClick={() => navigate(SUBSCRIPTIONS_ROUTE)} className={`${secondaryButton} mt-3 w-full sm:w-auto`}>
+          {DASHBOARD_LINK_TEXT}
+        </button>
+      </div>
 
       {!account.live_bypass_accepted_at && (
         <div className="flex items-center gap-1 text-xs text-muted">

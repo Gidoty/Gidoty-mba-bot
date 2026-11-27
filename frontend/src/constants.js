@@ -61,6 +61,7 @@ export const NAV_ITEMS = [
   { route: "notifications", label: "Notifications" },
   { route: "practice", label: "Testnet / Practice" },
   { route: "help", label: "Help & Guide" },
+  { route: "subscriptions", label: "Subscriptions" },
   { route: "account", label: "Account" },
 ];
 
