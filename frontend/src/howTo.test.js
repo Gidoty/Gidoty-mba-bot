@@ -9,7 +9,7 @@ const all = sections.flatMap((s) => s.steps.map(([title, body]) => `${title}. ${
 
 test("the walk-through follows the order a new customer meets the app", () => {
   const titles = sections.flatMap((s) => s.steps.map(([t]) => t));
-  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Dashboard", "Positions", "Trade History", "Performance", "Bot Settings", "Notifications", "Account", "Risk per trade", "Choosing your risk", "Leverage on Futures", "Risk and leverage compared", "The liquidation check", "Daily loss limit", "Total loss stop", "Open trades and your money", "Enable live trading", "Set your capital and start the bot", "Stopping"];
+  const order = ["Sign up", "Link Telegram", "Try practice mode", "Activate when you are ready", "Create a Binance API key", "Add the server address", "Connect Binance", "Home", "Positions", "History", "Performance", "Bot Settings", "Notifications", "Account", "Risk per trade", "Choosing your risk", "Leverage on Futures", "Risk and leverage compared", "The liquidation check", "Daily loss limit", "Total loss stop", "Open trades and your money", "Enable live trading", "Set your capital and start the bot", "Stopping"];
   assert.deepEqual(titles, order);
 });
 

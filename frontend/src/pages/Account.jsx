@@ -9,6 +9,8 @@ import { Card, CardTitle, PageHeader, Pill } from "../components/ui.jsx";
 import { MARKET_TYPES } from "../constants.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import { dayMonthYear } from "../lib/format.js";
+import { LEGAL_LINKS } from "../lib/navigation.js";
+import NavIcon from "../components/navIcons.jsx";
 import { navigate } from "../useHashRoute.js";
 
 const STATEMENT_URL = `${import.meta.env.VITE_API_URL || "/api"}/statements/trades.csv`;
@@ -118,20 +120,25 @@ export default function Account({ customer, onLogout }) {
         </Card>
       )}
 
-      <Card>
-        <CardTitle>Legal</CardTitle>
-        <div className="flex flex-wrap gap-x-5 gap-y-2">
-          <a className={linkButton} href="#/terms">Terms of Service</a>
-          <a className={linkButton} href="#/privacy">Privacy Policy</a>
-          <a className={linkButton} href="#/risk-disclosure">Trading Risk Disclosure</a>
-        </div>
-      </Card>
-
       <DataRequestCard />
 
       <button type="button" onClick={onLogout} className={`${secondaryButton} w-full`}>
         Log out
       </button>
+
+      <section aria-label="Legal">
+        <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted">Legal</h2>
+        <ul className="overflow-hidden rounded-card border border-line bg-surface">
+          {LEGAL_LINKS.map((item, i) => (
+            <li key={item.route} className={i > 0 ? "border-t border-line" : ""}>
+              <a href={`#/${item.route}`} className="flex min-h-[56px] items-center gap-3 px-4 text-sm font-medium text-fg hover:bg-surface-2">
+                <span className="min-w-0 flex-1">{item.label}</span>
+                <NavIcon route="chevron" className="h-5 w-5 text-muted" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }

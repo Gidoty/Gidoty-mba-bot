@@ -17,6 +17,7 @@ import Help from "./pages/Help.jsx";
 import Landing from "./pages/Landing.jsx";
 import LegalPage from "./pages/LegalPage.jsx";
 import Login from "./pages/Login.jsx";
+import More from "./pages/More.jsx";
 import DailyLimitNotice from "./components/DailyLimitNotice.jsx";
 import DemoBanner from "./components/DemoBanner.jsx";
 import AdviceSummary from "./components/AdviceSummary.jsx";
@@ -33,6 +34,7 @@ import Subscriptions from "./pages/Subscriptions.jsx";
 import TradeHistory from "./pages/TradeHistory.jsx";
 import { ForgotPassword, ResetPassword, VerifyEmail } from "./pages/RecoveryPages.jsx";
 import { isRecoveryRoute } from "./lib/recovery.js";
+import { HOME_ROUTE, canonicalRoute } from "./lib/navigation.js";
 import { navigate, useHashRoute } from "./useHashRoute.js";
 
 // Static legal pages - reachable regardless of auth state, and
@@ -48,6 +50,7 @@ const LEGAL_ROUTES = {
 // Activation / Connect Binance / Ready-for-Live / Live off the
 // account's own state rather than being a single fixed page.
 const NAV_PAGES = {
+  more: More,
   positions: Positions,
   "trade-history": TradeHistory,
   performance: Performance,
@@ -61,7 +64,7 @@ const NAV_PAGES = {
 };
 
 export default function App() {
-  const route = useHashRoute();
+  const route = canonicalRoute(useHashRoute()); // the old #/dashboard link opens Home
   const [customer, setCustomer] = useState(undefined); // undefined = loading, null = logged out
 
   function refreshCustomer() {
@@ -81,7 +84,7 @@ export default function App() {
 
   function handleAuthed(nextCustomer) {
     setCustomer(nextCustomer);
-    navigate("dashboard");
+    navigate(HOME_ROUTE);
   }
 
   function handleLogout() {
@@ -92,6 +95,7 @@ export default function App() {
   }
 
   let content;
+  let inApp = false; // true while the signed-in app (sidebar and bottom bar) is on screen: it has no footer, the legal links are at the bottom of Account
   if (LEGAL_ROUTES[route]) {
     // Always reachable, even while a logged-in customer is blocked by
     // the legal-consent gate below, or still "loading".
@@ -114,6 +118,7 @@ export default function App() {
     // call, so this isn't just a frontend-only gate.
     content = <LegalConsentGate onAccepted={refreshCustomer} onLogout={handleLogout} riskNeeded={Boolean(customer.risk_acceptance_needed)} />;
   } else {
+    inApp = true;
     content = (
       <AccountProvider customer={customer} onCustomerChanged={refreshCustomer}>
         <AuthedApp customer={customer} onLogout={handleLogout} onCustomerChanged={refreshCustomer} route={route} />
@@ -124,7 +129,7 @@ export default function App() {
   return (
     <>
       {content}
-      <Footer dark={customer === null && !LEGAL_ROUTES[route] && route !== "login" && route !== "signup"} />
+      {!inApp && <Footer dark={customer === null && !LEGAL_ROUTES[route] && route !== "login" && route !== "signup"} />}
       <HowToUseGuide />
     </>
   );
@@ -164,7 +169,12 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
   }
 
   if (!account) {
-    return <Onboarding customer={customer} account={account} onLogout={onLogout} onProgress={refreshAccount} />;
+    return (
+      <>
+        <Onboarding customer={customer} account={account} onLogout={onLogout} onProgress={refreshAccount} />
+        <Footer />
+      </>
+    );
   }
 
   const needsTelegram = account.notification_channel === "telegram" && !account.notification_target;
@@ -174,7 +184,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
     return <div className="flex min-h-screen items-center justify-center text-muted">Loading...</div>;
   }
   const Page = route === "admin" ? (isAdmin ? Admin : undefined) : NAV_PAGES[route];
-  const activeRoute = Page ? route : "dashboard";
+  const activeRoute = Page ? route : HOME_ROUTE;
 
   return (
     <AppShell route={activeRoute} onLogout={onLogout} botCode={account.bot_code} showAdmin={isAdmin}>
@@ -182,7 +192,7 @@ function AuthedApp({ customer, onLogout, onCustomerChanged, route }) {
       <BillingNoticeBanner />
       <DemoBanner account={account} />
       {Page ? (
-        <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} />
+        <Page customer={customer} onLogout={onLogout} onCustomerChanged={onCustomerChanged} showAdmin={isAdmin} />
       ) : (
         <>
           <DailyLimitNotice account={account} />

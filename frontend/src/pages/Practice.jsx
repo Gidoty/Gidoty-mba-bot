@@ -32,9 +32,9 @@ function InPractice() {
           <li>No order is sent to Binance and no real money is involved.</li>
           <li>There are no fees and no slippage, so real trades can fill at different prices and cost more.</li>
         </ol>
-        <p className="mt-3 text-sm text-muted">Your Dashboard already shows your practice activity.</p>
-        <button type="button" onClick={() => navigate("dashboard")} className="mt-3 min-h-[44px] rounded-ctl bg-brand px-5 text-sm font-semibold text-brand-ink hover:brightness-105">
-          Go to Dashboard
+        <p className="mt-3 text-sm text-muted">Home already shows your practice activity.</p>
+        <button type="button" onClick={() => navigate("home")} className="mt-3 min-h-[44px] rounded-ctl bg-brand px-5 text-sm font-semibold text-brand-ink hover:brightness-105">
+          Go to Home
         </button>
       </Card>
       <WhatIsTestnet />
