@@ -690,9 +690,9 @@ def test_the_admin_page_source_holds_no_secret_no_colour_literal_and_hides_itsel
     app = (root / "App.jsx").read_text()
     shell = (root / "components" / "AppShell.jsx").read_text()
     assert 'route === "admin" ? (isAdmin ? Admin : undefined)' in app  # a non-admin who types #/admin lands on the dashboard exactly as for any unknown route
-    assert "showAdmin" in shell and "sidebarItems(showAdmin)" in shell  # the Admin link is added only for an admin (lib/navigation.js), in the sidebar and in More
+    assert "showAdmin" in shell and "showAdmin={showAdmin}" in shell  # the Admin link is added only for an admin (lib/navigation.js), in the top bar menu and in More
     nav = (root / "lib" / "navigation.js").read_text()
-    assert "showAdmin ? [...MORE_GROUPS" in nav
+    assert "showAdmin ? [...MORE_GROUPS" in nav and "showAdmin ? [...DESKTOP_MENU" in nav
     constants = (root / "constants.js").read_text()
     assert '"admin"' not in constants  # the link is not in the static navigation list
 

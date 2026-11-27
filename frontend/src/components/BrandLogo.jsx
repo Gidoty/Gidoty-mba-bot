@@ -13,7 +13,7 @@ export default function BrandLogo({ dark = true, subtitle = null }) {
       </svg>
       <span className="leading-tight">
         <span className={`block font-serif text-base font-semibold ${textColor}`}>
-          Metabridge <span className="text-accent-light">Bot</span>
+          Metabridge <span className={dark ? "text-accent-light" : "text-brand-text"}>Bot</span>
         </span>
         {subtitle && <span className={`block text-[11px] font-medium tracking-wide ${subColor}`}>{subtitle}</span>}
       </span>

@@ -19,7 +19,7 @@ body {
 }
 
 /* The floating help button must clear the bottom tab bar on a phone. */
-@media (max-width: 899px) {
+@media (max-width: 767px) {
   body[data-shell] .how-to-fab {
     bottom: calc(4.75rem + env(safe-area-inset-bottom));
   }

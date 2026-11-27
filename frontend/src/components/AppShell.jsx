@@ -1,18 +1,19 @@
 import { useEffect } from "react";
 
-import { BOTTOM_TABS, HOME_ROUTE, activeTab, sidebarItems } from "../lib/navigation.js";
+import { BOTTOM_TABS, HOME_ROUTE, activeTab } from "../lib/navigation.js";
 import { navigate } from "../useHashRoute.js";
 import BrandLogo from "./BrandLogo.jsx";
 import NavIcon from "./navIcons.jsx";
+import TopNav from "./TopNav.jsx";
 import { Pill } from "./ui.jsx";
 
 // Pages already moved to the wide layout (charts and tables). Each page PR adds its route here.
 const WIDE_ROUTES = new Set(["home", "positions", "trade-history", "performance", "practice"]);
 
-// Wraps every signed-in page: sidebar from 900 px, a top bar and a fixed bottom bar below that (six items, More is a page), and one content width. Pages render only their own content.
+// Wraps every signed-in page. From 768 px: a sticky top navigation bar (tabs in one row and a More menu) over a centred column. Below that: a small top bar, a fixed bottom bar (four tabs and More, which is a page) and the
+// same column. Pages render only their own content.
 export default function AppShell({ route, onLogout, botCode, showAdmin = false, children }) {
   const wide = WIDE_ROUTES.has(route) || route === "admin";
-  const items = sidebarItems(showAdmin); // the same names in the same order as More, after the five main items (no legal links: they are at the bottom of Account)
   const tab = activeTab(route);
 
   // Lets the floating help button sit above the bottom bar on a phone (see index.css).
@@ -22,36 +23,20 @@ export default function AppShell({ route, onLogout, botCode, showAdmin = false, 
   }, []);
 
   return (
-    <div className="min-h-screen bg-app text-fg shell:grid shell:grid-cols-[224px_minmax(0,1fr)]">
-      <aside className="sticky top-0 hidden h-screen flex-col gap-1 bg-rail px-3 py-5 shell:flex">
-        <button type="button" onClick={() => navigate(HOME_ROUTE)} className="mb-5 px-2 text-left">
-          <BrandLogo />
-        </button>
-        <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto">
-          {items.map((item) => (
-            <SideLink key={item.route} item={item} active={route === item.route} />
-          ))}
-        </nav>
-        <div className="px-1 pt-3">
-          <button type="button" onClick={onLogout} className="w-full rounded-ctl border border-white/20 py-2 text-sm font-medium text-rail-text hover:bg-rail-active">
-            Log out
-          </button>
-        </div>
-      </aside>
+    <div className="min-h-screen bg-app text-fg">
+      <TopNav route={route} onLogout={onLogout} showAdmin={showAdmin} />
 
-      <div className="min-w-0">
-        <header className="sticky top-0 z-30 flex items-center justify-between bg-rail px-4 py-2.5 shell:hidden">
-          <button type="button" onClick={() => navigate(HOME_ROUTE)} className="text-left">
-            <BrandLogo subtitle={botCode || null} />
-          </button>
-          <span id="advice-slot-mobile" className="contents" />
-        </header>
-        <div className="hidden items-center justify-end gap-3 px-6 pt-5 shell:flex">
-          <span id="advice-slot-desktop" className="contents" />
-          {botCode && <Pill>{botCode}</Pill>}
-        </div>
-        <main className={`mx-auto px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-5 shell:px-6 shell:pb-12 ${wide ? "max-w-[1120px]" : "max-w-3xl"}`}>{children}</main>
+      <header className="sticky top-0 z-30 flex items-center justify-between bg-rail px-4 py-2.5 shell:hidden">
+        <button type="button" onClick={() => navigate(HOME_ROUTE)} className="text-left">
+          <BrandLogo subtitle={botCode || null} />
+        </button>
+        <span id="advice-slot-mobile" className="contents" />
+      </header>
+      <div className={`mx-auto hidden items-center justify-end gap-3 px-6 pt-5 shell:flex ${wide ? "max-w-[1120px]" : "max-w-3xl"}`}>
+        <span id="advice-slot-desktop" className="contents" />
+        {botCode && <Pill>{botCode}</Pill>}
       </div>
+      <main className={`mx-auto px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-5 shell:px-6 shell:pb-12 ${wide ? "max-w-[1120px]" : "max-w-3xl"}`}>{children}</main>
 
       <nav aria-label="Main" className="fixed inset-x-0 bottom-0 z-30 flex border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] shell:hidden">
         {BOTTOM_TABS.map((t) => (
@@ -59,22 +44,6 @@ export default function AppShell({ route, onLogout, botCode, showAdmin = false, 
         ))}
       </nav>
     </div>
-  );
-}
-
-function SideLink({ item, active }) {
-  return (
-    <button
-      type="button"
-      onClick={() => navigate(item.route)}
-      aria-current={active ? "page" : undefined}
-      className={`flex w-full items-center gap-3 rounded-ctl px-3 py-2.5 text-left text-sm font-medium ${
-        active ? "bg-rail-active text-white shadow-[inset_3px_0_0_var(--accent)]" : "text-rail-text hover:bg-rail-active"
-      }`}
-    >
-      <NavIcon route={item.route} className="h-5 w-5" />
-      {item.label}
-    </button>
   );
 }
 

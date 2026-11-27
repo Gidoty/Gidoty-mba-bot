@@ -3,8 +3,8 @@ export default {
   content: ["./index.html", "./src/**/*.{js,jsx}"],
   theme: {
     extend: {
-      // Sidebar layout from 900 px; below that, top bar plus bottom tab bar.
-      screens: { shell: "900px" },
+      // Top navigation bar from 768 px; below that, the phone layout (a small top bar, the bottom bar and the More page).
+      screens: { shell: "768px" },
       colors: {
         // Deep navy - already close to the Metabridge Academy site's own
         // background, kept rather than reinvented. Used for the LIVE
