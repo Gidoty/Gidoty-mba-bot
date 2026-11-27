@@ -16,6 +16,8 @@ from .setup_advice_texts import render
 
 NOT_POSSIBLE, WARNING, TIP = "not_possible", "warning", "tip"
 _ORDER = {NOT_POSSIBLE: 0, WARNING: 1, TIP: 2}
+TIMEFRAME_HOURS = {"1h": 1, "4h": 4, "1d": 24}
+CROSSINGS_PER_CANDLE = 0.02  # EMA 20/50 on a random price series (tests/test_setup_advisor_timeframe.py recomputes it); a property of the indicator, not market data
 ASSUMED_STOP_PCT = 1.0  # a typical stop distance for the sizing illustration; stated in every note that uses it
 MAX_PAIRS_NAMED = 3
 STRATEGY_PRIORITY = (("donchian_breakout_v1", "Donchian"), ("ema_cross_atr_v1", "EMA"), ("rsi_mr_v1", "RSI"))
@@ -46,6 +48,7 @@ class Proposed:
     pair_selection_mode: str | None = None
     acknowledge_high_risk: bool = False
     acknowledge_very_high_risk: bool = False
+    ema_timeframe: str | None = None  # a candle size to PREVIEW (1h, 4h or 1d); the advisor never saves it
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,10 @@ class Facts:
     binance_leverage: float | None = None  # the cached read of Binance's own number for the account's pair, or None
     binance_margin_mode: str | None = None
     binance_pair: str | None = None
+    precheck_min_maint_rate: float = 0.005
+    precheck_safety_fraction: float = 0.75
+    precheck_cross_factor: float = 0.9
+    precheck_max_leverage: float = 125.0
 
 
 def _num(x) -> float | None:
@@ -96,6 +103,55 @@ def _size_model(*, capital: float, risk_pct: float, f: Facts, market_type: str, 
         lev = leverage_module.effective(binance_lev, cap)
     size = risk.apply_margin_ceiling(size, entry_price=entry, effective_capital=capital, leverage=lev)
     return size, lev, entry, stop
+
+
+def stop_pct_for(timeframe: str) -> float:
+    """The stop distance the preview assumes: ASSUMED_STOP_PCT on 1h, scaled with the square root of the candle length (volatility over a candle grows about that way). An assumption, stated in the note."""
+    return ASSUMED_STOP_PCT * math.sqrt(TIMEFRAME_HOURS[timeframe])
+
+
+def _timeframe_notes(tf, *, market, pair, risk_pct, capital, size_ok, f, cap, binance_lev) -> list[Note]:
+    if tf not in TIMEFRAME_HOURS:
+        return [Note("tf_unknown", WARNING, render("tf_unknown"), None, "trading")]
+    out: list[Note] = []
+    stop_pct = stop_pct_for(tf)
+    per_year = CROSSINGS_PER_CANDLE * 8760 / TIMEFRAME_HOURS[tf]
+    out.append(Note("tf_signals", TIP, render("tf_signals", per_hundred=round(CROSSINGS_PER_CANDLE * 100, 1), per_year=float(f"{per_year:.2g}"), tf=tf), None, "trading"))
+    if not (size_ok and capital is not None and capital > 0 and risk_pct is not None):
+        return out
+    entry = 100.0
+    stop = entry * (1 - stop_pct / 100.0)
+    try:
+        size = risk.compute_position_size(account_balance=capital, risk_pct=risk_pct, entry_price=entry, stop_price=stop, max_risk_pct=f.risk_pct_max)
+        size = risk.apply_exposure_ceiling(size, entry_price=entry, effective_capital=capital, max_notional_multiplier=f.max_notional_multiplier)
+        lev = small_capital.leverage_cap_for(market, cap)
+        if market == "futures" and binance_lev:
+            lev = leverage_module.effective(binance_lev, cap)
+        size = risk.apply_margin_ceiling(size, entry_price=entry, effective_capital=capital, leverage=lev)
+    except risk.InvalidRiskParameters:
+        return out
+    if market == "futures":
+        tier = risk.MaintenanceTier(tier=1, floor=0.0, cap=1e12, rate=f.precheck_min_maint_rate, cum=0.0)
+        check_lev = float(binance_lev) if binance_lev else float(lev)  # the liquidation distance follows the leverage SET ON BINANCE for the pair when it is known, else the customer's limit
+        lev_phrase = f"{check_lev:g}x, the leverage set on Binance for {pair}," if binance_lev else f"your leverage limit of {check_lev:g}x (Binance's own number for {pair} is not known here)"
+        v = risk.assess_stop_viability(side="long", entry_price=entry, stop_price=stop, quantity=size.quantity, leverage=check_lev, effective_capital=capital, margin_mode="isolated", tiers=[tier],
+                                       other_open_positions=0, min_maint_rate=f.precheck_min_maint_rate, safety_fraction=f.precheck_safety_fraction, cross_collateral_factor=f.precheck_cross_factor,
+                                       max_leverage=f.precheck_max_leverage)
+        max_pct = (v.max_allowed_stop_frac or 0.0) * 100.0
+        key = "tf_stop_ok" if v.viable else "tf_stop_refused"
+        out.append(Note("tf_stop", TIP if v.viable else WARNING, render(key, tf=tf, stop_pct=stop_pct, base_pct=ASSUMED_STOP_PCT, lev_phrase=lev_phrase, max_pct=max_pct), None if v.viable else render("tf_stop_refused_action"), "risk"))
+        mn = f.pair_min_notional.get(pair)
+        order = size.quantity * entry
+        args = dict(risk_pct=risk_pct, stop_pct=stop_pct, capital=_money(capital), unit="USDT", order=_money(order), pair=pair, minimum="" if mn is None else _money(mn))
+        if mn is None:
+            out.append(Note("tf_order", TIP, render("tf_order_unknown", **args), None, "trading"))
+        elif order < mn:
+            out.append(Note("tf_order", WARNING, render("tf_order_too_small", **args), render("tf_order_too_small_action"), "trading"))
+        else:
+            out.append(Note("tf_order", TIP, render("tf_order_ok", **args), None, "trading"))
+    else:
+        out.append(Note("tf_stop", TIP, render("tf_stop_spot", tf=tf, stop_pct=stop_pct), None, "risk"))
+    return out
 
 
 def advise(account, f: Facts, proposed: Proposed | None = None) -> list[dict]:
@@ -239,6 +295,10 @@ def advise(account, f: Facts, proposed: Proposed | None = None) -> list[dict]:
         if off:
             many = len(off) > 1
             notes.append(Note("strategies_not_running", TIP, render("strategies_not_running", names=" and ".join(off), is_are="are" if many else "is"), None, "trading"))
+
+    # --- 11: a candle size to preview (never saved) ---------------------------------------------------------------------------------------------------------------------------------------------------
+    if p.ema_timeframe is not None:
+        notes += _timeframe_notes(p.ema_timeframe, market=market, pair=pair, risk_pct=risk_pct, capital=capital, size_ok=size_ok, f=f, cap=cap, binance_lev=binance_lev)
 
     # --- 8: leverage -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     if market == "futures":

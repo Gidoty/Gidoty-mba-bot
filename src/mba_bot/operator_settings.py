@@ -45,6 +45,10 @@ class SettingDef:
 ALLOWLIST: dict[str, SettingDef] = {d.key: d for d in (
     SettingDef("signups_mode", "choice", "open", "Whether new customers can sign up.", choices=("open", "closed"), customer_visible=True),
     SettingDef("setup_advisor", "bool", False, "Show the setup advisor notes.", customer_visible=True),
+    SettingDef("customer_strategy_choice", "bool", False, "Let customers choose among the available strategies.", customer_visible=True),
+    SettingDef("strategy_donchian_available", "bool", False, "Donchian may be chosen by customers.", customer_visible=True),
+    SettingDef("strategy_rsi_available", "bool", False, "RSI may be chosen by customers.", customer_visible=True),
+    SettingDef("new_account_strategies", "choice", "ema_only", "The strategies a NEW account starts with (only those that are available).", choices=("ema_only", "ema_donchian", "ema_rsi", "ema_donchian_rsi")),
     SettingDef("poll_interval_seconds", "int", 300, "Seconds between scheduler rounds.", lo=60, hi=3600),
     SettingDef("subscription_grace_days", "int", 5, "Days of access after a subscription period ends.", lo=0, hi=30),
     SettingDef("login_max_failures", "int", 5, "Wrong passwords before a sign-in lockout.", lo=3, hi=20),

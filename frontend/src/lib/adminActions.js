@@ -9,6 +9,7 @@ export const ACTIONS = [
   { id: "reinstate", label: "Reinstate the account (the bot stays paused)", target: "ref", suffix: "reinstate" },
   { id: "extend", label: "Extend the subscription by days", target: "ref", suffix: "subscription/extend", days: true },
   { id: "end", label: "End the subscription now", target: "ref", suffix: "subscription/end" },
+  { id: "strategies", label: "Set the account's strategies (override)", target: "ref", suffix: "strategies", strategies: true },
   { id: "note", label: "Add a note", target: "ref", suffix: "note", note: true },
   { id: "approve", label: "Approve a pending request", target: "request", suffix: "approve" },
   { id: "refuse", label: "Refuse a pending request", target: "request", suffix: "refuse" },
@@ -44,6 +45,12 @@ export function buildRequest(actionId, form) {
     const c = String(form.confirm ?? "").trim();
     if (!/^DELETE [A-Za-z0-9-]{8}$/.test(c)) return { error: "Type the confirmation exactly as DELETE and the first 8 characters of the customer id." };
     body.confirm = c;
+  }
+  if (a.strategies) {
+    const ids = String(form.strategies ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    const known = ["ema_cross_atr_v1", "donchian_breakout_v1", "rsi_mr_v1"];
+    if (ids.length > 3 || ids.some((x) => !known.includes(x))) return { error: "Use strategy ids separated by commas: ema_cross_atr_v1, donchian_breakout_v1, rsi_mr_v1 (empty = EMA only)." };
+    body.strategies = ids;
   }
   if (a.note) {
     const n = String(form.note ?? "").trim();

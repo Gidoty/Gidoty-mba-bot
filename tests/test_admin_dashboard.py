@@ -600,7 +600,7 @@ def test_the_email_like_check_would_catch_a_leak():
 
 # The write routes added by docs/safety/operator_settings.md (403 unless ADMIN_ACTIONS_ENABLED; each needs a fresh authenticator code; tests/test_operator_settings.py). Anything else that writes must be listed here on purpose.
 WRITE_PATHS = {"/api/admin/settings/set", "/api/admin/settings/reset", "/api/admin/customers/{ref}/pause", "/api/admin/customers/{ref}/resume", "/api/admin/customers/{ref}/suspend",
-               "/api/admin/customers/{ref}/reinstate", "/api/admin/customers/{ref}/subscription/extend", "/api/admin/customers/{ref}/subscription/end", "/api/admin/customers/{ref}/note",
+               "/api/admin/customers/{ref}/reinstate", "/api/admin/customers/{ref}/subscription/extend", "/api/admin/customers/{ref}/subscription/end", "/api/admin/customers/{ref}/note", "/api/admin/customers/{ref}/strategies",
                "/api/admin/requests/{request_id}/approve", "/api/admin/requests/{request_id}/refuse", "/api/admin/kill-switch/engage", "/api/admin/kill-switch/release", "/api/admin/requests/{request_id}/complete-deletion"}
 
 

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ... import exchange, pair_catalog, pnl_labels
+from ... import exchange, pair_catalog, pnl_labels, strategy_availability
 from ... import leverage as leverage_module
 from ...billing.entitlement import is_entitled
 from ...botcode import assign_unique_bot_code
@@ -335,6 +335,7 @@ def create_account(
         risk_pct=risk_pct,
         trial_ends_at=start_trial(trial_days=settings.trial_days),
         paper_balance=settings.paper_starting_balance,
+        extra_strategies=strategy_availability.default_for_new(settings),  # None unless the operator chose another default and made it available
     )
     db.add(account)
     db.flush()
@@ -541,6 +542,8 @@ def _advice(customer: Customer, db: Session, settings: Settings, body: AdviceReq
         acks_on_file={t: has_current_acceptance(db, customer_id=customer.id, document_type=t, version=risk_limits.ACK_VERSION) for t in (risk_limits.ACK_HIGH, risk_limits.ACK_VERY_HIGH)},
         pair_min_notional={k: v.min_notional for k, v in cached_pairs.items() if v.listed and v.min_notional is not None},
         binance_leverage=bs_out.leverage if bs_out else None, binance_margin_mode=bs_out.margin_mode if bs_out else None, binance_pair=bs_out.pair if bs_out else None,
+        precheck_min_maint_rate=settings.precheck_min_maint_rate, precheck_safety_fraction=settings.precheck_stop_safety_fraction,
+        precheck_cross_factor=settings.precheck_cross_collateral_factor, precheck_max_leverage=settings.precheck_max_leverage,
     )
     proposed = setup_advice.Proposed(**body.model_dump()) if body is not None else None
     return AdviceOut(notes=setup_advice.advise(account, facts, proposed))
@@ -1025,3 +1028,41 @@ async def test_credentials(
     finally:
         await client.close()
     return CredentialTestOut(ok=True, message="Connection verified.")
+
+
+# --- /api/account/strategies: which strategies this customer may choose (docs/safety/strategy_availability.md). Choosing never switches a strategy on for trading: the operator's live switches decide that. ---
+_STRATEGY_TEXT = {
+    "ema_cross_atr_v1": "Follows a trend: opens a trade when a fast and a slow moving average cross. Always on for every account.",
+    "donchian_breakout_v1": "Opens a trade when the price breaks out of its recent range, and trails the stop.",
+    "rsi_mr_v1": "Opens a trade when the price has moved far from its recent average and exits on the way back.",
+}
+
+
+def _strategies_out(account, settings: Settings) -> dict:
+    live = {"donchian_breakout_v1": settings.live_donchian, "rsi_mr_v1": settings.live_rsi_mr}
+    avail = strategy_availability.available(settings)
+    return {
+        "can_choose": settings.customer_strategy_choice,
+        "selected": list(strategy_availability.selection(account)),
+        "strategies": [{"id": sid, "name": strategy_availability.NAMES[sid], "description": _STRATEGY_TEXT[sid], "available": sid in avail, "trades_live_now": True if sid == "ema_cross_atr_v1" else bool(live[sid])} for sid in strategy_availability.NAMES],
+    }
+
+
+@router.get("/strategies")
+def get_strategies(customer: Customer = Depends(require_legal_acceptance), settings: Settings = Depends(get_settings)) -> dict:
+    return _strategies_out(_require_account(customer), settings)
+
+
+@router.put("/strategies")
+def put_strategies(body: dict, customer: Customer = Depends(require_legal_acceptance), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> dict:
+    if not settings.customer_strategy_choice:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Choosing strategies is not switched on for customers.")
+    account = _require_account(customer)
+    try:
+        value = strategy_availability.validate_customer_choice(settings, body.get("strategies"))
+    except strategy_availability.ChoiceError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from None
+    if list_open_trades(db, account.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "You have a trade open. Change this after it has closed.")
+    account.extra_strategies = value
+    return _strategies_out(account, settings)

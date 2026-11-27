@@ -9,7 +9,7 @@ test("every action builds the route the server has", () => {
   assert.equal(buildRequest("extend", { ...ok, days: 30 }).path, "/admin/customers/abc-123/subscription/extend");
   assert.equal(buildRequest("approve", ok).path, "/admin/requests/abc-123/approve");
   assert.equal(buildRequest("kill_engage", { reason: ok.reason, code: ok.code }).path, "/admin/kill-switch/engage");
-  assert.equal(ACTIONS.length, 12);
+  assert.equal(ACTIONS.length, 13);
 });
 
 test("a reason and a code are always needed", () => {
@@ -52,4 +52,12 @@ test("completing a deletion needs the exact confirmation and goes to its own rou
   const r = buildRequest("complete_deletion", { ...ok, confirm: "DELETE 1a2b3c4d" });
   assert.equal(r.path, "/admin/requests/abc-123/complete-deletion");
   assert.equal(r.body.confirm, "DELETE 1a2b3c4d");
+});
+
+test("strategy overrides take known ids only", () => {
+  const r = buildRequest("strategies", { ...ok, strategies: "rsi_mr_v1, donchian_breakout_v1" });
+  assert.equal(r.path, "/admin/customers/abc-123/strategies");
+  assert.deepEqual(r.body.strategies, ["rsi_mr_v1", "donchian_breakout_v1"]);
+  assert.deepEqual(buildRequest("strategies", { ...ok, strategies: "" }).body.strategies, []);
+  for (const bad of ["nope", "rsi_mr_v1,a,b,c", "ema_cross_atr_v1,donchian_breakout_v1,rsi_mr_v1,rsi_mr_v1"]) assert.ok(buildRequest("strategies", { ...ok, strategies: bad }).error, bad);
 });

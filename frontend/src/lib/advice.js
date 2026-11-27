@@ -11,7 +11,7 @@ function num(raw) {
 
 // The values the customer is about to save, in the shape POST /account/advice takes. Only what Save would send: a field left as saved is omitted ("unchanged"), exactly as for PATCH.
 // A risk setting that is not a number, and an empty or non-positive amount, are left out (the screen has its own message for them).
-export function buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit }) {
+export function buildRequest({ account, pair, marketType, riskPct, pairSelectionMode, maxLeverage, capitalInput, limitInput, liveSlots, acks, savedCapital, savedLimit, previewTimeframe }) {
   const body = {};
   const risk = num(riskPct);
   if (risk !== null) body.risk_pct = risk;
@@ -27,6 +27,7 @@ export function buildRequest({ account, pair, marketType, riskPct, pairSelection
   if (account.live_multi_available && String(liveSlots) !== String(account.live_slots || 1)) body.live_slots = Number(liveSlots);
   const lev = num(maxLeverage);
   if (marketType === "futures" && lev !== null && String(maxLeverage) !== String(account.max_leverage || 3)) body.max_leverage = lev;
+  if (previewTimeframe && ["1h", "4h", "1d"].includes(previewTimeframe)) body.ema_timeframe = previewTimeframe;
   return body;
 }
 

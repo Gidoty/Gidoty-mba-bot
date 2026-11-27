@@ -266,3 +266,7 @@ class DeletionDone(BaseModel):
     erased: dict[str, int]
     kept: list[str]
     warnings: list[str]
+
+
+class StrategiesBody(StepUp):
+    strategies: list[str] = Field(max_length=3)

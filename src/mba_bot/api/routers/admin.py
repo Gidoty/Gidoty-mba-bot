@@ -29,6 +29,7 @@ from ..admin_schemas import (
     SettingReset,
     SettingSet,
     SettingsList,
+    StrategiesBody,
     StepUp,
     AdminLoginOut,
     AdminLoginRequest,
@@ -335,6 +336,12 @@ def subscription_end(ref: str, body: StepUp, request: Request, admin: Customer =
 def customer_note(ref: str, body: NoteBody, request: Request, admin: Customer = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> ActionDone:
     _step_up(request, db, admin, settings, body, f"note {ref[:8]}")
     return _done(_run(db, lambda d: admin_actions.add_note(d, admin.id, ref, body.note, body.reason, _req_now(request))))
+
+
+@router.post("/customers/{ref}/strategies", response_model=ActionDone)
+def customer_strategies(ref: str, body: StrategiesBody, request: Request, admin: Customer = Depends(require_admin), db: Session = Depends(get_db), settings: Settings = Depends(get_settings)) -> ActionDone:
+    _step_up(request, db, admin, settings, body, f"strategies {ref[:8]}")
+    return _done(_run(db, lambda d: admin_actions.set_strategies(d, admin.id, ref, body.strategies, body.reason, _req_now(request))))
 
 
 @router.post("/requests/{request_id}/approve", response_model=ActionDone)
