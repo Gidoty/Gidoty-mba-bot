@@ -7,6 +7,7 @@ import PositionCard, { NoPosition } from "../../components/dashboard/PositionCar
 import RecentTrades from "../../components/dashboard/RecentTrades.jsx";
 import useTrades from "../../components/dashboard/useTrades.js";
 import HelpTip from "../../components/HelpTip.jsx";
+import InfoHelp from "../../components/InfoHelp.jsx";
 import SubscribeCard from "../../components/SubscribeCard.jsx";
 import useBillingOptions from "../../components/useBillingOptions.js";
 import { screenKind } from "../../lib/billing.js";
@@ -14,6 +15,7 @@ import { Badge, Card, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, 
 import { GLOSSARY } from "../../glossary.js";
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
+import { PRACTICE_NOTICE_HELP, PRACTICE_NOTICE_LABEL } from "../../practiceNotice.js";
 
 // Practice mode: the bot reads practice-server prices and simulates every trade (no order is sent).
 export default function TestnetDashboard({ account, onAccountChanged, onActivate }) {
@@ -57,10 +59,9 @@ export default function TestnetDashboard({ account, onAccountChanged, onActivate
           <span className="mr-1">{GLOSSARY.testnet.term}</span>
           <HelpTip text={GLOSSARY.testnet.long} />
         </p>
-        <p className="mt-1 text-sm text-muted">
-          Everything on this page is simulated. The bot reads prices from Binance's practice server, then records
-          each practice trade itself. No order is sent to Binance, no real money is involved, and nothing here can be
-          withdrawn. Real trades can fill at different prices and pay fees.
+        <p className="mt-1 flex items-center gap-1 text-sm text-muted">
+          <span>{PRACTICE_NOTICE_LABEL}</span>
+          <InfoHelp label="practice mode" help={PRACTICE_NOTICE_HELP} />
         </p>
       </Card>
 
