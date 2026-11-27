@@ -1,3 +1,7 @@
+import { useEffect, useState } from "react";
+
+import { api } from "../api/client.js";
+import { viewOf } from "../lib/statusLine.js";
 import HelpTip from "./HelpTip.jsx";
 import { Card, Notice, Pill } from "./ui.jsx";
 
@@ -29,6 +33,29 @@ function formatRelativeTime(iso) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+// One plain sentence from the server (STATUS_LINE). Shows nothing while the server has it off or the request fails.
+function StatusLine() {
+  const [view, setView] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.get("/account/status-line").then((d) => alive && setView(viewOf(d)), () => alive && setView(null));
+    load();
+    const id = setInterval(() => document.visibilityState === "visible" && load(), 60000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  if (!view) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1" role="status">
+      <Pill tone={view.tone}>{view.headline}</Pill>
+      {view.detail && <span className="text-sm text-fg">{view.detail}</span>}
+      <span className="text-sm text-muted">{view.last}</span>
+    </div>
+  );
+}
+
 // Shared between the Testnet and Live dashboards - the same runtime
 // fields mean the same thing in either mode, just against different
 // money.
@@ -41,6 +68,7 @@ export default function BotStatusCard({ account }) {
 
   return (
     <Card>
+      <StatusLine />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Pill tone={status.tone}>{status.label}</Pill>
         <HelpTip
