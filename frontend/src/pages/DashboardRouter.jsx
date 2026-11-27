@@ -1,6 +1,5 @@
 import { useState } from "react";
 
-import { api } from "../api/client.js";
 import { useAccount } from "../context/AccountContext.jsx";
 import ActivationFlow from "./dashboard/ActivationFlow.jsx";
 import ConnectBinance from "./dashboard/ConnectBinance.jsx";
@@ -37,15 +36,6 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
   const { account, refreshAccount } = useAccount();
   const [activating, setActivating] = useState(hasPaystackReturnParams());
 
-  async function startActivation() {
-    try {
-      const { authorization_url } = await api.post("/billing/initialize");
-      window.location.href = authorization_url;
-    } catch (err) {
-      alert(err.message); // eslint-disable-line no-alert
-    }
-  }
-
   if (activating) {
     return narrow(
       <ActivationFlow
@@ -60,7 +50,7 @@ export default function DashboardRouter({ customer, onCustomerChanged }) {
   }
 
   if (!customer.has_paid) {
-    return <TestnetDashboard account={account} onAccountChanged={refreshAccount} onActivate={startActivation} />;
+    return <TestnetDashboard account={account} onAccountChanged={refreshAccount} />;
   }
 
   if (account.mode === "demo") {
