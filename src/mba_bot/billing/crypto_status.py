@@ -4,7 +4,7 @@ The stages are plain: waiting for the transfer, transfer seen and confirming, co
 invoice, newest last. Nothing here grants access or decides anything: an invoice is `confirmed` here only because the apply rule marked it paid."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -53,9 +53,13 @@ def stage_of(bp: BillingPayment, events: list[PaymentEvent]) -> str:
     return _BY_OUTCOME.get(events[-1].outcome, WAITING)
 
 
-def pay_label(settings: Settings) -> str:
+def pay_coin(settings: Settings) -> dict:
+    """The coin and network the invoice asks for, from NOWPAYMENTS_PAY_CURRENCY: the code, and a friendly name when we know the code (`known` false means the page shows the bare code)."""
     code = (settings.nowpayments_pay_currency or "").strip().lower()
-    return npay.COIN_LABELS.get(code) or code.upper()
+    info = npay.COIN_INFO.get(code)
+    if info is None:
+        return {"code": code, "known": False, "asset": code.upper(), "network": None, "network_short": None, "examples": None, "label": code.upper()}
+    return {"code": code, "known": True, **info, "label": f"{info['asset']} on {info['network_short']}"}
 
 
 def exact_amount(bp: BillingPayment, events: list[PaymentEvent], settings: Settings) -> str | None:
@@ -87,22 +91,24 @@ def short_from_value(bp: BillingPayment, usd_value: Decimal | None) -> str | Non
 def invoice_view(db: Session, customer_id: str, settings: Settings, now: datetime) -> dict:
     """The customer's latest crypto invoice as the panel needs it, or {"invoice": None}. An invoice row that never got a payment link (the provider refused to create it) is skipped."""
     mode = settings.nowpayments_ipn_mode
-    out: dict = {"mode": mode, "server_time": now.isoformat(), "window_minutes": npay.PAYMENT_WINDOW_MINUTES, "invoice": None}
+    out: dict = {"mode": mode, "server_time": now.isoformat(), "invoice": None}
     rows = db.execute(select(BillingPayment).where(BillingPayment.provider == npay.PROVIDER, BillingPayment.customer_id == customer_id).order_by(BillingPayment.issued_at.desc()).limit(5)).scalars().all()
     for bp in rows:
         events = db.execute(select(PaymentEvent).where(PaymentEvent.provider == npay.PROVIDER, PaymentEvent.reference == bp.reference).order_by(PaymentEvent.created_at, PaymentEvent.id)).scalars().all()
         if bp.status == "failed" and not events:
             continue
         issued = _aware(bp.issued_at)
-        ends = issued + timedelta(minutes=npay.PAYMENT_WINDOW_MINUTES)
         stage = stage_of(bp, events)
         if stage == WAITING and npay.wrong_coin_seen(bp.reference):
             stage = WRONG_COIN  # observe mode writes nothing: the process remembers it (until a restart)
+        # "after expiry" means after NOWPAYMENTS reported the payment expired (its own status), never after a time we counted ourselves
+        expired_at = next((i for i, e in enumerate(events) if e.outcome == "expired"), None)
+        late = expired_at is not None and any(e.outcome in npay.TRANSFER_OUTCOMES for e in events[expired_at + 1:])
         detected = next((_aware(e.created_at) for e in events if e.outcome in npay.TRANSFER_OUTCOMES), None)
         out["invoice"] = {
-            "reference": bp.reference, "price_usd": money(npay.expected_usd(bp)), "pay_label": pay_label(settings), "pay_amount": exact_amount(bp, events, settings), "issued_at": issued.isoformat(), "window_ends_at": ends.isoformat(), "stage": stage,
+            "reference": bp.reference, "price_usd": money(npay.expected_usd(bp)), "pay_coin": pay_coin(settings), "pay_amount": exact_amount(bp, events, settings), "issued_at": issued.isoformat(), "stage": stage,
             "short_usd": short_usd(bp, events) if stage == UNDERPAID else None, "detected_at": detected.isoformat() if detected else None,
-            "detected_after_expiry": bool(detected is not None and detected > ends),
+            "detected_after_expiry": late,
         }
         break
     return out

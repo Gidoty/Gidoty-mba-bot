@@ -58,11 +58,13 @@ PENDING_STATUSES = frozenset({"waiting", "confirming", "confirmed", "sending"})
 KNOWN_STATUSES = PENDING_STATUSES | {"finished", "partially_paid", "failed", "expired", "refunded"}
 
 # The fields of the GET /v1/payment/{id} answer this module relies on. NOT in the PDF section we read: UNVERIFIED until one real payment.
-PAYMENT_WINDOW_MINUTES = 20  # how long a customer has to send one payment (the payment window NOWPayments shows; the customer's countdown is this long, from the moment the invoice was created)
 SEEN_PREFIX = "seen:"  # outcome of a payment event written for a not-yet-final status (waiting, confirming, confirmed, sending)
 TRANSFER_OUTCOMES = frozenset({"seen:confirming", "seen:confirmed", "seen:sending", "underpaid", "applied"})  # the payment was SEEN on the network (not merely created)
+SETTLED_STATUSES = ("paid", "refunded")  # an invoice in one of these states is done: a late pending notice for it writes nothing
 WRONG_COIN_OUTCOME = "wrong_coin"  # outcome of the one payment event that marks an invoice as having received a payment in another coin or network
-COIN_LABELS = {"usdtbsc": "USDT on BSC (BEP20)"}  # what the customer is told to send; any other configured code is shown as its own name
+COIN_INFO = {  # a friendly name for the coin codes we know; any other configured code is shown as the code itself (and the page says so)
+    "usdtbsc": {"asset": "USDT", "network": "the BSC network (BEP20)", "network_short": "BSC (BEP20)", "examples": "BNB, USDT on Tron or USDT on Ethereum"},
+}
 RELIED_ON = ("payment_id", "payment_status", "order_id", "price_amount", "price_currency", "pay_currency", "pay_amount", "actually_paid")
 OPTIONAL_FIELDS = ("parent_payment_id",)
 
@@ -671,7 +673,7 @@ def _apply(db: Session, bp: BillingPayment, p: Payment, v: Verdict, settings: Se
     status = p.status or "-"
     key = f"nowpayments:{p.payment_id}:{status}"
     if v.kind == "pending":
-        if bp.status == "pending":  # a settled invoice is not touched; this only lets the customer's page show "transfer seen and confirming"
+        if bp.status not in SETTLED_STATUSES:  # a paid or refunded invoice is not touched; this only lets the customer's page show "transfer seen and confirming". An invoice that was underpaid, expired or failed can still get a NEW payment, which is noted
             subs._begin_write(db)
             bp.provider_payment_id = p.payment_id  # the latest payment NOWPayments made for this invoice (a new one is made when a payment window runs out)
             _record_event(db, key, bp, (SEEN_PREFIX + status)[:24], None, coin_amount=p.pay_amount, coin=p.pay_currency)

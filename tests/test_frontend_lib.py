@@ -19,5 +19,4 @@ def test_frontend_statistics_and_formatting():
     )
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-1000:]
     assert "# fail 0" in result.stdout
-    assert "# pass 139" in result.stdout
-    assert "# pass 140" in result.stdout
+    assert "# pass 142" in result.stdout

@@ -212,11 +212,11 @@ def test_the_status_carries_the_coin_the_network_and_the_exact_amount_once_the_p
         cid = customer(c)
         issue(cid)
         inv = c.get("/api/billing/crypto/status").json()["invoice"]
-        assert inv["pay_label"] == "USDT on BSC (BEP20)" and inv["pay_amount"] is None
+        assert inv["pay_coin"]["label"] == "USDT on BSC (BEP20)" and inv["pay_amount"] is None
         fake.payments[str(PARENT)] = record(REF, "waiting", pid=PARENT, pay_amount=9.954, actually_paid=0)
         ipn(c, trigger(REF, "waiting", PARENT))
         inv = c.get("/api/billing/crypto/status").json()["invoice"]
-        assert inv["pay_amount"] == "9.954" and inv["pay_label"] == "USDT on BSC (BEP20)"
+        assert inv["pay_amount"] == "9.954" and inv["pay_coin"]["label"] == "USDT on BSC (BEP20)"
     with app(NOWPAYMENTS_IPN_MODE="observe") as c:  # observe mode keeps the amount in memory
         cid2 = customer(c, "obs@example.com")
         issue(cid2, "mbacrypto_obs")
@@ -229,4 +229,4 @@ def test_another_configured_coin_is_shown_under_its_own_code(app, fake, tg):
     with app(NOWPAYMENTS_PAY_CURRENCY="usdttrc20") as c:
         cid = customer(c)
         issue(cid)
-        assert c.get("/api/billing/crypto/status").json()["invoice"]["pay_label"] == "USDTTRC20"
+        assert c.get("/api/billing/crypto/status").json()["invoice"]["pay_coin"]["label"] == "USDTTRC20"

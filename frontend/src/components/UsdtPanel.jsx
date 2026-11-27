@@ -29,25 +29,14 @@ export function useCryptoStatus(enabled) {
   return { ...state, reload: load };
 }
 
-// One tick per second, only so the displayed countdown moves. The end time itself comes from the server and never changes.
-function useNow() {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
-
-// The panel for one USDT payment: plain stages, what to send, the countdown to the invoice's fixed end, and a new invoice when the old one has expired. The countdown never starts again by itself.
+// The panel for one USDT payment: the stages the payment provider reported, a bold box saying exactly what to pay, and a new invoice when the provider says the old one expired. No countdown of our own: the provider's payment page has one.
 export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = false, newInvoiceError = null }) {
-  const { status, offset, failed, reload } = useCryptoStatus(true);
-  const now = useNow();
+  const { status, failed, reload } = useCryptoStatus(true);
   useEffect(() => {
     reload(); // a new invoice was just created: read it now instead of waiting for the next poll
   }, [invoiceUrl, reload]);
 
-  const view = panelView(status, now, offset);
+  const view = panelView(status);
   if (!view) {
     return (
       <div className="rounded-ctl border border-line bg-surface p-4" role="status">
@@ -59,18 +48,19 @@ export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = f
     <section aria-label="USDT payment" className="rounded-ctl border border-line bg-surface p-4">
       <h3 className="text-sm font-semibold text-fg">{view.headline}</h3>
       {view.detail && <p className="mt-1 text-sm text-muted">{view.detail}</p>}
-      {view.instructions && <p className="mt-2 text-sm text-fg">{view.instructions}</p>}
-      {view.countdown && (
-        <p className="mt-2 text-sm text-fg" aria-live="off">
-          Time left to send the payment: <span className="font-mono font-semibold">{view.countdown}</span>
-        </p>
-      )}
       {view.showReference && (
         <p className="mt-2 text-sm text-fg">
           Reference for support: <span className="select-all break-all font-mono">{view.reference}</span>
         </p>
       )}
-      {!view.terminal && invoiceUrl && view.stage === "waiting" && view.secondsLeft > 0 && (
+      {view.assetBox && (
+        <div role="note" aria-label="What to pay" className="mt-3 rounded-ctl border-2 border-warn bg-warn-soft p-4 text-fg">
+          <p className="text-xl font-bold leading-snug">{view.assetBox.heading}</p>
+          {view.assetBox.amount && <p className="mt-1 text-base font-semibold">{view.assetBox.amount}</p>}
+          <p className="mt-2 text-sm">{view.assetBox.warning}</p>
+        </div>
+      )}
+      {!view.terminal && invoiceUrl && view.stage === "waiting" && (
         <p className="mt-3">
           <a href={invoiceUrl} target="_blank" rel="noopener noreferrer" className={`${secondaryButton} w-full sm:w-auto`}>
             Open the payment page
