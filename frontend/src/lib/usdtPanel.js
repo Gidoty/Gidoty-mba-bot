@@ -8,7 +8,15 @@ export const EXPIRED_TITLE = "This invoice expired";
 export const NEW_INVOICE_LABEL = "Create a new invoice";
 export const SENT_LABEL = "I have sent the payment";
 
-const ACTIVE_STAGES = ["waiting", "confirming", "underpaid"];
+const ACTIVE_STAGES = ["waiting", "confirming", "underpaid", "wrong_coin"];
+export const OTHER_COINS_NOTE = "Other coins or networks are not credited automatically.";
+
+// What to send, in words: the exact coin and network the invoice asked for, the exact amount once the payment exists (it is read from the provider's record by the server), and the warning about other coins.
+export function instructionText(inv) {
+  if (!inv?.pay_label) return null;
+  const how = inv.pay_amount ? `Send exactly ${inv.pay_amount} ${inv.pay_label}.` : `Send ${inv.pay_label}${inv.price_usd ? ` worth USD ${inv.price_usd}` : ""}. The exact amount is shown on the payment page.`;
+  return `${how} ${OTHER_COINS_NOTE}`;
+}
 
 // The difference between the server's clock and this device's clock, so a wrong device clock does not move the countdown.
 export function clockOffsetMs(serverTimeIso, clientNowMs) {
@@ -36,8 +44,11 @@ export function panelView(status, nowMs, offsetMs = 0) {
   const over = left <= 0;
   const reference = inv.reference;
   const canCheck = Boolean(status.check_available);
-  const base = { stage: inv.stage, reference, secondsLeft: left, countdown: null, headline: "", detail: null, showSent: false, showNewInvoice: false, showReference: false, terminal: false };
+  const base = { instructions: null, stage: inv.stage, reference, secondsLeft: left, countdown: null, headline: "", detail: null, showSent: false, showNewInvoice: false, showReference: false, terminal: false };
   if (inv.stage === "confirmed") return { ...base, headline: "Payment confirmed", detail: "Thank you. Your payment is confirmed. Refresh this page to see your subscription.", terminal: true };
+  if (inv.stage === "wrong_coin") {
+    return { ...base, headline: "Wrong coin or network", detail: `We received a payment in a different coin or network. It was not credited automatically. Contact support and quote reference ${reference}.`, terminal: false };
+  }
   const late = Boolean(inv.detected_after_expiry);
   if (late) {
     return { ...base, headline: "A payment was detected after this invoice expired", detail: "Please send this reference to support so they can match it to your payment.", showReference: true, showNewInvoice: false, showSent: canCheck };
@@ -55,7 +66,7 @@ export function panelView(status, nowMs, offsetMs = 0) {
       return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true, showSent: canCheck };
     default: // waiting
       if (over) return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true, showSent: canCheck };
-      return { ...base, headline: "Waiting for your transfer", detail: "Send the payment from your wallet, then press the button below.", countdown: countdownText(left), showSent: canCheck };
+      return { ...base, headline: "Waiting for your transfer", detail: "Send the payment from your wallet.", instructions: instructionText(inv), countdown: countdownText(left), showSent: canCheck };
   }
 }
 

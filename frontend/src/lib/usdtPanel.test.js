@@ -132,3 +132,34 @@ test("the USDT button opens the panel instead of leaving the page, and only the 
   assert.ok(buttons.includes("UsdtPanel"));
   assert.ok(buttons.includes('c.kind === "crypto"'));
 });
+
+// ---- wrong coin or network, and the payment instructions
+import { OTHER_COINS_NOTE, instructionText } from "./usdtPanel.js";
+
+const wrongStatus = (over = {}) => status({ stage: "wrong_coin", pay_label: "USDT on BSC (BEP20)", pay_amount: "9.954", ...over });
+
+test("a payment in another coin or network shows the exact message with the reference, and offers nothing that could take another payment", () => {
+  const v = panelView(wrongStatus(), T0 + 60_000);
+  assert.equal(v.headline, "Wrong coin or network");
+  assert.equal(v.detail, "We received a payment in a different coin or network. It was not credited automatically. Contact support and quote reference mbacrypto_abc.");
+  assert.equal(v.showNewInvoice, false);
+  assert.equal(v.showSent, false);
+  assert.equal(v.countdown, null);
+  assert.equal(panelView(wrongStatus(), T0 + 9_000_000).headline, "Wrong coin or network"); // the clock does not turn it into "expired"
+  assert.equal(shouldResume(wrongStatus(), T0 + 9_000_000), true);
+});
+
+test("the instructions name the exact coin and network and the exact amount, and warn about other coins", () => {
+  assert.equal(instructionText({ pay_label: "USDT on BSC (BEP20)", pay_amount: "9.954", price_usd: "10.00" }), "Send exactly 9.954 USDT on BSC (BEP20). Other coins or networks are not credited automatically.");
+  assert.equal(instructionText({ pay_label: "USDT on BSC (BEP20)", pay_amount: null, price_usd: "10.00" }), "Send USDT on BSC (BEP20) worth USD 10.00. The exact amount is shown on the payment page. Other coins or networks are not credited automatically.");
+  assert.equal(instructionText({}), null);
+  assert.equal(OTHER_COINS_NOTE, "Other coins or networks are not credited automatically.");
+  const v = panelView(status({ pay_label: "USDT on BSC (BEP20)", pay_amount: "9.954" }), T0 + 1000);
+  assert.match(v.instructions, /Send exactly 9\.954 USDT on BSC \(BEP20\)/);
+  assert.equal(panelView(status({ stage: "confirming", pay_label: "USDT on BSC (BEP20)" }), T0).instructions, null); // only while waiting for the transfer
+  assert.equal(panelView(status({ pay_label: "USDT on BSC (BEP20)" }), T0 + 1_300_000).instructions, null); // not on an expired invoice
+});
+
+test("the panel prints the instructions it is given", () => {
+  assert.ok(readFileSync(new URL("../components/UsdtPanel.jsx", import.meta.url), "utf8").includes("view.instructions"));
+});

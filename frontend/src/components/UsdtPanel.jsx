@@ -83,6 +83,7 @@ export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = f
     <section aria-label="USDT payment" className="rounded-ctl border border-line bg-surface p-4">
       <h3 className="text-sm font-semibold text-fg">{view.headline}</h3>
       {view.detail && <p className="mt-1 text-sm text-muted">{view.detail}</p>}
+      {view.instructions && <p className="mt-2 text-sm text-fg">{view.instructions}</p>}
       {view.countdown && (
         <p className="mt-2 text-sm text-fg" aria-live="off">
           Time left to send the payment: <span className="font-mono font-semibold">{view.countdown}</span>

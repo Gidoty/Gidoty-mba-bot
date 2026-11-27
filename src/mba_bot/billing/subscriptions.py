@@ -98,16 +98,16 @@ def _aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
-async def alert_owner(settings: Settings, code: str, customer_id: str | None, now: datetime) -> None:
+async def alert_owner(settings: Settings, code: str, customer_id: str | None, now: datetime, *, detail: str = "", dedupe: str = "") -> None:
     """A fixed message (no email, no amount, no provider text). Logged always; sent to Telegram at most once per code and
     customer per 6 hours, only if a bot token and BILLING_ALERT_CHAT_ID are configured. Never raises."""
     logger.warning("billing alert: code=%s customer=%s", code, _mask(customer_id))
     try:
         if not (settings.telegram_bot_token and settings.billing_alert_chat_id):
             return
-        if not should_alert(customer_id or "-", "billing", code, now=now, repeat_hours=ALERT_REPEAT_HOURS):
+        if not should_alert(customer_id or "-", "billing", code + dedupe, now=now, repeat_hours=ALERT_REPEAT_HOURS):
             return
-        text = f"{ALERTS.get(code, 'Billing: an event needs your attention.')} Customer {_mask(customer_id)}"
+        text = f"{ALERTS.get(code, 'Billing: an event needs your attention.')} Customer {_mask(customer_id)}{detail}"
         await TelegramNotifier(settings.telegram_bot_token).send(settings.billing_alert_chat_id, text)
     except Exception:  # noqa: BLE001 - an alert must never break a webhook
         logger.warning("billing alert could not be delivered")

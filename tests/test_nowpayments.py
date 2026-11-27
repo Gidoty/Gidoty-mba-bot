@@ -619,9 +619,13 @@ def test_every_mismatch_grants_nothing_and_alerts(app, fake, tg, name, over, rea
         fake.payments["5077125051"] = record("mbacrypto_ref1", **over)
         r = ipn(c, trigger("mbacrypto_ref1"))
         assert r.status_code == 200 and sub_row(cid) is None and not entitled(cid) and bp_state()[0] == "pending", name
-        if reason:
+        if reason == "wrong_asset":
+            assert r.json() == {"ok": True, "recorded": "wrong_coin"}  # another coin or network: its own record and its own alert (once per invoice), see tests/test_crypto_wrong_coin.py
+        elif reason:
             assert r.json()["rejected"] == reason
     assert tg.to_owner  # the owner is told
+    if reason == "wrong_asset":
+        assert tg.owner_has("crypto_wrong_asset")
 
 
 def test_the_callback_is_a_trigger_only_the_api_record_decides(app, fake):

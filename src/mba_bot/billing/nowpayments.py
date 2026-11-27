@@ -61,6 +61,8 @@ KNOWN_STATUSES = PENDING_STATUSES | {"finished", "partially_paid", "failed", "ex
 PAYMENT_WINDOW_MINUTES = 20  # how long a customer has to send one payment (the payment window NOWPayments shows; the customer's countdown is this long, from the moment the invoice was created)
 SEEN_PREFIX = "seen:"  # outcome of a payment event written for a not-yet-final status (waiting, confirming, confirmed, sending)
 TRANSFER_OUTCOMES = frozenset({"seen:confirming", "seen:confirmed", "seen:sending", "underpaid", "applied"})  # the payment was SEEN on the network (not merely created)
+WRONG_COIN_OUTCOME = "wrong_coin"  # outcome of the one payment event that marks an invoice as having received a payment in another coin or network
+COIN_LABELS = {"usdtbsc": "USDT on BSC (BEP20)"}  # what the customer is told to send; any other configured code is shown as its own name
 RELIED_ON = ("payment_id", "payment_status", "order_id", "price_amount", "price_currency", "pay_currency", "pay_amount", "actually_paid")
 OPTIONAL_FIELDS = ("parent_payment_id",)
 
@@ -76,6 +78,7 @@ subs.ALERTS.update({
     "crypto_unknown_status": "Billing: NOWPayments reported a payment status we do not know. Nothing was changed.",
     "crypto_unknown_order": "Billing: a crypto payment notification matched no invoice we issued. Nothing was changed.",
     "crypto_paid_while_card_active": "Billing: a customer paid in crypto while their card subscription is still running. The payment is recorded, nothing was granted; please review it.",
+    "crypto_wrong_asset": "Billing: a payment arrived in a different coin or network from the one the invoice asked for (NOWPayments converted it). It was NOT credited automatically and no access was granted; please look at it in the NOWPayments dashboard.",
     "crypto_below_minimum": "Billing: NOWPayments' minimum payment amount is above the price, so crypto checkout was refused.",
 })
 
@@ -462,6 +465,52 @@ def _payment_id_from_trigger(raw: bytes) -> tuple[str | None, str | None]:
     return _id_text(body.get("payment_id")), order if isinstance(order, str) else None
 
 
+def _notification_facts(raw: bytes) -> dict:
+    """The only things taken from a VERIFIED notification when its payment cannot be read back: which invoice it names, which payment it is a child of, and the coin it says it is in. Never an amount."""
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return {}
+    if not isinstance(body, dict):
+        return {}
+    order, cur, st = body.get("order_id"), body.get("pay_currency"), body.get("payment_status")
+    return {"payment_id": _id_text(body.get("payment_id")), "order_id": order.strip() if isinstance(order, str) and order.strip() else None, "parent_payment_id": _id_text(body.get("parent_payment_id")),
+            "status": st.strip().lower() if isinstance(st, str) else None, "pay_currency": cur.strip().lower() if isinstance(cur, str) and cur.strip() else None}
+
+
+def find_invoice(db: Session, facts: dict) -> BillingPayment | None:
+    """Our invoice row for a notification, from the notification's own order_id, else from the parent payment id it names (the payment we stored for the invoice, or remembered in this process)."""
+    if facts.get("order_id"):
+        bp = db.query(BillingPayment).filter_by(provider=PROVIDER, reference=facts["order_id"]).first()
+        if bp is not None:
+            return bp
+    parent = facts.get("parent_payment_id")
+    if parent:
+        bp = db.query(BillingPayment).filter_by(provider=PROVIDER, provider_payment_id=parent).first()
+        if bp is not None:
+            return bp
+        ref = next((r for r, (pid, _s) in _SEEN.items() if pid == parent), None)
+        if ref:
+            return db.query(BillingPayment).filter_by(provider=PROVIDER, reference=ref).first()
+    return None
+
+
+async def wrong_coin(db: Session, bp: BillingPayment, mode: str, settings: Settings, now: datetime, *, source: str) -> dict:
+    """A payment for this invoice arrived in a coin or network the invoice did not ask for (NOWPayments converted it, or it could not be read with our key). It is NEVER credited. observe: nothing is written, the
+    invoice is remembered as such in this process's memory only. enforce: one `payment_events` row (key per invoice, so a second notification changes nothing) and, the first time only, one owner alert with a masked order tail."""
+    _WRONG.add(bp.reference)
+    logger.info("nowpayments wrong coin or network: mode=%s order=%s source=%s", mode, subs._tail(bp.reference), source)
+    if mode != "enforce":
+        return {"ok": True, "observed": "wrong_coin"}
+    subs._begin_write(db)
+    first = _record_event(db, f"nowpayments:wrongcoin:{bp.reference}", bp, WRONG_COIN_OUTCOME, None)
+    db.commit()
+    if not first:
+        return {"ok": True, "duplicate": True}
+    await subs.alert_owner(settings, "crypto_wrong_asset", bp.customer_id, now, detail=f" Order {subs._tail(bp.reference)}", dedupe=f":{bp.reference}")
+    return {"ok": True, "recorded": "wrong_coin"}
+
+
 async def handle_ipn(db: Session, raw: bytes, header: str | None, settings: Settings, now: datetime | None = None) -> dict:
     """The IPN. Returns the JSON answer. Raises BadSignature (400), NotConfigured or ProviderUnavailable or subs.RetryLater (503)."""
     now = now or datetime.now(timezone.utc)
@@ -493,6 +542,12 @@ async def handle_ipn(db: Session, raw: bytes, header: str | None, settings: Sett
         return {"ok": True, "observed": "provider_unavailable"}
     if record is None:
         _log_verdict(mode, sig, None, None, None, "payment not found at NOWPayments")
+        facts = _notification_facts(raw)
+        found = find_invoice(db, facts)
+        coin = settings.nowpayments_pay_currency or ""
+        other_coin = facts.get("pay_currency") is not None and facts["pay_currency"] != coin
+        if found is not None and (other_coin or facts.get("parent_payment_id")):  # a child payment (a conversion) cannot be read with our key: say so on the invoice, grant nothing
+            return await wrong_coin(db, found, mode, settings, now, source="unreadable_payment")
         return {"ok": True, "ignored": "payment_not_found"}
     return await process_record(db, record, settings, now, mode=mode, sig=sig, callback_order=callback_order)
 
@@ -514,8 +569,18 @@ def seen_payment_id(reference: str) -> str | None:
     return hit[0] if hit else None
 
 
+_WRONG: set[str] = set()  # invoice references that received a wrong-coin payment, in this process's memory (what observe mode can show without a write)
+_AMOUNT: dict[str, str] = {}  # reference -> the exact amount of the coin the latest payment asked for, in memory (observe mode)
+
+
+def wrong_coin_seen(reference: str) -> bool:
+    return reference in _WRONG
+
+
 def reset_seen_for_tests() -> None:
     _SEEN.clear()
+    _WRONG.clear()
+    _AMOUNT.clear()
 
 
 async def process_record(db: Session, record: dict, settings: Settings, now: datetime, *, mode: str, sig: str | None, callback_order: str | None = None, expect_customer_id: str | None = None, detail: dict | None = None) -> dict:
@@ -540,8 +605,12 @@ async def process_record(db: Session, record: dict, settings: Settings, now: dat
     _log_verdict(mode, sig, p, bp, verdict)
     if detail is not None:
         detail.update(payment=p, verdict=verdict, invoice_reference=bp.reference, invoice_cents=bp.amount_minor)
+    if verdict.kind == "reject" and verdict.reason == "wrong_asset":
+        return await wrong_coin(db, bp, mode, settings, now, source="record_in_another_coin")
     if verdict.kind in ("pending", "underpaid", "apply", "failed", "expired", "refunded"):
         remember_seen(bp.reference, p.payment_id, p.status)  # in memory only: no database write, so observe mode stays write-free
+        if verdict.kind == "pending" and p.pay_amount is not None:
+            _AMOUNT[bp.reference] = format(p.pay_amount.normalize(), "f")
     if mode == "observe":
         return {"ok": True, "observed": verdict.kind}
 
@@ -571,12 +640,13 @@ async def process_record(db: Session, record: dict, settings: Settings, now: dat
     return result
 
 
-def _record_event(db: Session, key: str, bp: BillingPayment, outcome: str, usd: Decimal | None) -> bool:
-    """False if this exact notification was already recorded (replay)."""
+def _record_event(db: Session, key: str, bp: BillingPayment, outcome: str, usd: Decimal | None, *, coin_amount: Decimal | None = None, coin: str | None = None) -> bool:
+    """False if this exact notification was already recorded (replay). `coin_amount` (with `coin`) is the exact amount of the coin the payment asked for, kept in millionths in the same column (its currency column then names the coin)."""
     try:
         with db.begin_nested():
+            amount = int((usd * 100).to_integral_value()) if usd is not None else (int((coin_amount * 1_000_000).to_integral_value()) if coin_amount is not None else None)
             db.add(PaymentEvent(provider=PROVIDER, event_key=key[:160], reference=bp.reference, customer_id=bp.customer_id,
-                                amount=int((usd * 100).to_integral_value()) if usd is not None else None, currency="USD", outcome=outcome[:24]))
+                                amount=amount, currency=(coin or "USD")[:8], outcome=outcome[:24]))
             db.flush()
     except IntegrityError:
         return False
@@ -604,7 +674,7 @@ def _apply(db: Session, bp: BillingPayment, p: Payment, v: Verdict, settings: Se
         if bp.status == "pending":  # a settled invoice is not touched; this only lets the customer's page show "transfer seen and confirming"
             subs._begin_write(db)
             bp.provider_payment_id = p.payment_id  # the latest payment NOWPayments made for this invoice (a new one is made when a payment window runs out)
-            _record_event(db, key, bp, (SEEN_PREFIX + status)[:24], None)
+            _record_event(db, key, bp, (SEEN_PREFIX + status)[:24], None, coin_amount=p.pay_amount, coin=p.pay_currency)
         return {"ok": True, "pending": status}
     if v.kind == "unreadable":
         out.append(("crypto_payment_unreadable", bp.customer_id))

@@ -15,10 +15,10 @@ from ..models import BillingPayment, PaymentEvent
 from . import nowpayments as npay
 
 WAITING, CONFIRMING, CONFIRMED, UNDERPAID, EXPIRED, FAILED, REFUNDED = "waiting", "confirming", "confirmed", "underpaid", "expired", "failed", "refunded"
-NO_PAYMENT_SEEN, UNCLEAR = "no_payment_seen", "unclear"
+NO_PAYMENT_SEEN, UNCLEAR, WRONG_COIN = "no_payment_seen", "unclear", "wrong_coin"
 
 _BY_OUTCOME = {"seen:waiting": WAITING, "seen:confirming": CONFIRMING, "seen:confirmed": CONFIRMING, "seen:sending": CONFIRMING, "underpaid": UNDERPAID, "expired": EXPIRED, "failed": FAILED,
-               "refunded": REFUNDED, "applied": CONFIRMED}
+               "refunded": REFUNDED, "applied": CONFIRMED, npay.WRONG_COIN_OUTCOME: WRONG_COIN}
 
 TEXT = {
     WAITING: "Waiting for your transfer.",
@@ -28,6 +28,7 @@ TEXT = {
     EXPIRED: "This payment window expired.",
     FAILED: "The payment failed.",
     REFUNDED: "The payment was refunded.",
+    WRONG_COIN: "We received a payment in a different coin or network. It was not credited automatically. Contact support and quote reference {reference}.",
     NO_PAYMENT_SEEN: "The payment provider has not told us about a transfer for this invoice yet. If you have just sent it, wait a minute and try again.",
     UNCLEAR: "The payment provider answered, but the answer does not match this invoice. Please send the reference to support.",
 }
@@ -46,7 +47,24 @@ def stage_of(bp: BillingPayment, events: list[PaymentEvent]) -> str:
         return CONFIRMED
     if not events:
         return WAITING
+    wrong = [i for i, e in enumerate(events) if e.outcome == npay.WRONG_COIN_OUTCOME]
+    if wrong and not any(e.outcome in npay.TRANSFER_OUTCOMES or e.outcome in ("expired", "failed", "refunded") for e in events[wrong[-1] + 1:]):
+        return WRONG_COIN  # sticky: the parent payment's later "waiting" notices do not hide it; only a later transfer of the right coin or a final status of the parent does
     return _BY_OUTCOME.get(events[-1].outcome, WAITING)
+
+
+def pay_label(settings: Settings) -> str:
+    code = (settings.nowpayments_pay_currency or "").strip().lower()
+    return npay.COIN_LABELS.get(code) or code.upper()
+
+
+def exact_amount(bp: BillingPayment, events: list[PaymentEvent], settings: Settings) -> str | None:
+    """The exact amount of the coin the latest payment asked for, as the provider's record said when it was first seen (stored in millionths on the 'seen' event), or None before any payment exists."""
+    code = (settings.nowpayments_pay_currency or "").strip().lower()[:8]
+    for e in reversed(events):
+        if e.outcome.startswith(npay.SEEN_PREFIX) and e.amount is not None and e.currency == code:
+            return format((Decimal(e.amount) / Decimal(1_000_000)).normalize(), "f")
+    return npay._AMOUNT.get(bp.reference)
 
 
 def short_usd(bp: BillingPayment, events: list[PaymentEvent]) -> str | None:
@@ -78,9 +96,11 @@ def invoice_view(db: Session, customer_id: str, settings: Settings, now: datetim
         issued = _aware(bp.issued_at)
         ends = issued + timedelta(minutes=npay.PAYMENT_WINDOW_MINUTES)
         stage = stage_of(bp, events)
+        if stage == WAITING and npay.wrong_coin_seen(bp.reference):
+            stage = WRONG_COIN  # observe mode writes nothing: the process remembers it (until a restart)
         detected = next((_aware(e.created_at) for e in events if e.outcome in npay.TRANSFER_OUTCOMES), None)
         out["invoice"] = {
-            "reference": bp.reference, "price_usd": money(npay.expected_usd(bp)), "issued_at": issued.isoformat(), "window_ends_at": ends.isoformat(), "stage": stage,
+            "reference": bp.reference, "price_usd": money(npay.expected_usd(bp)), "pay_label": pay_label(settings), "pay_amount": exact_amount(bp, events, settings), "issued_at": issued.isoformat(), "window_ends_at": ends.isoformat(), "stage": stage,
             "short_usd": short_usd(bp, events) if stage == UNDERPAID else None, "detected_at": detected.isoformat() if detected else None,
             "detected_after_expiry": bool(detected is not None and detected > ends),
         }
