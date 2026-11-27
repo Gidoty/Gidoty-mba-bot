@@ -4,6 +4,7 @@ import { api } from "../api/client.js";
 import { CANCEL_WORDING, CARD_FEE_NOTICE, channels, clickAction, renewView, stateView } from "../lib/billing.js";
 import { primaryButton, secondaryButton } from "./form.jsx";
 import { Card } from "./ui.jsx";
+import UsdtPanel, { useResumeUsdt } from "./UsdtPanel.jsx";
 
 // The pay buttons for the channels the server says may start now. USDT: a click asks the checkout route and goes to the address it returns. Card: a click first shows the muted fee notice above a "Continue to Paystack"
 // button, and only that button calls the checkout route, so the line is read before the redirect (no flash).
@@ -11,7 +12,9 @@ export function PayButtons({ options }) {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const [confirming, setConfirming] = useState(null);
+  const [usdt, setUsdt] = useState(null); // {url} while the USDT panel is open; the invoice page is opened by the customer from the panel
   const list = channels(options);
+  const resumable = useResumeUsdt(list.some((c) => c.kind === "crypto")); // the customer reloaded in the middle of a USDT payment
   function click(c) {
     setError(null);
     if (clickAction(c) === "confirm") setConfirming(c.kind);
@@ -22,6 +25,11 @@ export function PayButtons({ options }) {
     setError(null);
     try {
       const { authorization_url } = await api.post(c.path);
+      if (c.kind === "crypto") {
+        setUsdt({ url: authorization_url }); // the panel shows the stages and the countdown; the customer opens the payment page from it
+        setBusy(null);
+        return;
+      }
       window.location.href = authorization_url;
     } catch (err) {
       setError(err.message);
@@ -29,9 +37,11 @@ export function PayButtons({ options }) {
     }
   }
   if (list.length === 0) return null;
+  const crypto = list.find((c) => c.kind === "crypto");
+  const showUsdt = Boolean(crypto) && (usdt !== null || resumable);
   return (
     <div>
-      {error && (
+      {error && !showUsdt && (
         <p role="alert" className="mb-3 rounded-ctl border border-line border-l-4 border-l-neg bg-neg-soft px-3 py-2 text-sm text-fg">
           {error}
         </p>
@@ -39,7 +49,9 @@ export function PayButtons({ options }) {
       <ul className="grid gap-3">
         {list.map((c, i) => (
           <li key={c.kind} className="min-w-0">
-            {confirming === c.kind ? (
+            {c.kind === "crypto" && showUsdt ? (
+              <UsdtPanel invoiceUrl={usdt?.url || null} onNewInvoice={() => go(c)} newInvoiceBusy={busy === "crypto"} newInvoiceError={error} />
+            ) : confirming === c.kind ? (
               <div>
                 <p className="mb-2 text-xs text-muted">{CARD_FEE_NOTICE}</p>
                 <div className="flex flex-wrap items-center gap-3">

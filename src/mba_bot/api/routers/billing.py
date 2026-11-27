@@ -24,11 +24,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ...billing import crypto_status
 from ...billing import nowpayments as now_pay
 from ...billing import notices as sub_notices
 from ...billing import subscriptions as sub_billing
 from ...config import Settings
-from ...models import Customer, PaymentEvent, PaymentReference
+from ...models import BillingPayment, Customer, PaymentEvent, PaymentReference
 from ..deps import get_current_customer, get_db, get_settings
 from ..schemas import BillingCardOptionOut, BillingCryptoOptionOut, BillingOptionsOut, PaymentInitOut
 
@@ -165,6 +166,23 @@ async def nowpayments_ipn(request: Request, db: Session = Depends(get_db), setti
     except Exception:  # noqa: BLE001 - never silent, never a 500 with a body
         logger.error("nowpayments ipn handler failed")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "temporary error") from None
+
+
+# ---- the customer's USDT panel (docs/safety/crypto_payment_panel.md) -------------------------------------------------------------------------------------------------------------------------------
+
+
+def _crypto_gate(settings: Settings) -> None:
+    if not (settings.subscription_billing_enabled and settings.nowpayments_enabled):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+
+
+@router.get("/crypto/status")
+def crypto_panel_status(customer: Customer = Depends(get_current_customer), settings: Settings = Depends(get_settings), db: Session = Depends(get_db)) -> dict:
+    """The state of this customer's latest USDT invoice, read from OUR database only (the panel asks every 10 seconds; nothing is sent to NOWPayments and nothing is written). 404 while billing or NOWPayments is off."""
+    from datetime import datetime, timezone
+
+    _crypto_gate(settings)
+    return crypto_status.invoice_view(db, customer.id, settings, datetime.now(timezone.utc))
 
 
 @router.get("/options", response_model=BillingOptionsOut)
