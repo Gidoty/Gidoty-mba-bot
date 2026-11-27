@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, api } from "../api/client.js";
-import { CHECK_COOLDOWN_SECONDS, NEW_INVOICE_LABEL, POLL_SECONDS, SENT_LABEL, checkErrorMessage, checkMessage, clockOffsetMs, panelView, shouldResume } from "../lib/usdtPanel.js";
+import { api } from "../api/client.js";
+import { NEW_INVOICE_LABEL, POLL_SECONDS, clockOffsetMs, panelView, shouldResume } from "../lib/usdtPanel.js";
 import { primaryButton, secondaryButton } from "./form.jsx";
 
 // Reads the state of the customer's latest USDT invoice from OUR database (GET /api/billing/crypto/status: no call to the payment provider) now and then every POLL_SECONDS while `enabled`.
@@ -39,15 +39,10 @@ function useNow() {
   return now;
 }
 
-// The panel for one USDT payment: plain stages, the countdown to the invoice's fixed end, the "I have sent the payment" button (it grants nothing by itself: the server asks the provider and applies its usual rule), and a
-// new invoice when the old one has expired. The countdown never starts again by itself.
+// The panel for one USDT payment: plain stages, what to send, the countdown to the invoice's fixed end, and a new invoice when the old one has expired. The countdown never starts again by itself.
 export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = false, newInvoiceError = null }) {
   const { status, offset, failed, reload } = useCryptoStatus(true);
   const now = useNow();
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState(null);
-  const [error, setError] = useState(null);
-  const [cooldownUntil, setCooldownUntil] = useState(0);
   useEffect(() => {
     reload(); // a new invoice was just created: read it now instead of waiting for the next poll
   }, [invoiceUrl, reload]);
@@ -60,25 +55,6 @@ export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = f
       </div>
     );
   }
-  const waitingSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
-
-  async function sent() {
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const answer = await api.post("/billing/crypto/check", { reference: view.reference });
-      setMessage(checkMessage(answer));
-      setCooldownUntil(Date.now() + CHECK_COOLDOWN_SECONDS * 1000);
-      reload();
-    } catch (err) {
-      setError(checkErrorMessage(err instanceof ApiError ? err.status : 0, err instanceof ApiError && err.status >= 500 ? err.message : null));
-      if (err instanceof ApiError && err.status === 429) setCooldownUntil(Date.now() + CHECK_COOLDOWN_SECONDS * 1000);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <section aria-label="USDT payment" className="rounded-ctl border border-line bg-surface p-4">
       <h3 className="text-sm font-semibold text-fg">{view.headline}</h3>
@@ -102,22 +78,16 @@ export default function UsdtPanel({ invoiceUrl, onNewInvoice, newInvoiceBusy = f
         </p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        {view.showSent && (
-          <button type="button" onClick={sent} disabled={busy || waitingSeconds > 0} className={`${primaryButton} w-full sm:w-auto`}>
-            {busy ? "Checking..." : waitingSeconds > 0 ? `${SENT_LABEL} (wait ${waitingSeconds}s)` : SENT_LABEL}
-          </button>
-        )}
         {view.showNewInvoice && (
-          <button type="button" onClick={onNewInvoice} disabled={newInvoiceBusy} className={`${view.showSent ? secondaryButton : primaryButton} w-full sm:w-auto`}>
+          <button type="button" onClick={onNewInvoice} disabled={newInvoiceBusy} className={`${primaryButton} w-full sm:w-auto`}>
             {newInvoiceBusy ? "Creating..." : NEW_INVOICE_LABEL}
           </button>
         )}
       </div>
       <div aria-live="polite" className="mt-2">
-        {message && <p className="text-sm text-fg">{message}</p>}
-        {(error || newInvoiceError) && (
+        {newInvoiceError && (
           <p role="alert" className="text-sm text-neg">
-            {error || newInvoiceError}
+            {newInvoiceError}
           </p>
         )}
       </div>

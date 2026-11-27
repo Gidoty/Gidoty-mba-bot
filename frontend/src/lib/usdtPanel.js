@@ -3,10 +3,8 @@
 // Run with: node --test frontend/src/lib/usdtPanel.test.js (also run by tests/test_frontend_lib.py)
 
 export const POLL_SECONDS = 10; // the panel reads our database this often while it is open (no call to the payment provider)
-export const CHECK_COOLDOWN_SECONDS = 15; // the server allows one "I have sent the payment" call per customer per 15 seconds; the button waits the same time
 export const EXPIRED_TITLE = "This invoice expired";
 export const NEW_INVOICE_LABEL = "Create a new invoice";
-export const SENT_LABEL = "I have sent the payment";
 
 const ACTIVE_STAGES = ["waiting", "confirming", "underpaid", "wrong_coin"];
 export const OTHER_COINS_NOTE = "Other coins or networks are not credited automatically.";
@@ -43,19 +41,18 @@ export function panelView(status, nowMs, offsetMs = 0) {
   const left = remainingSeconds(inv.window_ends_at, nowMs, offsetMs);
   const over = left <= 0;
   const reference = inv.reference;
-  const canCheck = Boolean(status.check_available);
-  const base = { instructions: null, stage: inv.stage, reference, secondsLeft: left, countdown: null, headline: "", detail: null, showSent: false, showNewInvoice: false, showReference: false, terminal: false };
+  const base = { instructions: null, stage: inv.stage, reference, secondsLeft: left, countdown: null, headline: "", detail: null, showNewInvoice: false, showReference: false, terminal: false };
   if (inv.stage === "confirmed") return { ...base, headline: "Payment confirmed", detail: "Thank you. Your payment is confirmed. Refresh this page to see your subscription.", terminal: true };
   if (inv.stage === "wrong_coin") {
     return { ...base, headline: "Wrong coin or network", detail: `We received a payment in a different coin or network. It was not credited automatically. Contact support and quote reference ${reference}.`, terminal: false };
   }
   const late = Boolean(inv.detected_after_expiry);
   if (late) {
-    return { ...base, headline: "A payment was detected after this invoice expired", detail: "Please send this reference to support so they can match it to your payment.", showReference: true, showNewInvoice: false, showSent: canCheck };
+    return { ...base, headline: "A payment was detected after this invoice expired", detail: "Please send this reference to support so they can match it to your payment.", showReference: true, showNewInvoice: false };
   }
   switch (inv.stage) {
     case "confirming":
-      return { ...base, headline: "Transfer seen, confirming", detail: "We can see your transfer. Confirmation can take a few minutes. You do not need to do anything else.", countdown: over ? null : countdownText(left), showSent: false };
+      return { ...base, headline: "Transfer seen, confirming", detail: "We can see your transfer. Confirmation can take a few minutes. You do not need to do anything else.", countdown: over ? null : countdownText(left) };
     case "underpaid":
       return { ...base, headline: "Underpaid", detail: inv.short_usd ? `We received less than the price. You are short by USD ${inv.short_usd}. Please contact support with the reference below.` : "We received less than the price. Please contact support with the reference below.", showReference: true, showNewInvoice: true };
     case "failed":
@@ -63,10 +60,10 @@ export function panelView(status, nowMs, offsetMs = 0) {
     case "refunded":
       return { ...base, headline: "The payment was refunded", detail: "Please contact support with the reference below.", showReference: true, showNewInvoice: true };
     case "expired":
-      return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true, showSent: canCheck };
+      return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true };
     default: // waiting
-      if (over) return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true, showSent: canCheck };
-      return { ...base, headline: "Waiting for your transfer", detail: "Send the payment from your wallet.", instructions: instructionText(inv), countdown: countdownText(left), showSent: canCheck };
+      if (over) return { ...base, headline: EXPIRED_TITLE, detail: "Do not send a payment to it. Create a new invoice.", showNewInvoice: true };
+      return { ...base, headline: "Waiting for your transfer", detail: "Send the payment from your wallet.", instructions: instructionText(inv), countdown: countdownText(left) };
   }
 }
 
@@ -80,15 +77,3 @@ export function shouldResume(status, nowMs, offsetMs = 0) {
   return true;
 }
 
-// The sentence under the button after the customer pressed it. `answer` is the body of POST /api/billing/crypto/check.
-export function checkMessage(answer) {
-  if (!answer) return "";
-  if (answer.stage === "underpaid" && answer.short_usd) return `We received less than the price. You are short by USD ${answer.short_usd}.`;
-  return answer.text || "";
-}
-
-export function checkErrorMessage(status, fallback) {
-  if (status === 429) return "Please wait a few seconds before checking again.";
-  if (status === 404) return "Checking is not available right now.";
-  return fallback || "We could not check just now. Please try again in a minute.";
-}

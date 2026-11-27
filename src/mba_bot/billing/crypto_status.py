@@ -87,7 +87,7 @@ def short_from_value(bp: BillingPayment, usd_value: Decimal | None) -> str | Non
 def invoice_view(db: Session, customer_id: str, settings: Settings, now: datetime) -> dict:
     """The customer's latest crypto invoice as the panel needs it, or {"invoice": None}. An invoice row that never got a payment link (the provider refused to create it) is skipped."""
     mode = settings.nowpayments_ipn_mode
-    out: dict = {"mode": mode, "check_available": mode in ("observe", "enforce"), "server_time": now.isoformat(), "window_minutes": npay.PAYMENT_WINDOW_MINUTES, "invoice": None}
+    out: dict = {"mode": mode, "server_time": now.isoformat(), "window_minutes": npay.PAYMENT_WINDOW_MINUTES, "invoice": None}
     rows = db.execute(select(BillingPayment).where(BillingPayment.provider == npay.PROVIDER, BillingPayment.customer_id == customer_id).order_by(BillingPayment.issued_at.desc()).limit(5)).scalars().all()
     for bp in rows:
         events = db.execute(select(PaymentEvent).where(PaymentEvent.provider == npay.PROVIDER, PaymentEvent.reference == bp.reference).order_by(PaymentEvent.created_at, PaymentEvent.id)).scalars().all()
