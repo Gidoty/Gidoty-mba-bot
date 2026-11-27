@@ -11,7 +11,7 @@ import InfoHelp from "../../components/InfoHelp.jsx";
 import { secondaryButton } from "../../components/form.jsx";
 import useBillingOptions from "../../components/useBillingOptions.js";
 import { DASHBOARD_LINK_TEXT, SUBSCRIPTIONS_ROUTE, dashboardLine } from "../../lib/subscriptions.js";
-import { Badge, Card, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
+import { Badge, Card, ErrorBanner, LoadingBlock, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
 import { GLOSSARY } from "../../glossary.js";
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
@@ -47,9 +47,12 @@ export default function TestnetDashboard({ account, onAccountChanged }) {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Dashboard" subtitle={`${account.pair} · ${account.market_type}`}>
+      <Card className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-sm text-muted">
+          <span className="font-mono text-fg">{account.pair}</span> · {account.market_type}
+        </p>
         <Badge tone="sky">PRACTICE - Simulated trades</Badge>
-      </PageHeader>
+      </Card>
 
       <ErrorBanner message={error} />
       <UnprovenNotice paper closedCount={status === "ready" ? stats.n : null} />

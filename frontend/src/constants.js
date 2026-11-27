@@ -48,20 +48,19 @@ export function closeReasonLabel(reason) {
   }
 }
 
-// The approved drawer navigation, used on both mobile and desktop (see
-// NavDrawer.jsx). No Admin Dashboard entry yet - deliberately left out
+// Every page that has a link in the app, in the order of the desktop top bar (see lib/navigation.js for the phone's bottom bar and More page). No Admin Dashboard entry yet - deliberately left out
 // until that's built and real authorization exists for it.
 export const NAV_ITEMS = [
-  { route: "dashboard", label: "Dashboard" },
+  { route: "home", label: "Home" },
   { route: "positions", label: "Positions" },
-  { route: "trade-history", label: "Trade History" },
+  { route: "trade-history", label: "History" },
   { route: "performance", label: "Performance" },
+  { route: "subscriptions", label: "Subscriptions" },
   { route: "bot-settings", label: "Bot Settings" },
   { route: "exchange-connection", label: "Exchange Connection" },
   { route: "notifications", label: "Notifications" },
   { route: "practice", label: "Testnet / Practice" },
   { route: "help", label: "Help & Guide" },
-  { route: "subscriptions", label: "Subscriptions" },
   { route: "account", label: "Account" },
 ];
 

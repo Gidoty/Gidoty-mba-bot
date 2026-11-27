@@ -48,6 +48,10 @@ PAIRS = [
     ("line-strong", "surface", 3.0, "input, button and segmented-control border (WCAG 1.4.11)"),
     ("line-strong", "bg", 3.0, "button border on page"),
     ("muted", "surface", 3.0, "zero baseline vs card (graphic)"),
+    ("muted", "surface", 4.5, "bottom bar and top bar: inactive item label and icon"),
+    ("accent-text", "surface", 4.5, "bottom bar and top bar: active item label and icon"),
+    ("accent-line", "surface", 3.0, "bottom bar and top bar: active mark or underline (graphic)"),
+    ("muted", "surface-2", 4.5, "More and Legal rows on hover"),
 ]
 # Fixed colours the shell uses on the rail, which is dark in both themes.
 FIXED = [("#ffffff", "#dc2626", 4.5, "white text on the red LIVE badge"), ("#F6AC4D", "nav", 4.5, "active tab colour on rail"), ("#ffffff", "nav-active", 4.5, "active rail item text")]

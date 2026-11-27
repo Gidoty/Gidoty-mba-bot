@@ -6,7 +6,7 @@ import { DailyCard, PnlHero, WinLossCard } from "../../components/dashboard/Perf
 import PositionCard, { NoPosition } from "../../components/dashboard/PositionCard.jsx";
 import RecentTrades from "../../components/dashboard/RecentTrades.jsx";
 import useTrades from "../../components/dashboard/useTrades.js";
-import { Badge, Card, CardTitle, ErrorBanner, LoadingBlock, PageHeader, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
+import { Badge, Card, CardTitle, ErrorBanner, LoadingBlock, PnlText, StatTile, UnprovenNotice } from "../../components/ui.jsx";
 import { closedTrades, isThin, summarize } from "../../lib/stats.js";
 import { pnlLabels, quoteCurrency } from "../../pnlLabels.js";
 
@@ -30,9 +30,12 @@ export default function LiveDashboard({ account, demo = false }) {
 
   return (
     <div className="grid gap-4">
-      <PageHeader title="Dashboard" subtitle={`${account.pair} · ${account.market_type}`}>
+      <Card className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-sm text-muted">
+          <span className="font-mono text-fg">{account.pair}</span> · {account.market_type}
+        </p>
         <Badge tone={demo ? "amber" : "red"}>{demo ? "DEMO" : "LIVE"}</Badge>
-      </PageHeader>
+      </Card>
 
       <UnprovenNotice closedCount={status === "ready" ? stats.n : null} />
       <BotStatusCard account={account} />

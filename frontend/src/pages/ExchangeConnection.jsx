@@ -27,12 +27,12 @@ export default function ExchangeConnection({ customer }) {
             title="No Binance account connected yet"
             body={
               customer.has_paid
-                ? "Connect your Binance account from your Dashboard to enable live trading."
+                ? "Connect your Binance account from Home to enable live trading."
                 : "Connecting a real Binance account becomes available once your account is activated."
             }
           />
-          <button type="button" onClick={() => navigate("dashboard")} className={`mt-3 ${linkButton}`}>
-            Go to Dashboard
+          <button type="button" onClick={() => navigate("home")} className={`mt-3 ${linkButton}`}>
+            Go to Home
           </button>
         </Card>
       )}

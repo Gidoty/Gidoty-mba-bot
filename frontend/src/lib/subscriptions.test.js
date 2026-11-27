@@ -75,7 +75,7 @@ test("the Dashboard line points to Subscriptions and carries no price or button"
 test("the sidebar has a Subscriptions tab and the app maps the route to its page", () => {
   assert.deepEqual(NAV_ITEMS.find((i) => i.route === "subscriptions"), { route: "subscriptions", label: "Subscriptions" });
   assert.ok(src("../App.jsx").includes("subscriptions: Subscriptions"));
-  assert.ok(src("../components/navIcons.jsx").includes("subscriptions:"));
+  assert.ok(src("./navIconPaths.js").includes("subscriptions:"));
 });
 
 test("the Dashboard no longer carries the payment options", () => {
