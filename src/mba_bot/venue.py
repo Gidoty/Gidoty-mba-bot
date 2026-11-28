@@ -27,7 +27,9 @@ Design rules (see ARCHITECTURE.md, "Exchange-side protective stops"):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
@@ -86,6 +88,49 @@ class ProtectionStillOpen(RuntimeError):
     """A cancel was requested but the protective order could not be
     confirmed terminal. The caller must not assume exposure is unprotected
     nor that it is free to exit on the Spot side."""
+
+
+# Binance's error code for "an open stop or take profit order with closePosition in the same direction is existing" (a second closePosition stop while one rests). From Binance's USDS-M error list as
+# remembered by the ccxt source; the Binance page itself could not be read in this environment (see docs/safety/live_donchian.md). The pinned ccxt (4.5.88) has NO entry for it in its USDS-M table, so it
+# surfaces as a plain `ExchangeError` whose text carries the JSON answer. The owner's Testnet check (ops/check_second_stop_testnet.py) records the real code and text.
+SECOND_CLOSE_STOP_CODES = frozenset({-4130})
+_ERR_CODE = re.compile(r'"code"\s*:\s*"?(-?\d+)')
+_ERR_MSG = re.compile(r'"msg"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def exchange_error_info(exc: BaseException) -> dict:
+    """What a log line may say about a failed exchange call: the exception class, Binance's numeric code and its message truncated to 200 characters. Nothing else is read out of the exception text: no request
+    parameter, URL, header, key or signature ever reaches a log through here."""
+    text = str(exc)
+    code_m = _ERR_CODE.search(text)
+    msg_m = _ERR_MSG.search(text)
+    msg = None
+    if msg_m:
+        try:
+            raw_msg = json.loads('"' + msg_m.group(1) + '"')  # Binance's text is a JSON string: undo its escapes
+        except ValueError:
+            raw_msg = msg_m.group(1)
+        msg = "".join(ch if ch.isprintable() else " " for ch in raw_msg)
+        msg = " ".join(msg.split())[:200]
+    return {"error_class": type(exc).__name__, "code": int(code_m.group(1)) if code_m else None, "msg": msg}
+
+
+def describe_failure(exc: BaseException, attempted: str | None = None) -> str:
+    info = exchange_error_info(exc)
+    return f"attempted={attempted or '-'} error_class={info['error_class']} code={info['code']} msg={info['msg']!r}"
+
+
+def may_fall_back_to_reduce_only(exc: BaseException) -> bool:
+    """True when a refused closePosition stop may be retried as a reduceOnly stop: Binance's second-closePosition-stop code, a rejection of the order itself (InvalidOrder, BadRequest: the existing rule), or
+    a plain `ExchangeError` (a Binance code the pinned ccxt does not map, which is how the second-stop refusal arrives). NEVER for network trouble (timeouts, rate limits, unavailable) or authentication and
+    permission errors: those would fail the same way and a retry must not hide them. A reduceOnly stop cannot grow or flip a position."""
+    if isinstance(exc, (ccxt_async.NetworkError, ccxt_async.AuthenticationError)):
+        return False
+    if exchange_error_info(exc)["code"] in SECOND_CLOSE_STOP_CODES:
+        return True
+    if isinstance(exc, (ccxt_async.InvalidOrder, ccxt_async.BadRequest)):
+        return True
+    return type(exc) is ccxt_async.ExchangeError
 
 
 # --- normalized shapes ------------------------------------------------------
@@ -521,12 +566,13 @@ class Venue:
         conditional = kind in CONDITIONAL_KINDS
         try:
             await self.cancel_by_client_id(client_id, conditional=conditional)
-        except (ccxt_async.NetworkError, ccxt_async.ExchangeError):
+        except (ccxt_async.NetworkError, ccxt_async.ExchangeError) as exc:
             # A cancel that errored (including "unknown order" semantics
             # beyond OrderNotFound) is not proof of anything: read the state.
-            pass
+            logger.warning("protective stop cancel failed (%s); reading its state", describe_failure(exc, "cancel"))
         final = await self.get_protection(kind=kind, client_id=client_id)
         if final is not None and final.is_resting:
+            logger.warning("protective order still reads as resting after cancel (kind=%s state=%s)", final.kind, final.state)
             raise ProtectionStillOpen("protective order still resting after cancel")
         return final
 
@@ -848,8 +894,12 @@ class FuturesVenue(Venue):
                 self.symbol, "market", stop_side, None, None, {**base_params, "closePosition": True}
             )
             kind = KIND_FUTURES_CLOSE
-        except (ccxt_async.InvalidOrder, ccxt_async.BadRequest) as exc:
-            logger.warning("closePosition protective stop rejected (%s); trying reduceOnly", type(exc).__name__)
+        except Exception as exc:
+            exc.protection_diag = describe_failure(exc, "closePosition")  # type: ignore[attr-defined]  # read by lifecycle.move_stop for its journal line
+            if not may_fall_back_to_reduce_only(exc):
+                logger.warning("closePosition protective stop failed, not retried as reduceOnly (%s)", exc.protection_diag)
+                raise
+            logger.warning("closePosition protective stop refused (%s); trying reduceOnly", exc.protection_diag)
             # Fallback: reduceOnly with the EXCHANGE-CONFIRMED position size,
             # never the number we think we hold. reduceOnly cannot grow or
             # flip a position.
@@ -857,9 +907,14 @@ class FuturesVenue(Venue):
             qty = floor_to_step(position, self._require_ready().market_step)
             if qty <= 0:
                 raise ProtectionUnavailable("no position on the exchange to protect") from exc
-            raw = await self.client.create_order(
-                self.symbol, "market", stop_side, qty, None, {**base_params, "reduceOnly": True}
-            )
+            try:
+                raw = await self.client.create_order(
+                    self.symbol, "market", stop_side, qty, None, {**base_params, "reduceOnly": True}
+                )
+            except Exception as exc2:
+                exc2.protection_diag = describe_failure(exc2, "reduceOnly") + f"; first attempt: {describe_failure(exc, 'closePosition')}"  # type: ignore[attr-defined]
+                logger.warning("reduceOnly protective stop failed too (%s)", exc2.protection_diag)
+                raise
             kind = KIND_FUTURES_REDUCE
         return self._protection_from(raw, client_id=client_id, kind=kind, stop_price=trigger)
 
@@ -882,6 +937,22 @@ class FuturesVenue(Venue):
             stop_price=stop_price if stop_price is not None else _f(raw.get("stopPrice") or raw.get("triggerPrice")),
             limit_price=None,
         )
+
+    async def cancel_protection(self, *, kind, client_id):
+        """As the base, with one Futures rule: a stop that still reads as resting while the position on the exchange is FLAT is gone for every decision the caller makes (a closePosition or reduceOnly stop cannot
+        open or flip a position, so it can do nothing on a flat one). It is not reported as ProtectionStillOpen; the leftover order is cleared by the cleanup that runs when the trade is recorded closed. A position
+        that cannot be read, or is not flat, keeps the base behaviour."""
+        try:
+            return await super().cancel_protection(kind=kind, client_id=client_id)
+        except ProtectionStillOpen:
+            try:
+                flat = await self.signed_position() == 0
+            except Exception:  # noqa: BLE001 - unreadable position: stay with the safe answer
+                flat = False
+            if not flat:
+                raise
+            logger.warning("a protective stop still reads as resting but the position is flat: treated as gone, cleared at close")
+            return None
 
     async def get_protection(self, *, kind, client_id):
         kind = kind or KIND_FUTURES_CLOSE
