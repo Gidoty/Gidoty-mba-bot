@@ -1008,8 +1008,14 @@ async def _record_exit(
     return "closed"
 
 
-# A move that failed is not retried for this long, per trade (it used to be retried every round, about every 5 minutes, for hours). In memory, like the lock's own spacing: one early retry after a restart.
-MOVE_RETRY_BACKOFF_SECONDS = 1800
+# A move that failed is not retried at once, per trade: 5 minutes after the first failure, 15 after the second, 30 from the third on (it used to be retried every round, about every 5 minutes, for hours). A single
+# transient failure therefore costs 5 minutes, a repeating one at most one try every 30. In memory, like the lock's own spacing: one early retry after a restart.
+MOVE_RETRY_BACKOFF_SCHEDULE = (300, 900, 1800)
+
+
+def move_backoff_seconds(failures: int) -> int:
+    """How long to wait after the given number of consecutive failures (1 -> 5 minutes, 2 -> 15, 3 or more -> 30)."""
+    return MOVE_RETRY_BACKOFF_SCHEDULE[min(max(failures, 1), len(MOVE_RETRY_BACKOFF_SCHEDULE)) - 1]
 _MOVE_FAILURES: dict[str, tuple[int, datetime]] = {}  # trade id -> (consecutive failures, time of the last one)
 
 
@@ -1024,7 +1030,7 @@ def _move_backed_off(trade_id: str, now: datetime) -> bool:
         return False
     last = entry[1] if entry[1].tzinfo else entry[1].replace(tzinfo=timezone.utc)
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-    return (now - last).total_seconds() < MOVE_RETRY_BACKOFF_SECONDS
+    return (now - last).total_seconds() < move_backoff_seconds(entry[0])
 
 
 def _note_move_failure(trade_id: str, now: datetime) -> int:
@@ -1041,7 +1047,7 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     of the current price. The position is never without a stop: the NEW stop is placed first and read back resting, only then does the trade record it, and only then is the OLD one cancelled. If
     placing or verifying the new stop fails, the old stop is untouched, the trade stays open and protected, and the customer is told once. Returns 'moved', 'kept' (a move was tried and failed),
     'skipped' (nothing to do or not allowed) or 'busy' (another worker changed the trade). Never gated by the kill switch (it reduces risk) and never places an entry.
-    A move that failed is not tried again for MOVE_RETRY_BACKOFF_SECONDS (30 minutes) for that trade; the journal line counts the consecutive failures and carries the sanitized error (class, Binance code, message), and the
+    A move that failed is not tried again at once for that trade (5 minutes after the first failure, 15 after the second, 30 from the third on: MOVE_RETRY_BACKOFF_SCHEDULE); the journal line counts the consecutive failures and carries the sanitized error (class, Binance code, message), and the
     customer is told at most once per 6 hours. `reason` only words that message ("profit_lock" or the default trailing stop)."""
     venue, session = ctx.venue, ctx.session
     if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not trade.protection_attempt:
@@ -1060,7 +1066,7 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     new_cid = client_id(trade, "stop", old_attempt + 1)
     move_key = str(_safe_get(trade, "id", "?"))
     if _move_backed_off(move_key, ctx.now):
-        return "kept"  # a failed move is retried at most every MOVE_RETRY_BACKOFF_SECONDS: nothing is sent to the exchange now
+        return "kept"  # a failed move waits out its back-off (move_backoff_seconds): nothing is sent to the exchange now
     # Everything the failure handler needs is read here, before the exchange calls that can fail: it then reads nothing from the database, so a failed move still cancels a possibly placed new stop and still tells the customer.
     account_id = _safe_account_id(ctx)
     alert_pair = _safe_get(trade, "pair", None) or _safe_get(ctx.account, "pair", "-")
@@ -1068,12 +1074,12 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     if reason == "profit_lock":
         alert_text = (
             f"[{_mode_tag(ctx)}] Could not move the stop on {_pair(ctx, trade)} to the profit-lock level {stop:.4f}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place. "
-            f"Until the move works, the profit lock is being run by the bot and not by a resting stop: if the price falls to {stop:.4f} the bot closes the trade at the market, but no stop rests at Binance at that level. The bot tries again in about 30 minutes."
+            f"Until the move works, the profit lock is being run by the bot and not by a resting stop: if the price falls to {stop:.4f} the bot closes the trade at the market, but no stop rests at Binance at that level. The bot tries again in a few minutes, and less often if it keeps failing (at most every 30 minutes)."
         )
     else:
         alert_text = (
             f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)} to {stop:.4f}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place. "
-            f"The new level is not resting at Binance as a stop. The bot tries again in about 30 minutes."
+            f"The new level is not resting at Binance as a stop. The bot tries again in a few minutes, and less often if it keeps failing (at most every 30 minutes)."
         )
     try:
         await venue.protection_precheck(side=trade.side, stop_price=stop)
@@ -1086,7 +1092,7 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
         _safe_log(
             "warning",
             "account %s: trailing stop move to %.4f failed (%s); consecutive failures %d; the existing stop stays; next try in %d minutes; %s",
-            account_id, stop, type(exc).__name__, failures, MOVE_RETRY_BACKOFF_SECONDS // 60,
+            account_id, stop, type(exc).__name__, failures, move_backoff_seconds(failures) // 60,
             getattr(exc, "protection_diag", None) or venue_mod.describe_failure(exc, "stop move"),
         )
         try:  # an order that may have been placed but not verified must not be left to add a second, unrecorded stop

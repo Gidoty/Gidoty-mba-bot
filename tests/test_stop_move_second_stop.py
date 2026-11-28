@@ -2,10 +2,10 @@
 
 PROVES (stateful fake exchange that now REFUSES a second closePosition stop in the same direction with the error class ccxt 4.5.88 really raises for it, a plain ExchangeError carrying Binance's JSON answer with code
 -4130): the move succeeds through a reduceOnly stop sized from the exchange's own position while the old stop rests; the old stop is cancelled only after the new one reads back resting; when both placements are refused the
-old stop is untouched; there is no cancel-first path; a failed move is retried at most every 30 minutes per trade with a failure count in the journal and the once-per-6-hours customer alert (which says the lock is run
+old stop is untouched; there is no cancel-first path; a failed move is retried after 5, then 15, then at most every 30 minutes per trade with a failure count in the journal and the once-per-6-hours customer alert (which says the lock is run
 by the bot, not by a resting stop); longs and shorts; Spot is unchanged; the fallback is never taken for network or authentication errors; the journal carries only the sanitized class, code and message (200 characters);
 a stop that cannot be confirmed cancelled on a flat position is not a false ProtectionStillOpen and a leftover stop is cleared once the trade is closed.
-DOES NOT PROVE: what real Binance does. The fake is a model built from the ccxt source and the owner's journal; Binance's own documentation could not be read here. The Testnet check (ops/check_second_stop_testnet.py)
+DOES NOT PROVE: what real Binance does. The fake is a model built from the ccxt source and the owner's journal; Binance's own documentation could not be read here. The Testnet check (ops/testnet/check_second_stop.py)
 and a live trade where the lock moves a stop are the real confirmation."""
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ def test_when_both_placements_are_refused_the_old_stop_is_untouched_and_the_aler
     assert client.orders[old_cid]["status"] == "open" and len(resting_stops(client)) == 1
     assert [c for c in client.calls if c[0] == "cancel_order" and c[1] == old_cid] == []  # the old stop was never cancelled
     text = "\n".join(notifier.texts)
-    assert "run by the bot and not by a resting stop" in text and "closes the trade at the market" in text and f"{t.stop_loss_price:.4f}" in text and "about 30 minutes" in text
+    assert "run by the bot and not by a resting stop" in text and "closes the trade at the market" in text and f"{t.stop_loss_price:.4f}" in text and "in a few minutes" in text and "at most every 30 minutes" in text
 
 
 def test_there_is_no_cancel_first_path_in_the_code():
@@ -225,12 +225,18 @@ def test_a_network_error_on_the_closeposition_stop_is_not_turned_into_a_reduce_o
 
 
 # ------------------------------------------------------------------------------------------------ the back-off
-def test_a_repeating_failure_is_retried_at_most_every_30_minutes_and_counted(monkeypatch, db, caplog):
+def test_the_backoff_schedule_is_5_then_15_then_30_minutes():
+    assert lifecycle.MOVE_RETRY_BACKOFF_SCHEDULE == (300, 900, 1800)
+    assert [lifecycle.move_backoff_seconds(n) for n in (1, 2, 3, 4, 10, 0)] == [300, 900, 1800, 1800, 1800, 300]
+
+
+def test_a_repeating_failure_backs_off_5_then_15_then_30_minutes_and_is_counted(monkeypatch, db, caplog):
     client, settings, aid, t = long_trade(monkeypatch)
     client.reject_second_close_stop = True
     client.reject_reduce_only_stop = True
     price = client.price
-    steps = [(0, t.entry_price * 1.01, price), (5, t.entry_price * 1.01, price), (10, t.entry_price * 1.01, price), (29, t.entry_price * 1.01, price), (31, t.entry_price * 1.01, price), (36, t.entry_price * 1.01, price), (62, t.entry_price * 1.01, price)]
+    minutes = [0, 4, 5, 10, 19, 20, 36, 49, 50, 79, 80]
+    steps = [(m, t.entry_price * 1.01, price) for m in minutes]
     marks = {}
 
     def before(i, ctx):
@@ -239,14 +245,24 @@ def test_a_repeating_failure_is_retried_at_most_every_30_minutes_and_counted(mon
     with caplog.at_level(logging.WARNING):
         results, notifier = run_moves(aid, client, settings, steps, before=before)
     marks[len(steps)] = len(calls_of(client, "create_order"))
-    assert results == ["kept"] * 7
+    assert results == ["kept"] * len(steps)
     sent = [marks[i + 1] - marks[i] for i in range(len(steps))]  # create_order calls made during each step
-    assert sent == [2, 0, 0, 0, 2, 0, 2]  # tries (closePosition, then reduceOnly) at minute 0, 31 and 62 only; nothing is sent at minutes 5, 10, 29 and 36
-    assert lifecycle.move_failures(t.id) == 3
+    # tries (closePosition, then reduceOnly) at minute 0; again at 5 (5 minutes after the first failure); at 20 (15 after the second); at 50 and 80 (30 after the third and fourth). Nothing is sent in between.
+    assert sent == [2, 0, 2, 0, 0, 2, 0, 0, 2, 0, 2]
+    assert lifecycle.move_failures(t.id) == 5
     lines = [r.getMessage() for r in caplog.records if "trailing stop move" in r.getMessage()]
-    assert len(lines) == 3 and "consecutive failures 1" in lines[0] and "consecutive failures 2" in lines[1] and "consecutive failures 3" in lines[2]
-    assert all("next try in 30 minutes" in x for x in lines)
+    assert len(lines) == 5
+    for i, (n, wait) in enumerate([(1, 5), (2, 15), (3, 30), (4, 30), (5, 30)]):
+        assert f"consecutive failures {n};" in lines[i] and f"next try in {wait} minutes" in lines[i], lines[i]
     assert len([x for x in notifier.texts if "Could not move" in x]) == 1  # the customer alert stays once per 6 hours
+
+
+def test_one_transient_failure_costs_five_minutes_not_thirty(monkeypatch, db):
+    client, settings, aid, t = long_trade(monkeypatch)
+    client.fail("create_order", role="stop", exc=ccxt.RequestTimeout("binanceusdm timed out"), times=1)  # a single blip
+    results, _ = run_moves(aid, client, settings, [(0, t.entry_price * 1.01, client.price), (4, t.entry_price * 1.01, client.price), (5, t.entry_price * 1.01, client.price)])
+    assert results == ["kept", "kept", "moved"]  # backed off at minute 4, tried again at minute 5 and moved
+    assert lifecycle.move_failures(t.id) == 0
 
 
 def test_the_customer_alert_repeats_after_six_hours_not_before(monkeypatch, db):
@@ -372,6 +388,57 @@ def test_the_same_stop_on_an_open_position_still_raises_protection_still_open(mo
             ctx = live_context(session, aid, client, settings, FakeNotifier())
             await ctx.venue.prepare(managing=True)
             await ctx.venue.cancel_protection(kind=venue.KIND_FUTURES_CLOSE, client_id=old_cid)
+
+    with pytest.raises(venue.ProtectionStillOpen):
+        asyncio.run(go())
+
+
+def _cancel_with_unreadable_position(client, settings, aid, cid):
+    async def go():
+        with session_scope(autoflush=False) as session:
+            ctx = live_context(session, aid, client, settings, FakeNotifier())
+            await ctx.venue.prepare(managing=True)
+
+            async def unreadable():
+                raise ccxt.NetworkError("binanceusdm position read failed")
+
+            ctx.venue.signed_position = unreadable
+            await ctx.venue.cancel_protection(kind=venue.KIND_FUTURES_CLOSE, client_id=cid)
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("really_flat", [True, False])
+def test_an_unreadable_position_is_never_taken_for_flat(monkeypatch, db, really_flat):
+    """The stop still reads as resting and the position cannot be read: ProtectionStillOpen, exactly as before, whether or not the position happens to be flat."""
+    client, settings, aid, t = long_trade(monkeypatch)
+    old_cid = lifecycle.client_id(t, "stop", t.protection_attempt)
+    if really_flat:
+        client.externally_close_position()
+    client.fail("cancel_order", role="stop", exc=ccxt.ExchangeError('binanceusdm {"code":-2011,"msg":"Unknown order sent."}'), times=1)
+    with pytest.raises(venue.ProtectionStillOpen):
+        _cancel_with_unreadable_position(client, settings, aid, old_cid)
+    assert resting_stops(client)  # the stop still rests: nothing was reported gone
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_a_stop_that_still_rests_on_a_position_that_is_not_flat_raises_protection_still_open(monkeypatch, db, fallback):
+    """Both stop kinds (closePosition, and the reduceOnly one the fallback places): resting plus an open position is never 'gone'."""
+    client, settings, aid, t = long_trade(monkeypatch)
+    if fallback:
+        client.reject_second_close_stop = True
+        run_moves(aid, client, settings, [(0, t.entry_price * 1.01, client.price)])
+        t = the_trade(aid)
+        assert t.protective_kind == venue.KIND_FUTURES_REDUCE
+    cid = lifecycle.client_id(t, "stop", t.protection_attempt)
+    assert abs(client.position) > 0
+    client.fail("cancel_order", role="stop", exc=ccxt.ExchangeError('binanceusdm {"code":-2011,"msg":"Unknown order sent."}'), times=1)
+
+    async def go():
+        with session_scope(autoflush=False) as session:
+            ctx = live_context(session, aid, client, settings, FakeNotifier())
+            await ctx.venue.prepare(managing=True)
+            await ctx.venue.cancel_protection(kind=t.protective_kind, client_id=cid)
 
     with pytest.raises(venue.ProtectionStillOpen):
         asyncio.run(go())

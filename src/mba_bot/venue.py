@@ -92,7 +92,7 @@ class ProtectionStillOpen(RuntimeError):
 
 # Binance's error code for "an open stop or take profit order with closePosition in the same direction is existing" (a second closePosition stop while one rests). From Binance's USDS-M error list as
 # remembered by the ccxt source; the Binance page itself could not be read in this environment (see docs/safety/live_donchian.md). The pinned ccxt (4.5.88) has NO entry for it in its USDS-M table, so it
-# surfaces as a plain `ExchangeError` whose text carries the JSON answer. The owner's Testnet check (ops/check_second_stop_testnet.py) records the real code and text.
+# surfaces as a plain `ExchangeError` whose text carries the JSON answer. The owner's Testnet check (ops/testnet/check_second_stop.py) records the real code and text.
 SECOND_CLOSE_STOP_CODES = frozenset({-4130})
 _ERR_CODE = re.compile(r'"code"\s*:\s*"?(-?\d+)')
 _ERR_MSG = re.compile(r'"msg"\s*:\s*"((?:[^"\\]|\\.)*)"')
