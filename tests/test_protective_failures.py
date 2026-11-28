@@ -742,10 +742,13 @@ def test_no_exchange_error_text_or_credential_ever_reaches_customers_or_logs(db,
         notifier = run_cycle(account_id, settings, swallow=True)
         run_reconcile(account_id, settings, notifier)
 
-    haystack = "\n".join(notifier.texts) + "\n" + caplog.text
+    haystack = "\n".join(notifier.texts)
     with session_scope() as session:
         haystack += str(session.query(TradingAccount).one().last_error)
         trade = session.query(Trade).one()
         haystack += str(trade.attention_reason) + str(trade.close_reason)
     for needle in ("LEAK", "ABC123", "XYZ789", "-2015", "synthetic-secrecy@example.com-key", "synthetic-secrecy@example.com-secret"):
-        assert needle not in haystack, needle
+        assert needle not in haystack and needle not in "\n".join(notifier.texts), needle
+    # The journal may carry Binance's numeric code and its message (truncated to 200 characters, see venue.exchange_error_info), never the raw exception text, a key or a customer-facing field.
+    for needle in ("LEAK", "ABC123", "XYZ789", "synthetic-secrecy@example.com-key", "synthetic-secrecy@example.com-secret"):
+        assert needle not in caplog.text, needle

@@ -2220,7 +2220,7 @@ async def _live_profit_lock(ctx, trade: Trade, settings: Settings, *, closed: li
                                       min_improve_atr=settings.profit_move_min_improve_atr)
     if action == "exit":
         await lifecycle.execute_exit(ctx, trade, reason="profit_lock", price_hint=level)
-    elif action == "move" and await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=price) == "moved":
+    elif action == "move" and await lifecycle.move_stop(ctx, trade, new_stop=level, current_price=price, reason="profit_lock") == "moved":
         _LOCK_MOVES[trade.id] = now_ms
 
 

@@ -836,11 +836,7 @@ async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str
     was_attention = trade.status == TRADE_ATTENTION or trade.attention_reason is not None
     account_id = _safe_account_id(ctx)
     # Make sure no resting bot order survives to affect a future position.
-    try:
-        for cid, cond in await ctx.venue.list_open_bot_orders():
-            await ctx.venue.cancel_by_client_id(cid, conditional=cond)
-    except Exception:
-        _safe_log("warning", "account %s: could not clear leftover orders after close", account_id)
+    await _clear_leftover_orders(ctx, account_id)
     protection = PROTECTION_TRIGGERED if reason == "exchange_stop_triggered" else PROTECTION_CANCELLED
     if await _finalize(ctx, trade, reason=reason, fallback_price=trade.stop_loss_price, protection=protection):
         label = "stop-loss triggered at Binance" if reason == "exchange_stop_triggered" else "closed on Binance"
@@ -851,6 +847,15 @@ async def finalize_exchange_close(ctx: LiveContext, trade: Trade, *, reason: str
         )
         if was_attention:
             await _clear_attention(ctx, trade)
+
+
+async def _clear_leftover_orders(ctx: LiveContext, account_id: str) -> None:
+    """Cancel every bot-prefixed order still resting on the trade's symbol (the customer's own orders are never touched). Best effort: a failure is logged and never stops the close."""
+    try:
+        for cid, cond in await ctx.venue.list_open_bot_orders():
+            await ctx.venue.cancel_by_client_id(cid, conditional=cond)
+    except Exception:  # noqa: BLE001
+        _safe_log("warning", "account %s: could not clear leftover orders after close", account_id)
 
 
 async def execute_exit(
@@ -979,6 +984,7 @@ async def _record_exit(
     protection = PROTECTION_TRIGGERED if stop_executed else PROTECTION_CANCELLED
     if not await _finalize(ctx, trade, reason=reason, fallback_price=price_hint or trade.stop_loss_price, protection=protection):
         return "busy"
+    await _clear_leftover_orders(ctx, _safe_account_id(ctx))  # a stop whose cancel could not be confirmed must not outlive the trade
     if not emergency:
         label = {
             "exchange_stop_triggered": "stop-loss triggered at Binance",
@@ -1002,11 +1008,47 @@ async def _record_exit(
     return "closed"
 
 
-async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_price: float) -> str:
+# A move that failed is not retried at once, per trade: 5 minutes after the first failure, 15 after the second, 30 from the third on (it used to be retried every round, about every 5 minutes, for hours). A single
+# transient failure therefore costs 5 minutes, a repeating one at most one try every 30. In memory, like the lock's own spacing: one early retry after a restart.
+MOVE_RETRY_BACKOFF_SCHEDULE = (300, 900, 1800)
+
+
+def move_backoff_seconds(failures: int) -> int:
+    """How long to wait after the given number of consecutive failures (1 -> 5 minutes, 2 -> 15, 3 or more -> 30)."""
+    return MOVE_RETRY_BACKOFF_SCHEDULE[min(max(failures, 1), len(MOVE_RETRY_BACKOFF_SCHEDULE)) - 1]
+_MOVE_FAILURES: dict[str, tuple[int, datetime]] = {}  # trade id -> (consecutive failures, time of the last one)
+
+
+def move_failures(trade_id) -> int:
+    """Consecutive failed stop moves recorded for a trade (0 after a success, or when none failed)."""
+    return _MOVE_FAILURES.get(str(trade_id), (0, None))[0]
+
+
+def _move_backed_off(trade_id: str, now: datetime) -> bool:
+    entry = _MOVE_FAILURES.get(trade_id)
+    if entry is None:
+        return False
+    last = entry[1] if entry[1].tzinfo else entry[1].replace(tzinfo=timezone.utc)
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    return (now - last).total_seconds() < move_backoff_seconds(entry[0])
+
+
+def _note_move_failure(trade_id: str, now: datetime) -> int:
+    count = _MOVE_FAILURES.get(trade_id, (0, now))[0] + 1
+    _MOVE_FAILURES[trade_id] = (count, now)
+    if len(_MOVE_FAILURES) > 512:  # a closed trade never clears its entry: drop the oldest
+        for key in sorted(_MOVE_FAILURES, key=lambda k: _MOVE_FAILURES[k][1])[:128]:
+            _MOVE_FAILURES.pop(key, None)
+    return count
+
+
+async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_price: float, reason: str = "trailing_stop") -> str:
     """Move a live trade's protective stop to `new_stop` (docs/safety/live_donchian.md). It only ever moves in the FAVOURABLE direction (up for a long, down for a short) and stays on the losing side
     of the current price. The position is never without a stop: the NEW stop is placed first and read back resting, only then does the trade record it, and only then is the OLD one cancelled. If
     placing or verifying the new stop fails, the old stop is untouched, the trade stays open and protected, and the customer is told once. Returns 'moved', 'kept' (a move was tried and failed),
-    'skipped' (nothing to do or not allowed) or 'busy' (another worker changed the trade). Never gated by the kill switch (it reduces risk) and never places an entry."""
+    'skipped' (nothing to do or not allowed) or 'busy' (another worker changed the trade). Never gated by the kill switch (it reduces risk) and never places an entry.
+    A move that failed is not tried again at once for that trade (5 minutes after the first failure, 15 after the second, 30 from the third on: MOVE_RETRY_BACKOFF_SCHEDULE); the journal line counts the consecutive failures and carries the sanitized error (class, Binance code, message), and the
+    customer is told at most once per 6 hours. `reason` only words that message ("profit_lock" or the default trailing stop)."""
     venue, session = ctx.venue, ctx.session
     if trade.status != TRADE_OPEN or trade.protection_status != PROTECTION_PROTECTED or not trade.protection_attempt:
         return "skipped"
@@ -1022,11 +1064,23 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
     old_attempt, old_kind = trade.protection_attempt, trade.protective_kind
     old_cid = client_id(trade, "stop", old_attempt)
     new_cid = client_id(trade, "stop", old_attempt + 1)
+    move_key = str(_safe_get(trade, "id", "?"))
+    if _move_backed_off(move_key, ctx.now):
+        return "kept"  # a failed move waits out its back-off (move_backoff_seconds): nothing is sent to the exchange now
     # Everything the failure handler needs is read here, before the exchange calls that can fail: it then reads nothing from the database, so a failed move still cancels a possibly placed new stop and still tells the customer.
     account_id = _safe_account_id(ctx)
     alert_pair = _safe_get(trade, "pair", None) or _safe_get(ctx.account, "pair", "-")
     alert_trade_id = _safe_get(trade, "id", "?")
-    alert_text = f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place."
+    if reason == "profit_lock":
+        alert_text = (
+            f"[{_mode_tag(ctx)}] Could not move the stop on {_pair(ctx, trade)} to the profit-lock level {stop:.4f}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place. "
+            f"Until the move works, the profit lock is being run by the bot and not by a resting stop: if the price falls to {stop:.4f} the bot closes the trade at the market, but no stop rests at Binance at that level. The bot tries again in a few minutes, and less often if it keeps failing (at most every 30 minutes)."
+        )
+    else:
+        alert_text = (
+            f"[{_mode_tag(ctx)}] Could not move the trailing stop on {_pair(ctx, trade)} to {stop:.4f}. Your existing stop-loss at {trade.stop_loss_price:.4f} is still in place. "
+            f"The new level is not resting at Binance as a stop. The bot tries again in a few minutes, and less often if it keeps failing (at most every 30 minutes)."
+        )
     try:
         await venue.protection_precheck(side=trade.side, stop_price=stop)
         placed = await venue.place_protection(side=trade.side, quantity=trade.quantity, stop_price=stop, client_id=new_cid, entry_price=trade.entry_price)
@@ -1034,7 +1088,13 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
         if verified is None or not verified.is_resting:
             raise RuntimeError("the new protective order is not resting")
     except Exception as exc:  # noqa: BLE001 - whatever went wrong, the old stop stays
-        _safe_log("warning", "account %s: trailing stop move to %.4f failed (%s); the existing stop stays", account_id, stop, type(exc).__name__)
+        failures = _note_move_failure(move_key, ctx.now)
+        _safe_log(
+            "warning",
+            "account %s: trailing stop move to %.4f failed (%s); consecutive failures %d; the existing stop stays; next try in %d minutes; %s",
+            account_id, stop, type(exc).__name__, failures, move_backoff_seconds(failures) // 60,
+            getattr(exc, "protection_diag", None) or venue_mod.describe_failure(exc, "stop move"),
+        )
         try:  # an order that may have been placed but not verified must not be left to add a second, unrecorded stop
             await venue.cancel_by_client_id(new_cid, conditional=True)
         except Exception:  # noqa: BLE001
@@ -1057,6 +1117,7 @@ async def move_stop(ctx: LiveContext, trade: Trade, *, new_stop: float, current_
         await venue.cancel_protection(kind=old_kind, client_id=old_cid)  # reads the final state of the old stop
     except Exception as exc:  # noqa: BLE001 - two stops resting is safe; the leftover is cleared when the trade closes
         logger.warning("account %s: the previous protective stop could not be cancelled after a trailing move (%s); it is cleared when the trade closes", ctx.account.id, type(exc).__name__)
+    _MOVE_FAILURES.pop(move_key, None)
     return "moved"
 
 

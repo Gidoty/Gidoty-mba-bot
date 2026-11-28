@@ -65,6 +65,8 @@ class FakeBinance:
         liquidation_price: float | None = None,
         reject_close_position: bool = False,
         reject_second_close_stop: bool = False,
+        second_stop_error: str = "exchange_error",
+        reject_reduce_only_stop: bool = False,
         margin_mode: str | None = "isolated",
         maintenance_tiers=None,
         other_positions=None,
@@ -95,6 +97,10 @@ class FakeBinance:
         self.liquidation_price = liquidation_price
         self.reject_close_position = reject_close_position
         self.reject_second_close_stop = reject_second_close_stop  # models Binance refusing a second closePosition stop in the same direction while one rests
+        # What the refusal raises. "exchange_error" is what the pinned ccxt (4.5.88) really raises for Binance code -4130: its USDS-M error table has no entry for it, so it is a plain ExchangeError whose text is
+        # the id plus Binance's JSON answer (verified against the ccxt source, see docs/safety/live_donchian.md). "invalid_order" is the class the old fake used, which the old fallback condition happened to catch.
+        self.second_stop_error = second_stop_error
+        self.reject_reduce_only_stop = reject_reduce_only_stop  # a reduceOnly conditional is refused too (the "every placement fails" case)
         self._tiers_raise = False
         self.margin_mode = margin_mode  # what symbolConfig reports ("isolated" | "cross"); None = not reported
         # Binance leverageBracket-shaped brackets (notionalFloor/Cap, maintMarginRatio, cum). Default: a single wide,
@@ -476,7 +482,11 @@ class FakeBinance:
         if close_position and self.reject_close_position:
             raise ccxt.InvalidOrder("closePosition is not accepted here")
         if close_position and self.reject_second_close_stop and any(o["status"] == "open" and o["conditional"] and o["close_position"] and o["side"] == side for o in self.orders.values()):
-            raise ccxt.InvalidOrder("an open stop with closePosition in the same direction already exists")
+            if self.second_stop_error == "invalid_order":
+                raise ccxt.InvalidOrder("an open stop with closePosition in the same direction already exists")
+            raise ccxt.ExchangeError('binanceusdm {"code":-4130,"msg":"An open stop or take profit order with GTE and closePosition in the direction is existing."}')
+        if reduce_only and self.reject_reduce_only_stop:
+            raise ccxt.ExchangeError('binanceusdm {"code":-4130,"msg":"reduceOnly stop refused (test)"}')
         if close_position and reduce_only:
             raise ccxt.InvalidOrder("closePosition and reduceOnly cannot both be set")
         if close_position and amount is not None:
